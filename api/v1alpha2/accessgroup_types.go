@@ -164,8 +164,8 @@ type AccessGroupGSuiteRule struct {
 
 // AccessGroupGitHubRule matches GitHub users.
 type AccessGroupGitHubRule struct {
-	Name               string `json:"name"`
-	IdentityProviderID string `json:"identityProviderId"`
+	Name               string   `json:"name"`
+	IdentityProviderID string   `json:"identityProviderId"`
 	Teams              []string `json:"teams,omitempty"`
 }
 

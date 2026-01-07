@@ -57,14 +57,14 @@ func (c *API) CreateGatewayRule(params GatewayRuleParams) (*GatewayRuleResult, e
 	ctx := context.Background()
 
 	rule := cloudflare.TeamsRule{
-		Name:        params.Name,
-		Description: params.Description,
-		Precedence:  uint64(params.Precedence),
-		Enabled:     params.Enabled,
-		Action:      cloudflare.TeamsGatewayAction(params.Action),
-		Filters:     params.Filters,
-		Traffic:     params.Traffic,
-		Identity:    params.Identity,
+		Name:          params.Name,
+		Description:   params.Description,
+		Precedence:    uint64(params.Precedence),
+		Enabled:       params.Enabled,
+		Action:        cloudflare.TeamsGatewayAction(params.Action),
+		Filters:       params.Filters,
+		Traffic:       params.Traffic,
+		Identity:      params.Identity,
 		DevicePosture: params.DevicePosture,
 	}
 
@@ -121,15 +121,15 @@ func (c *API) UpdateGatewayRule(ruleID string, params GatewayRuleParams) (*Gatew
 	ctx := context.Background()
 
 	rule := cloudflare.TeamsRule{
-		ID:          ruleID,
-		Name:        params.Name,
-		Description: params.Description,
-		Precedence:  uint64(params.Precedence),
-		Enabled:     params.Enabled,
-		Action:      cloudflare.TeamsGatewayAction(params.Action),
-		Filters:     params.Filters,
-		Traffic:     params.Traffic,
-		Identity:    params.Identity,
+		ID:            ruleID,
+		Name:          params.Name,
+		Description:   params.Description,
+		Precedence:    uint64(params.Precedence),
+		Enabled:       params.Enabled,
+		Action:        cloudflare.TeamsGatewayAction(params.Action),
+		Filters:       params.Filters,
+		Traffic:       params.Traffic,
+		Identity:      params.Identity,
 		DevicePosture: params.DevicePosture,
 	}
 

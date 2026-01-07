@@ -86,10 +86,10 @@ type ActivityLogSettings struct {
 
 // AntiVirusSettings for AV scanning.
 type AntiVirusSettings struct {
-	Enabled             bool `json:"enabled"`
-	EnabledDownloadPhase bool `json:"enabledDownloadPhase,omitempty"`
-	EnabledUploadPhase  bool `json:"enabledUploadPhase,omitempty"`
-	FailClosed          bool `json:"failClosed,omitempty"`
+	Enabled              bool                  `json:"enabled"`
+	EnabledDownloadPhase bool                  `json:"enabledDownloadPhase,omitempty"`
+	EnabledUploadPhase   bool                  `json:"enabledUploadPhase,omitempty"`
+	FailClosed           bool                  `json:"failClosed,omitempty"`
 	NotificationSettings *NotificationSettings `json:"notificationSettings,omitempty"`
 }
 

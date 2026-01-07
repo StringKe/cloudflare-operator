@@ -152,11 +152,11 @@ type L4OverrideSettings struct {
 
 // BISOAdminControls for browser isolation.
 type BISOAdminControls struct {
-	DisablePrinting     *bool `json:"disablePrinting,omitempty"`
-	DisableCopyPaste    *bool `json:"disableCopyPaste,omitempty"`
-	DisableDownload     *bool `json:"disableDownload,omitempty"`
-	DisableUpload       *bool `json:"disableUpload,omitempty"`
-	DisableKeyboard     *bool `json:"disableKeyboard,omitempty"`
+	DisablePrinting             *bool `json:"disablePrinting,omitempty"`
+	DisableCopyPaste            *bool `json:"disableCopyPaste,omitempty"`
+	DisableDownload             *bool `json:"disableDownload,omitempty"`
+	DisableUpload               *bool `json:"disableUpload,omitempty"`
+	DisableKeyboard             *bool `json:"disableKeyboard,omitempty"`
 	DisableClipboardRedirection *bool `json:"disableClipboardRedirection,omitempty"`
 }
 
@@ -168,8 +168,8 @@ type SessionSettings struct {
 
 // EgressSettings for egress action.
 type EgressSettings struct {
-	IPv4      string `json:"ipv4,omitempty"`
-	IPv6      string `json:"ipv6,omitempty"`
+	IPv4         string `json:"ipv4,omitempty"`
+	IPv6         string `json:"ipv6,omitempty"`
 	IPv4Fallback string `json:"ipv4Fallback,omitempty"`
 }
 
@@ -185,10 +185,10 @@ type AuditSSHSettings struct {
 
 // DNSResolver for custom DNS.
 type DNSResolver struct {
-	IP                string `json:"ip,omitempty"`
-	Port              int    `json:"port,omitempty"`
-	VNetID            string `json:"vnetId,omitempty"`
-	RouteThroughPrivateNetwork bool `json:"routeThroughPrivateNetwork,omitempty"`
+	IP                         string `json:"ip,omitempty"`
+	Port                       int    `json:"port,omitempty"`
+	VNetID                     string `json:"vnetId,omitempty"`
+	RouteThroughPrivateNetwork bool   `json:"routeThroughPrivateNetwork,omitempty"`
 }
 
 // NotificationSettings for alerts.
