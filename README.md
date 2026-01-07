@@ -68,7 +68,68 @@ The Cloudflare Operator provides Kubernetes-native management of Cloudflare Zero
 
 Here is how the operator and the Tunnel Resource fit into your deployment.
 
-![Operator Architecture](./docs/images/OperatorArchitecture.png#center)
+```mermaid
+flowchart TB
+    subgraph Internet["Internet"]
+        Users["Users"]
+    end
+
+    subgraph Cloudflare["Cloudflare Edge"]
+        Edge["Cloudflare Edge Network"]
+        API["Cloudflare API"]
+    end
+
+    subgraph K8s["Kubernetes Cluster"]
+        subgraph CRDs["Custom Resources"]
+            Tunnel["Tunnel / ClusterTunnel"]
+            TB["TunnelBinding"]
+        end
+
+        subgraph Operator["Cloudflare Operator"]
+            Controller["Controller Manager"]
+        end
+
+        subgraph Managed["Managed Resources"]
+            ConfigMap["ConfigMap\n(tunnel config)"]
+            Secret["Secret\n(tunnel credentials)"]
+            Deployment["Deployment\n(cloudflared)"]
+        end
+
+        subgraph App["Your Application"]
+            Service["Service"]
+            Pod["Pod"]
+            Ingress["Ingress\n(optional local access)"]
+        end
+    end
+
+    %% User creates CRDs
+    Tunnel -.->|watches| Controller
+    TB -.->|watches| Controller
+
+    %% Operator manages resources
+    Controller -->|creates/updates| ConfigMap
+    Controller -->|creates/updates| Secret
+    Controller -->|creates/updates| Deployment
+    Controller -->|API calls\nDNS, Tunnel| API
+
+    %% cloudflared uses config
+    ConfigMap -->|mounts| Deployment
+    Secret -->|mounts| Deployment
+
+    %% Traffic flow
+    Users -->|HTTPS| Edge
+    Edge <-->|tunnel| Deployment
+    Deployment <-->|proxy| Service
+    Service --> Pod
+    Service --> Ingress
+```
+
+**Flow:**
+1. User creates `Tunnel` and `TunnelBinding` custom resources
+2. Operator watches CRDs and creates ConfigMap, Secret, and cloudflared Deployment
+3. Operator calls Cloudflare API to register tunnel and DNS records
+4. cloudflared establishes secure tunnel to Cloudflare Edge
+5. Internet traffic flows: Users → Cloudflare Edge → Tunnel → Service → Pod
 
 ## Quick Start
 
