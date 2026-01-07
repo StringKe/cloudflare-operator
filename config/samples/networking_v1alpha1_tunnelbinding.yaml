@@ -1,4 +1,4 @@
-apiVersion: networking.cfargotunnel.com/v1alpha1
+apiVersion: networking.cloudflare-operator.io/v1alpha1
 kind: TunnelBinding
 metadata:
   name: tunnelbinding-sample

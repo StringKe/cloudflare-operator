@@ -10,7 +10,7 @@ kubectl explain tunnel.spec
 Here is an overview of a ClusterTunnel as YAML for `v1alpha2`. Also look at migration docs for [`v1alpha1`](../migrations/crd/v1alpha2.md)
 
 ```yaml
-apiVersion: networking.cfargotunnel.com/v1alpha2
+apiVersion: networking.cloudflare-operator.io/v1alpha2
 kind: ClusterTunnel     # or Tunnel
 metadata:
   name: tunnel-cr-name

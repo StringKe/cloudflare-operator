@@ -13,7 +13,7 @@ In place of this, a new field `deployPatch` is introduced. This allows any [kube
 Exising `v1alpha1` CRDs are automatically migrated to `v1alpha2` which is now the default storage version. Following are the example patches you would use for the fields above if you did not have them before the migration and now want to set them.
 
 ```yaml
-apiVersion: networking.cfargotunnel.com/v1alpha2
+apiVersion: networking.cloudflare-operator.io/v1alpha2
 kind: ClusterTunnel
 ...
 spec:

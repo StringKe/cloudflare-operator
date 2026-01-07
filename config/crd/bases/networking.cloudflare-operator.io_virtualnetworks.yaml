@@ -4,19 +4,25 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: gatewayconfigurations.networking.cfargotunnel.com
+  name: virtualnetworks.networking.cloudflare-operator.io
 spec:
-  group: networking.cfargotunnel.com
+  group: networking.cloudflare-operator.io
   names:
-    kind: GatewayConfiguration
-    listKind: GatewayConfigurationList
-    plural: gatewayconfigurations
+    kind: VirtualNetwork
+    listKind: VirtualNetworkList
+    plural: virtualnetworks
     shortNames:
-    - gwconfig
-    singular: gatewayconfiguration
+    - vnet
+    singular: virtualnetwork
   scope: Cluster
   versions:
   - additionalPrinterColumns:
+    - jsonPath: .status.virtualNetworkId
+      name: VNetID
+      type: string
+    - jsonPath: .status.isDefault
+      name: Default
+      type: boolean
     - jsonPath: .status.state
       name: State
       type: string
@@ -26,8 +32,11 @@ spec:
     name: v1alpha2
     schema:
       openAPIV3Schema:
-        description: GatewayConfiguration is the Schema for the gatewayconfigurations
-          API.
+        description: |-
+          VirtualNetwork is the Schema for the virtualnetworks API.
+          A VirtualNetwork represents a Cloudflare Zero Trust Virtual Network,
+          which provides isolated private network address spaces for routing traffic
+          through Cloudflare Tunnels.
         properties:
           apiVersion:
             description: |-
@@ -47,10 +56,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: GatewayConfigurationSpec defines the desired state of GatewayConfiguration
+            description: VirtualNetworkSpec defines the desired state of VirtualNetwork
             properties:
               cloudflare:
-                description: Cloudflare contains the Cloudflare API credentials.
+                description: Cloudflare contains the Cloudflare API credentials and
+                  account information.
                 properties:
                   CLOUDFLARE_API_KEY:
                     default: CLOUDFLARE_API_KEY
@@ -97,135 +107,33 @@ spec:
                 - domain
                 - secret
                 type: object
-              settings:
-                description: Settings contains the Gateway configuration settings.
-                properties:
-                  activityLog:
-                    description: ActivityLog configures activity logging.
-                    properties:
-                      enabled:
-                        type: boolean
-                    required:
-                    - enabled
-                    type: object
-                  antiVirus:
-                    description: AntiVirus configures AV scanning.
-                    properties:
-                      enabled:
-                        type: boolean
-                      enabledDownloadPhase:
-                        type: boolean
-                      enabledUploadPhase:
-                        type: boolean
-                      failClosed:
-                        type: boolean
-                      notificationSettings:
-                        description: NotificationSettings for alerts.
-                        properties:
-                          enabled:
-                            type: boolean
-                          message:
-                            type: string
-                          supportUrl:
-                            type: string
-                        required:
-                        - enabled
-                        type: object
-                    required:
-                    - enabled
-                    type: object
-                  blockPage:
-                    description: BlockPage configures the block page.
-                    properties:
-                      backgroundColor:
-                        type: string
-                      enabled:
-                        type: boolean
-                      footerText:
-                        type: string
-                      headerText:
-                        type: string
-                      logoPath:
-                        type: string
-                      mailtoAddress:
-                        type: string
-                      mailtoSubject:
-                        type: string
-                      name:
-                        type: string
-                      suppressFooter:
-                        type: boolean
-                    required:
-                    - enabled
-                    type: object
-                  bodyScanning:
-                    description: BodyScanning configures body scanning.
-                    properties:
-                      inspectionMode:
-                        type: string
-                    type: object
-                  browserIsolation:
-                    description: BrowserIsolation configures browser isolation.
-                    properties:
-                      nonIdentityEnabled:
-                        type: boolean
-                      urlBrowserIsolationEnabled:
-                        type: boolean
-                    type: object
-                  customCertificate:
-                    description: CustomCertificate configures custom root CA.
-                    properties:
-                      enabled:
-                        type: boolean
-                      id:
-                        type: string
-                    required:
-                    - enabled
-                    type: object
-                  fips:
-                    description: FIPS enables FIPS mode.
-                    properties:
-                      tls:
-                        type: boolean
-                    type: object
-                  nonIdentityBrowserIsolation:
-                    description: NonIdentityBrowserIsolation configures non-identity
-                      isolation.
-                    properties:
-                      enabled:
-                        type: boolean
-                    required:
-                    - enabled
-                    type: object
-                  protocolDetection:
-                    description: ProtocolDetection enables protocol detection.
-                    properties:
-                      enabled:
-                        type: boolean
-                    required:
-                    - enabled
-                    type: object
-                  tlsDecrypt:
-                    description: TLSDecrypt enables TLS decryption.
-                    properties:
-                      enabled:
-                        type: boolean
-                    required:
-                    - enabled
-                    type: object
-                type: object
+              comment:
+                description: Comment is an optional description for the Virtual Network.
+                maxLength: 500
+                type: string
+              isDefaultNetwork:
+                default: false
+                description: |-
+                  IsDefaultNetwork marks this Virtual Network as the default for the account.
+                  Only one Virtual Network can be the default.
+                type: boolean
+              name:
+                description: |-
+                  Name of the Virtual Network in Cloudflare.
+                  If not specified, the Kubernetes resource name will be used.
+                type: string
             required:
             - cloudflare
-            - settings
             type: object
           status:
-            description: GatewayConfigurationStatus defines the observed state
+            description: VirtualNetworkStatus defines the observed state of VirtualNetwork
             properties:
               accountId:
-                description: AccountID is the Cloudflare Account ID.
+                description: AccountId is the Cloudflare Account ID.
                 type: string
               conditions:
-                description: Conditions represent the latest available observations.
+                description: Conditions represent the latest available observations
+                  of the VirtualNetwork's state.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -284,12 +192,22 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              isDefault:
+                description: IsDefault indicates whether this is the default Virtual
+                  Network for the account.
+                type: boolean
               observedGeneration:
-                description: ObservedGeneration is the most recent generation observed.
+                description: ObservedGeneration is the most recent generation observed
+                  by the controller.
                 format: int64
                 type: integer
               state:
-                description: State indicates the current state.
+                description: State indicates the current state of the Virtual Network
+                  (active, deleted, etc.).
+                type: string
+              virtualNetworkId:
+                description: VirtualNetworkId is the Cloudflare ID of the Virtual
+                  Network.
                 type: string
             type: object
         type: object

@@ -142,7 +142,7 @@ This is useful if you are migrating to/from one approach, or have different requ
 For example, you may want some endpoints to bypass your reverse proxy for some reason.
 
 ```yaml
-apiVersion: networking.cfargotunnel.com/v1alpha1
+apiVersion: networking.cloudflare-operator.io/v1alpha1
 kind: TunnelBinding
 metadata:
   name: authelia
@@ -153,7 +153,7 @@ tunnelRef:
   kind: ClusterTunnel
   name: example-tunnel
 ---
-apiVersion: networking.cfargotunnel.com/v1alpha1
+apiVersion: networking.cloudflare-operator.io/v1alpha1
 kind: TunnelBinding
 metadata:
   # At this time cloudflare-operator does not deterministically sort wildcards to the end of cloudflared's config file.

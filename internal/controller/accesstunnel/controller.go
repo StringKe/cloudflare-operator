@@ -208,8 +208,8 @@ func cloudflaredDeploymentService(accessTunnel *networkingv1alpha1.AccessTunnel,
 		}
 }
 
-// +kubebuilder:rbac:groups=networking.cfargotunnel.com,resources=accesstunnels,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=networking.cfargotunnel.com,resources=accesstunnels/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=accesstunnels,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=accesstunnels/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;create;update;patch
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;create;update;patch
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get

@@ -53,12 +53,12 @@ type Reconciler struct {
 	cfAPI        *cf.API
 }
 
-// +kubebuilder:rbac:groups=networking.cfargotunnel.com,resources=networkroutes,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=networking.cfargotunnel.com,resources=networkroutes/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=networking.cfargotunnel.com,resources=networkroutes/finalizers,verbs=update
-// +kubebuilder:rbac:groups=networking.cfargotunnel.com,resources=tunnels,verbs=get;list;watch
-// +kubebuilder:rbac:groups=networking.cfargotunnel.com,resources=clustertunnels,verbs=get;list;watch
-// +kubebuilder:rbac:groups=networking.cfargotunnel.com,resources=virtualnetworks,verbs=get;list;watch
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=networkroutes,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=networkroutes/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=networkroutes/finalizers,verbs=update
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=tunnels,verbs=get;list;watch
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=clustertunnels,verbs=get;list;watch
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=virtualnetworks,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 

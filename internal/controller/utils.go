@@ -25,24 +25,24 @@ const (
 	tunnelProtoUDP   = "udp"
 
 	// Checksum of the config, used to restart pods in the deployment
-	tunnelConfigChecksum = "cfargotunnel.com/checksum"
+	tunnelConfigChecksum = "cloudflare-operator.io/checksum"
 
 	// Tunnel properties labels
-	tunnelLabel          = "cfargotunnel.com/tunnel"
-	isClusterTunnelLabel = "cfargotunnel.com/is-cluster-tunnel"
-	tunnelIdLabel        = "cfargotunnel.com/id"
-	tunnelNameLabel      = "cfargotunnel.com/name"
-	tunnelKindLabel      = "cfargotunnel.com/kind"
-	tunnelAppLabel       = "cfargotunnel.com/app"
-	tunnelDomainLabel    = "cfargotunnel.com/domain"
-	tunnelFinalizer      = "cfargotunnel.com/finalizer"
+	tunnelLabel          = "cloudflare-operator.io/tunnel"
+	isClusterTunnelLabel = "cloudflare-operator.io/is-cluster-tunnel"
+	tunnelIdLabel        = "cloudflare-operator.io/id"
+	tunnelNameLabel      = "cloudflare-operator.io/name"
+	tunnelKindLabel      = "cloudflare-operator.io/kind"
+	tunnelAppLabel       = "cloudflare-operator.io/app"
+	tunnelDomainLabel    = "cloudflare-operator.io/domain"
+	tunnelFinalizer      = "cloudflare-operator.io/finalizer"
 	configmapKey         = "config.yaml"
 
 	// Annotation for tracking previous hostnames (PR #166 fix)
-	tunnelPreviousHostnamesAnnotation = "cfargotunnel.com/previous-hostnames"
+	tunnelPreviousHostnamesAnnotation = "cloudflare-operator.io/previous-hostnames"
 
 	// Secret finalizer prefix - append tunnel name for multi-tunnel support (PR #158 fix)
-	secretFinalizerPrefix = "cfargotunnel.com/secret-finalizer-"
+	secretFinalizerPrefix = "cloudflare-operator.io/secret-finalizer-"
 )
 
 var tunnelValidProtoMap = map[string]bool{

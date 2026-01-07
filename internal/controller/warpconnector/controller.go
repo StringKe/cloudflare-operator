@@ -39,7 +39,7 @@ import (
 )
 
 const (
-	FinalizerName = "warpconnector.networking.cfargotunnel.com/finalizer"
+	FinalizerName = "warpconnector.networking.cloudflare-operator.io/finalizer"
 )
 
 // WARPConnectorReconciler reconciles a WARPConnector object
@@ -48,9 +48,9 @@ type WARPConnectorReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=networking.cfargotunnel.com,resources=warpconnectors,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=networking.cfargotunnel.com,resources=warpconnectors/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=networking.cfargotunnel.com,resources=warpconnectors/finalizers,verbs=update
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=warpconnectors,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=warpconnectors/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=warpconnectors/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 

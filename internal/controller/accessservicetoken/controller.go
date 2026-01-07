@@ -37,7 +37,7 @@ import (
 )
 
 const (
-	FinalizerName = "accessservicetoken.networking.cfargotunnel.com/finalizer"
+	FinalizerName = "accessservicetoken.networking.cloudflare-operator.io/finalizer"
 )
 
 // AccessServiceTokenReconciler reconciles an AccessServiceToken object
@@ -46,9 +46,9 @@ type AccessServiceTokenReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=networking.cfargotunnel.com,resources=accessservicetokens,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=networking.cfargotunnel.com,resources=accessservicetokens/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=networking.cfargotunnel.com,resources=accessservicetokens/finalizers,verbs=update
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=accessservicetokens,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=accessservicetokens/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=accessservicetokens/finalizers,verbs=update
 
 func (r *AccessServiceTokenReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)

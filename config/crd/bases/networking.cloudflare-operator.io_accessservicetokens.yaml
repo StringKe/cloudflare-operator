@@ -4,24 +4,27 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: accessidentityproviders.networking.cfargotunnel.com
+  name: accessservicetokens.networking.cloudflare-operator.io
 spec:
-  group: networking.cfargotunnel.com
+  group: networking.cloudflare-operator.io
   names:
-    kind: AccessIdentityProvider
-    listKind: AccessIdentityProviderList
-    plural: accessidentityproviders
+    kind: AccessServiceToken
+    listKind: AccessServiceTokenList
+    plural: accessservicetokens
     shortNames:
-    - accessidp
-    singular: accessidentityprovider
+    - accesstoken
+    singular: accessservicetoken
   scope: Cluster
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.type
-      name: Type
+    - jsonPath: .status.tokenId
+      name: TokenID
       type: string
-    - jsonPath: .status.providerId
-      name: ProviderID
+    - jsonPath: .status.clientId
+      name: ClientID
+      type: string
+    - jsonPath: .status.expiresAt
+      name: ExpiresAt
       type: string
     - jsonPath: .status.state
       name: State
@@ -32,7 +35,7 @@ spec:
     name: v1alpha2
     schema:
       openAPIV3Schema:
-        description: AccessIdentityProvider is the Schema for the accessidentityproviders
+        description: AccessServiceToken is the Schema for the accessservicetokens
           API.
         properties:
           apiVersion:
@@ -53,7 +56,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: AccessIdentityProviderSpec defines the desired state of AccessIdentityProvider
+            description: AccessServiceTokenSpec defines the desired state of AccessServiceToken
             properties:
               cloudflare:
                 description: Cloudflare contains the Cloudflare API credentials.
@@ -103,164 +106,48 @@ spec:
                 - domain
                 - secret
                 type: object
-              config:
-                description: Config contains provider-specific configuration.
-                properties:
-                  apiToken:
-                    description: APIToken is the API token (GitHub, etc).
-                    type: string
-                  appsDomain:
-                    description: AppsDomain is the Google Workspace domain.
-                    type: string
-                  authUrl:
-                    description: AuthURL is the authorization URL (OIDC/OAuth).
-                    type: string
-                  centrifyAccount:
-                    description: CentrifyAccount is the Centrify account.
-                    type: string
-                  centrifyAppId:
-                    description: CentrifyAppID is the Centrify app ID.
-                    type: string
-                  certsUrl:
-                    description: CertsURL is the JWKS endpoint URL.
-                    type: string
-                  claims:
-                    description: Claims are custom OIDC claims to include.
-                    items:
-                      type: string
-                    type: array
-                  clientId:
-                    description: ClientID is the OAuth client ID.
-                    type: string
-                  clientSecret:
-                    description: ClientSecret is the OAuth client secret (use ConfigSecretRef
-                      for sensitive values).
-                    type: string
-                  conditionalAccessEnabled:
-                    description: ConditionalAccessEnabled enables Azure AD conditional
-                      access.
-                    type: boolean
-                  directoryId:
-                    description: DirectoryID is the Azure AD directory ID.
-                    type: string
-                  emailAttributeName:
-                    description: EmailAttributeName is the SAML attribute containing
-                      email.
-                    type: string
-                  emailClaimName:
-                    description: EmailClaimName is the claim containing the user's
-                      email.
-                    type: string
-                  headerAttributes:
-                    description: HeaderAttributes are SAML attributes to pass as headers.
-                    items:
-                      description: SAMLHeaderAttribute defines a SAML attribute to
-                        header mapping.
-                      properties:
-                        attributeName:
-                          description: AttributeName is the SAML attribute name.
-                          type: string
-                        headerName:
-                          description: HeaderName is the HTTP header name.
-                          type: string
-                        required:
-                          description: Required indicates if this attribute is required.
-                          type: boolean
-                      required:
-                      - attributeName
-                      - headerName
-                      type: object
-                    type: array
-                  idpPublicCerts:
-                    description: IdPPublicCerts are the IdP's public certificates
-                      for SAML.
-                    items:
-                      type: string
-                    type: array
-                  issuerUrl:
-                    description: IssuerURL is the OIDC issuer URL.
-                    type: string
-                  oktaAccount:
-                    description: OktaAccount is the Okta organization URL.
-                    type: string
-                  oneloginAccount:
-                    description: OneloginAccount is the OneLogin subdomain.
-                    type: string
-                  pingEnvId:
-                    description: PingEnvID is the PingOne environment ID.
-                    type: string
-                  pkceEnabled:
-                    description: PKCEEnabled enables PKCE.
-                    type: boolean
-                  redirectUrl:
-                    description: RedirectURL is the callback URL.
-                    type: string
-                  scopes:
-                    description: Scopes are the OAuth scopes to request.
-                    items:
-                      type: string
-                    type: array
-                  signRequest:
-                    description: SignRequest enables SAML request signing.
-                    type: boolean
-                  ssoTargetUrl:
-                    description: SSOTargetURL is the SAML SSO URL.
-                    type: string
-                  supportGroups:
-                    description: SupportGroups enables group sync.
-                    type: boolean
-                  tokenUrl:
-                    description: TokenURL is the token endpoint URL.
-                    type: string
-                type: object
-              configSecretRef:
-                description: ConfigSecretRef references a Secret containing sensitive
-                  config values.
-                properties:
-                  key:
-                    description: Key is the key in the Secret.
-                    type: string
-                  name:
-                    description: Name is the name of the Secret.
-                    type: string
-                  namespace:
-                    description: Namespace is the namespace of the Secret.
-                    type: string
-                required:
-                - key
-                - name
-                type: object
+              duration:
+                default: 8760h
+                description: Duration is the validity duration (e.g., "8760h" for
+                  1 year, "forever").
+                type: string
               name:
-                description: Name of the Identity Provider in Cloudflare.
+                description: Name of the Service Token in Cloudflare.
                 maxLength: 255
                 type: string
-              type:
-                description: Type is the identity provider type.
-                enum:
-                - onetimepin
-                - azureAD
-                - saml
-                - centrify
-                - facebook
-                - github
-                - google-apps
-                - google
-                - linkedin
-                - oidc
-                - okta
-                - onelogin
-                - pingone
-                - yandex
-                type: string
+              secretRef:
+                description: SecretRef is where to store the generated token credentials.
+                properties:
+                  clientIdKey:
+                    default: CF_ACCESS_CLIENT_ID
+                    description: ClientIDKey is the key for the Client ID.
+                    type: string
+                  clientSecretKey:
+                    default: CF_ACCESS_CLIENT_SECRET
+                    description: ClientSecretKey is the key for the Client Secret.
+                    type: string
+                  name:
+                    description: Name is the name of the Secret to create/update.
+                    type: string
+                  namespace:
+                    description: Namespace is the namespace for the Secret.
+                    type: string
+                required:
+                - name
+                - namespace
+                type: object
             required:
             - cloudflare
-            - type
+            - secretRef
             type: object
           status:
-            description: AccessIdentityProviderStatus defines the observed state
+            description: AccessServiceTokenStatus defines the observed state
             properties:
               accountId:
                 description: AccountID is the Cloudflare Account ID.
+                type: string
+              clientId:
+                description: ClientID is the Service Token Client ID.
                 type: string
               conditions:
                 description: Conditions represent the latest available observations.
@@ -322,15 +209,21 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              expiresAt:
+                description: ExpiresAt is when the token expires.
+                type: string
               observedGeneration:
                 description: ObservedGeneration is the most recent generation observed.
                 format: int64
                 type: integer
-              providerId:
-                description: ProviderID is the Cloudflare ID.
+              secretName:
+                description: SecretName is the name of the Secret containing credentials.
                 type: string
               state:
                 description: State indicates the current state.
+                type: string
+              tokenId:
+                description: TokenID is the Cloudflare Service Token ID.
                 type: string
             type: object
         type: object

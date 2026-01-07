@@ -5,7 +5,7 @@ metadata:
     alm-examples: |-
       [
         {
-          "apiVersion": "networking.cfargotunnel.com/v1alpha1",
+          "apiVersion": "networking.cloudflare-operator.io/v1alpha1",
           "kind": "ClusterTunnel",
           "metadata": {
             "name": "clustertunnel-sample"
@@ -25,7 +25,7 @@ metadata:
           }
         },
         {
-          "apiVersion": "networking.cfargotunnel.com/v1alpha1",
+          "apiVersion": "networking.cloudflare-operator.io/v1alpha1",
           "kind": "Tunnel",
           "metadata": {
             "name": "tunnel-sample",
@@ -46,7 +46,7 @@ metadata:
           }
         },
         {
-          "apiVersion": "networking.cfargotunnel.com/v1alpha1",
+          "apiVersion": "networking.cloudflare-operator.io/v1alpha1",
           "kind": "TunnelBinding",
           "metadata": {
             "name": "tunnelbinding-sample"
@@ -81,15 +81,15 @@ spec:
     - description: ClusterTunnel is the Schema for the clustertunnels API
       displayName: Cluster Tunnel
       kind: ClusterTunnel
-      name: clustertunnels.networking.cfargotunnel.com
+      name: clustertunnels.networking.cloudflare-operator.io
       version: v1alpha1
     - kind: TunnelBinding
-      name: tunnelbindings.networking.cfargotunnel.com
+      name: tunnelbindings.networking.cloudflare-operator.io
       version: v1alpha1
     - description: Tunnel is the Schema for the tunnels API
       displayName: Tunnel
       kind: Tunnel
-      name: tunnels.networking.cfargotunnel.com
+      name: tunnels.networking.cloudflare-operator.io
       version: v1alpha1
   description: This operator provides a Tunnel Custom Resource to create and use existing
     Cloudflare Tunnels. Further, it provides a Service Controller to add services
@@ -143,7 +143,7 @@ spec:
           - list
           - watch
         - apiGroups:
-          - networking.cfargotunnel.com
+          - networking.cloudflare-operator.io
           resources:
           - clustertunnels
           - tunnelbindings
@@ -157,7 +157,7 @@ spec:
           - update
           - watch
         - apiGroups:
-          - networking.cfargotunnel.com
+          - networking.cloudflare-operator.io
           resources:
           - clustertunnels/finalizers
           - tunnelbindings/finalizers
@@ -165,7 +165,7 @@ spec:
           verbs:
           - update
         - apiGroups:
-          - networking.cfargotunnel.com
+          - networking.cloudflare-operator.io
           resources:
           - clustertunnels/status
           - tunnelbindings/status

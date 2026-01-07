@@ -3,29 +3,29 @@
 # It should be run by config/default
 resources:
 # Core Tunnel CRDs
-- bases/networking.cfargotunnel.com_tunnels.yaml
-- bases/networking.cfargotunnel.com_clustertunnels.yaml
-- bases/networking.cfargotunnel.com_tunnelbindings.yaml
-- bases/networking.cfargotunnel.com_accesstunnels.yaml
+- bases/networking.cloudflare-operator.io_tunnels.yaml
+- bases/networking.cloudflare-operator.io_clustertunnels.yaml
+- bases/networking.cloudflare-operator.io_tunnelbindings.yaml
+- bases/networking.cloudflare-operator.io_accesstunnels.yaml
 # Network CRDs
-- bases/networking.cfargotunnel.com_virtualnetworks.yaml
-- bases/networking.cfargotunnel.com_networkroutes.yaml
-- bases/networking.cfargotunnel.com_privateservices.yaml
-- bases/networking.cfargotunnel.com_warpconnectors.yaml
+- bases/networking.cloudflare-operator.io_virtualnetworks.yaml
+- bases/networking.cloudflare-operator.io_networkroutes.yaml
+- bases/networking.cloudflare-operator.io_privateservices.yaml
+- bases/networking.cloudflare-operator.io_warpconnectors.yaml
 # Access Control CRDs
-- bases/networking.cfargotunnel.com_accessapplications.yaml
-- bases/networking.cfargotunnel.com_accessgroups.yaml
-- bases/networking.cfargotunnel.com_accessidentityproviders.yaml
-- bases/networking.cfargotunnel.com_accessservicetokens.yaml
+- bases/networking.cloudflare-operator.io_accessapplications.yaml
+- bases/networking.cloudflare-operator.io_accessgroups.yaml
+- bases/networking.cloudflare-operator.io_accessidentityproviders.yaml
+- bases/networking.cloudflare-operator.io_accessservicetokens.yaml
 # Gateway CRDs
-- bases/networking.cfargotunnel.com_gatewayrules.yaml
-- bases/networking.cfargotunnel.com_gatewaylists.yaml
-- bases/networking.cfargotunnel.com_gatewayconfigurations.yaml
+- bases/networking.cloudflare-operator.io_gatewayrules.yaml
+- bases/networking.cloudflare-operator.io_gatewaylists.yaml
+- bases/networking.cloudflare-operator.io_gatewayconfigurations.yaml
 # Device CRDs
-- bases/networking.cfargotunnel.com_devicesettingspolicies.yaml
-- bases/networking.cfargotunnel.com_deviceposturerules.yaml
+- bases/networking.cloudflare-operator.io_devicesettingspolicies.yaml
+- bases/networking.cloudflare-operator.io_deviceposturerules.yaml
 # DNS CRD
-- bases/networking.cfargotunnel.com_dnsrecords.yaml
+- bases/networking.cloudflare-operator.io_dnsrecords.yaml
 #+kubebuilder:scaffold:crdkustomizeresource
 
 patches:

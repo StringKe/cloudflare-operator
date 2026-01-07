@@ -4,30 +4,27 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: warpconnectors.networking.cfargotunnel.com
+  name: privateservices.networking.cloudflare-operator.io
 spec:
-  group: networking.cfargotunnel.com
+  group: networking.cloudflare-operator.io
   names:
-    kind: WARPConnector
-    listKind: WARPConnectorList
-    plural: warpconnectors
+    kind: PrivateService
+    listKind: PrivateServiceList
+    plural: privateservices
     shortNames:
-    - warpconn
-    singular: warpconnector
+    - psvc
+    singular: privateservice
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.replicas
-      name: Replicas
+    - jsonPath: .spec.serviceRef.name
+      name: Service
+      type: string
+    - jsonPath: .spec.serviceRef.port
+      name: Port
       type: integer
-    - jsonPath: .status.readyReplicas
-      name: Ready
-      type: integer
-    - jsonPath: .status.routesConfigured
-      name: Routes
-      type: integer
-    - jsonPath: .status.connectorId
-      name: ConnectorID
+    - jsonPath: .status.network
+      name: Network
       type: string
     - jsonPath: .status.state
       name: State
@@ -38,7 +35,10 @@ spec:
     name: v1alpha2
     schema:
       openAPIV3Schema:
-        description: WARPConnector is the Schema for the warpconnectors API.
+        description: |-
+          PrivateService is the Schema for the privateservices API.
+          A PrivateService exposes a Kubernetes Service privately through a Cloudflare Tunnel,
+          making it accessible only to authenticated WARP clients.
         properties:
           apiVersion:
             description: |-
@@ -58,10 +58,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: WARPConnectorSpec defines the desired state of WARPConnector
+            description: PrivateServiceSpec defines the desired state of PrivateService
             properties:
               cloudflare:
-                description: Cloudflare contains the Cloudflare API credentials.
+                description: Cloudflare contains the Cloudflare API credentials and
+                  account information.
                 properties:
                   CLOUDFLARE_API_KEY:
                     default: CLOUDFLARE_API_KEY
@@ -108,91 +109,63 @@ spec:
                 - domain
                 - secret
                 type: object
-              image:
-                default: cloudflare/cloudflared:latest
-                description: Image is the WARP connector container image.
+              comment:
+                description: Comment is an optional description for the private service.
+                maxLength: 500
                 type: string
-              name:
-                description: Name of the WARP Connector in Cloudflare.
-                maxLength: 255
+              protocol:
+                default: tcp
+                description: Protocol specifies the protocol to use for the private
+                  service.
+                enum:
+                - tcp
+                - udp
                 type: string
-              nodeSelector:
-                additionalProperties:
-                  type: string
-                description: NodeSelector for pod scheduling.
-                type: object
-              replicas:
-                default: 1
-                description: Replicas is the number of connector instances.
-                format: int32
-                minimum: 1
-                type: integer
-              resources:
-                description: Resources defines compute resources.
+              serviceRef:
+                description: |-
+                  ServiceRef references the Kubernetes Service to expose privately.
+                  The Service must be in the same namespace as the PrivateService.
                 properties:
-                  limits:
-                    additionalProperties:
-                      type: string
-                    description: Limits describes max allowed resources.
-                    type: object
-                  requests:
-                    additionalProperties:
-                      type: string
-                    description: Requests describes minimum required resources.
-                    type: object
+                  name:
+                    description: Name is the name of the Service.
+                    type: string
+                  port:
+                    description: Port is the port of the Service to expose.
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                required:
+                - name
+                - port
                 type: object
-              routes:
-                description: Routes are the private network routes to advertise.
-                items:
-                  description: WARPConnectorRoute defines a route to advertise.
-                  properties:
-                    comment:
-                      description: Comment is an optional description.
-                      type: string
-                    network:
-                      description: Network is the CIDR of the network to route.
-                      pattern: ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$
-                      type: string
-                  required:
-                  - network
-                  type: object
-                type: array
-              serviceAccountName:
-                description: ServiceAccount to use for the connector pods.
-                type: string
-              tolerations:
-                description: Tolerations for pod scheduling.
-                items:
-                  description: Toleration for pod scheduling.
-                  properties:
-                    effect:
-                      description: Effect indicates the taint effect.
-                      enum:
-                      - NoSchedule
-                      - PreferNoSchedule
-                      - NoExecute
-                      type: string
-                    key:
-                      description: Key is the taint key.
-                      type: string
-                    operator:
-                      description: Operator represents the relationship.
-                      enum:
-                      - Exists
-                      - Equal
-                      type: string
-                    tolerationSeconds:
-                      description: TolerationSeconds for NoExecute effect.
-                      format: int64
-                      type: integer
-                    value:
-                      description: Value is the taint value.
-                      type: string
-                  type: object
-                type: array
+              tunnelRef:
+                description: TunnelRef references the Tunnel or ClusterTunnel that
+                  will handle this private service.
+                properties:
+                  kind:
+                    default: ClusterTunnel
+                    description: Kind is the type of tunnel resource (Tunnel or ClusterTunnel).
+                    enum:
+                    - Tunnel
+                    - ClusterTunnel
+                    type: string
+                  name:
+                    description: Name is the name of the Tunnel or ClusterTunnel resource.
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace is the namespace of the Tunnel resource.
+                      Only applicable when Kind is Tunnel. Ignored for ClusterTunnel.
+                    type: string
+                required:
+                - kind
+                - name
+                type: object
               virtualNetworkRef:
-                description: VirtualNetworkRef references the VirtualNetwork for this
-                  connector.
+                description: |-
+                  VirtualNetworkRef references the VirtualNetwork for this private service.
+                  If not specified, the default Virtual Network will be used.
                 properties:
                   name:
                     description: Name is the name of the VirtualNetwork resource.
@@ -202,15 +175,18 @@ spec:
                 type: object
             required:
             - cloudflare
+            - serviceRef
+            - tunnelRef
             type: object
           status:
-            description: WARPConnectorStatus defines the observed state
+            description: PrivateServiceStatus defines the observed state of PrivateService
             properties:
               accountId:
                 description: AccountID is the Cloudflare Account ID.
                 type: string
               conditions:
-                description: Conditions represent the latest available observations.
+                description: Conditions represent the latest available observations
+                  of the PrivateService's state.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -269,25 +245,30 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
-              connectorId:
-                description: ConnectorID is the Cloudflare WARP Connector ID.
+              network:
+                description: Network is the CIDR that was created for this private
+                  service.
                 type: string
               observedGeneration:
-                description: ObservedGeneration is the most recent generation observed.
+                description: ObservedGeneration is the most recent generation observed
+                  by the controller.
                 format: int64
                 type: integer
-              readyReplicas:
-                description: ReadyReplicas is the number of ready connector pods.
-                format: int32
-                type: integer
-              routesConfigured:
-                description: RoutesConfigured is the number of routes configured.
-                type: integer
+              serviceIP:
+                description: ServiceIP is the ClusterIP of the referenced Service.
+                type: string
               state:
-                description: State indicates the current state.
+                description: State indicates the current state of the private service.
                 type: string
               tunnelId:
-                description: TunnelID is the underlying tunnel ID.
+                description: TunnelID is the Cloudflare Tunnel ID this service routes
+                  through.
+                type: string
+              tunnelName:
+                description: TunnelName is the name of the Tunnel in Cloudflare.
+                type: string
+              virtualNetworkId:
+                description: VirtualNetworkID is the Cloudflare Virtual Network ID.
                 type: string
             type: object
         type: object

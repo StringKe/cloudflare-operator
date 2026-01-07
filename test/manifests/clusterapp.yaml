@@ -26,8 +26,8 @@ kind: Service
 metadata:
   name: whoami-test
   annotations:
-    cfargotunnel.com/cluster-tunnel: new-cluster-tunnel
-    cfargotunnel.com/proto: http
+    cloudflare-operator.io/cluster-tunnel: new-cluster-tunnel
+    cloudflare-operator.io/proto: http
 spec:
   selector:
     app: whoami

@@ -1,4 +1,4 @@
-apiVersion: networking.cfargotunnel.com/v1alpha2
+apiVersion: networking.cloudflare-operator.io/v1alpha2
 kind: DNSRecord
 metadata:
   name: dnsrecord-sample
@@ -6,7 +6,7 @@ metadata:
 spec:
   name: app.example.com
   type: CNAME
-  content: tunnel-id.cfargotunnel.com
+  content: tunnel-id.cloudflare-operator.io
   proxied: true
   ttl: 1
   comment: Managed by cloudflare-operator

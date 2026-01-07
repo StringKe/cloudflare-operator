@@ -362,7 +362,7 @@ func (c *API) InsertOrUpdateCName(fqdn, dnsId string) (string, error) {
 			ID:      dnsId,
 			Type:    "CNAME",
 			Name:    fqdn,
-			Content: fmt.Sprintf("%s.cfargotunnel.com", c.ValidTunnelId),
+			Content: fmt.Sprintf("%s.cloudflare-operator.io", c.ValidTunnelId),
 			Comment: ptr.To("Managed by cloudflare-operator"),
 			TTL:     1,            // Automatic TTL
 			Proxied: ptr.To(true), // For Cloudflare tunnels
@@ -379,7 +379,7 @@ func (c *API) InsertOrUpdateCName(fqdn, dnsId string) (string, error) {
 		createParams := cloudflare.CreateDNSRecordParams{
 			Type:    "CNAME",
 			Name:    fqdn,
-			Content: fmt.Sprintf("%s.cfargotunnel.com", c.ValidTunnelId),
+			Content: fmt.Sprintf("%s.cloudflare-operator.io", c.ValidTunnelId),
 			Comment: "Managed by cloudflare-operator",
 			TTL:     1,            // Automatic TTL
 			Proxied: ptr.To(true), // For Cloudflare tunnels

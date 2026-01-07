@@ -35,7 +35,7 @@ import (
 )
 
 const (
-	FinalizerName = "gatewayconfiguration.networking.cfargotunnel.com/finalizer"
+	FinalizerName = "gatewayconfiguration.networking.cloudflare-operator.io/finalizer"
 )
 
 // GatewayConfigurationReconciler reconciles a GatewayConfiguration object
@@ -44,9 +44,9 @@ type GatewayConfigurationReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=networking.cfargotunnel.com,resources=gatewayconfigurations,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=networking.cfargotunnel.com,resources=gatewayconfigurations/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=networking.cfargotunnel.com,resources=gatewayconfigurations/finalizers,verbs=update
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=gatewayconfigurations,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=gatewayconfigurations/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=gatewayconfigurations/finalizers,verbs=update
 
 func (r *GatewayConfigurationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)

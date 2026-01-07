@@ -218,7 +218,7 @@ func main() {
 		WebhookServer:           webhookServer,
 		HealthProbeBindAddress:  probeAddr,
 		LeaderElection:          enableLeaderElection,
-		LeaderElectionID:        "9f193cf8.cfargotunnel.com",
+		LeaderElectionID:        "9f193cf8.cloudflare-operator.io",
 		LeaderElectionNamespace: clusterResourceNamespace,
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the

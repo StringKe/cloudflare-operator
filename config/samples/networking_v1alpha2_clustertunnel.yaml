@@ -1,4 +1,4 @@
-apiVersion: networking.cfargotunnel.com/v1alpha2
+apiVersion: networking.cloudflare-operator.io/v1alpha2
 kind: ClusterTunnel
 metadata:
   labels:

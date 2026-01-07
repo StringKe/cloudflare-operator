@@ -120,7 +120,7 @@ if err != nil && !apierrors.IsNotFound(err) {
 }
 
 // 2. 使用带 Tunnel 标识的 Finalizer
-const tunnelFinalizerPrefix = "cfargotunnel.com/finalizer-"
+const tunnelFinalizerPrefix = "cloudflare-operator.io/finalizer-"
 
 func getTunnelFinalizer(tunnelName string) string {
     return tunnelFinalizerPrefix + tunnelName

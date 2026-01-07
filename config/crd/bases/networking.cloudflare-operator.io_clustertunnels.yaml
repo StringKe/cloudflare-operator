@@ -4,28 +4,28 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: tunnels.networking.cfargotunnel.com
+  name: clustertunnels.networking.cloudflare-operator.io
 spec:
-  group: networking.cfargotunnel.com
+  group: networking.cloudflare-operator.io
   names:
-    kind: Tunnel
-    listKind: TunnelList
-    plural: tunnels
-    singular: tunnel
-  scope: Namespaced
+    kind: ClusterTunnel
+    listKind: ClusterTunnelList
+    plural: clustertunnels
+    singular: clustertunnel
+  scope: Cluster
   versions:
   - additionalPrinterColumns:
     - jsonPath: .status.tunnelId
       name: TunnelID
       type: string
     deprecated: true
-    deprecationWarning: networking.cfargotunnel.com/v1alpha1 Tunnel is deprecated,
-      see https://github.com/adyanth/cloudflare-operator/tree/v0.13.0/docs/migration/crd/v1alpha2.md
+    deprecationWarning: networking.cloudflare-operator.io/v1alpha1 ClusterTunnel is
+      deprecated, see https://github.com/adyanth/cloudflare-operator/tree/v0.13.0/docs/migration/crd/v1alpha2.md
       for migrating to v1alpha2
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Tunnel is the Schema for the tunnels API
+        description: ClusterTunnel is the Schema for the clustertunnels API
         properties:
           apiVersion:
             description: |-
@@ -236,7 +236,7 @@ spec:
     name: v1alpha2
     schema:
       openAPIV3Schema:
-        description: Tunnel is the Schema for the tunnels API
+        description: ClusterTunnel is the Schema for the clustertunnels API
         properties:
           apiVersion:
             description: |-

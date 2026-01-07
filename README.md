@@ -151,7 +151,7 @@ kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest
 ### Create a Tunnel
 
 ```yaml
-apiVersion: networking.cfargotunnel.com/v1alpha2
+apiVersion: networking.cloudflare-operator.io/v1alpha2
 kind: Tunnel
 metadata:
   name: my-tunnel
@@ -167,7 +167,7 @@ spec:
 ### Expose a Service
 
 ```yaml
-apiVersion: networking.cfargotunnel.com/v1alpha2
+apiVersion: networking.cloudflare-operator.io/v1alpha2
 kind: TunnelBinding
 metadata:
   name: my-service-binding

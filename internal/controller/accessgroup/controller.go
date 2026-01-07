@@ -35,7 +35,7 @@ import (
 )
 
 const (
-	FinalizerName = "accessgroup.networking.cfargotunnel.com/finalizer"
+	FinalizerName = "accessgroup.networking.cloudflare-operator.io/finalizer"
 )
 
 // AccessGroupReconciler reconciles an AccessGroup object
@@ -44,9 +44,9 @@ type AccessGroupReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=networking.cfargotunnel.com,resources=accessgroups,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=networking.cfargotunnel.com,resources=accessgroups/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=networking.cfargotunnel.com,resources=accessgroups/finalizers,verbs=update
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=accessgroups,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=accessgroups/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=accessgroups/finalizers,verbs=update
 
 func (r *AccessGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)

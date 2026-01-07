@@ -4,7 +4,7 @@
 
 本实现计划将现有的 cloudflare-operator (fork 自 adyanth/cloudflare-operator) 转型为完整的 Cloudflare Zero Trust Kubernetes Operator。计划分为 6 个阶段，涵盖：
 
-- API Group 从 `networking.cfargotunnel.com` 迁移到 `cloudflare.com`
+- API Group 从 `networking.cloudflare-operator.io` 迁移到 `cloudflare.com`
 - 实现 21 个 CRD，覆盖 Networks、Devices、Gateway 和 Access 层
 - 集成 cloudflare-go SDK v0.115.0+ Zero Trust APIs
 - 完整的测试和文档
@@ -40,9 +40,9 @@
 ### 0.3 API Group 迁移基础设施
 
 **当前状态:**
-- API Group: `networking.cfargotunnel.com`
+- API Group: `networking.cloudflare-operator.io`
 - 存储版本: v1alpha1 (deprecated), v1alpha2 (current)
-- Labels/Annotations 前缀: `cfargotunnel.com/`
+- Labels/Annotations 前缀: `cloudflare-operator.io/`
 
 **目标状态:**
 - API Group: `cloudflare.com`
@@ -54,8 +54,8 @@
 ```
 Phase 0.3a: 创建新 API Group 结构
 ├── api/
-│   ├── v1alpha1/        # 现有 (networking.cfargotunnel.com)
-│   ├── v1alpha2/        # 现有 hub (networking.cfargotunnel.com)
+│   ├── v1alpha1/        # 现有 (networking.cloudflare-operator.io)
+│   ├── v1alpha2/        # 现有 hub (networking.cloudflare-operator.io)
 │   └── cloudflare/
 │       └── v1alpha1/    # 新 API Group (cloudflare.com)
 ```
@@ -712,7 +712,7 @@ spec:
   type: CNAME
   name: "api.example.com"
 
-  content: "xxx.cfargotunnel.com"
+  content: "xxx.cloudflare-operator.io"
   # OR
   tunnelRef:
     kind: ClusterTunnel

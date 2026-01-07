@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: tunnelbindings.networking.cfargotunnel.com
+  name: tunnelbindings.networking.cloudflare-operator.io
 spec:
-  group: networking.cfargotunnel.com
+  group: networking.cloudflare-operator.io
   names:
     kind: TunnelBinding
     listKind: TunnelBindingList

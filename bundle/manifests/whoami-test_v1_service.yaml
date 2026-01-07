@@ -2,8 +2,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    tunnels.networking.cfargotunnel.com/cr: tunnel-sample
-    tunnels.networking.cfargotunnel.com/ns: default
+    tunnels.networking.cloudflare-operator.io/cr: tunnel-sample
+    tunnels.networking.cloudflare-operator.io/ns: default
   creationTimestamp: null
   name: whoami-test
 spec:

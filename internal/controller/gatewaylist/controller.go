@@ -38,7 +38,7 @@ import (
 )
 
 const (
-	FinalizerName = "gatewaylist.networking.cfargotunnel.com/finalizer"
+	FinalizerName = "gatewaylist.networking.cloudflare-operator.io/finalizer"
 )
 
 // GatewayListReconciler reconciles a GatewayList object
@@ -47,9 +47,9 @@ type GatewayListReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=networking.cfargotunnel.com,resources=gatewaylists,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=networking.cfargotunnel.com,resources=gatewaylists/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=networking.cfargotunnel.com,resources=gatewaylists/finalizers,verbs=update
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=gatewaylists,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=gatewaylists/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=gatewaylists/finalizers,verbs=update
 
 func (r *GatewayListReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)

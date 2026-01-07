@@ -1100,7 +1100,7 @@ spec:
   name: "api.example.com"
 
   # 静态内容
-  content: "xxx.cfargotunnel.com"
+  content: "xxx.cloudflare-operator.io"
 
   # 或从 Tunnel 自动获取
   tunnelRef:

@@ -1,5 +1,5 @@
 # New tunnel
-apiVersion: networking.cfargotunnel.com/v1alpha1
+apiVersion: networking.cloudflare-operator.io/v1alpha1
 kind: Tunnel
 metadata:
   name: new-tunnel
@@ -15,7 +15,7 @@ spec:
     email: adyanthh@gmail.com
 # ---
 # # Existing tunnel
-# apiVersion: networking.cfargotunnel.com/v1alpha1
+# apiVersion: networking.cloudflare-operator.io/v1alpha1
 # kind: Tunnel
 # metadata:
 #   name: existing-tunnel

@@ -4,24 +4,30 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: virtualnetworks.networking.cfargotunnel.com
+  name: dnsrecords.networking.cloudflare-operator.io
 spec:
-  group: networking.cfargotunnel.com
+  group: networking.cloudflare-operator.io
   names:
-    kind: VirtualNetwork
-    listKind: VirtualNetworkList
-    plural: virtualnetworks
+    kind: DNSRecord
+    listKind: DNSRecordList
+    plural: dnsrecords
     shortNames:
-    - vnet
-    singular: virtualnetwork
-  scope: Cluster
+    - dnsrec
+    singular: dnsrecord
+  scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .status.virtualNetworkId
-      name: VNetID
+    - jsonPath: .spec.type
+      name: Type
       type: string
-    - jsonPath: .status.isDefault
-      name: Default
+    - jsonPath: .spec.name
+      name: Name
+      type: string
+    - jsonPath: .spec.content
+      name: Content
+      type: string
+    - jsonPath: .spec.proxied
+      name: Proxied
       type: boolean
     - jsonPath: .status.state
       name: State
@@ -32,11 +38,7 @@ spec:
     name: v1alpha2
     schema:
       openAPIV3Schema:
-        description: |-
-          VirtualNetwork is the Schema for the virtualnetworks API.
-          A VirtualNetwork represents a Cloudflare Zero Trust Virtual Network,
-          which provides isolated private network address spaces for routing traffic
-          through Cloudflare Tunnels.
+        description: DNSRecord is the Schema for the dnsrecords API.
         properties:
           apiVersion:
             description: |-
@@ -56,11 +58,10 @@ spec:
           metadata:
             type: object
           spec:
-            description: VirtualNetworkSpec defines the desired state of VirtualNetwork
+            description: DNSRecordSpec defines the desired state of DNSRecord
             properties:
               cloudflare:
-                description: Cloudflare contains the Cloudflare API credentials and
-                  account information.
+                description: Cloudflare contains the Cloudflare API credentials.
                 properties:
                   CLOUDFLARE_API_KEY:
                     default: CLOUDFLARE_API_KEY
@@ -108,32 +109,133 @@ spec:
                 - secret
                 type: object
               comment:
-                description: Comment is an optional description for the Virtual Network.
-                maxLength: 500
+                description: Comment is an optional comment.
+                maxLength: 100
                 type: string
-              isDefaultNetwork:
-                default: false
-                description: |-
-                  IsDefaultNetwork marks this Virtual Network as the default for the account.
-                  Only one Virtual Network can be the default.
-                type: boolean
+              content:
+                description: Content is the record content/value.
+                type: string
+              data:
+                description: Data contains additional record-specific data (for SRV,
+                  CAA, etc.).
+                properties:
+                  algorithm:
+                    description: For CERT/SSHFP/TLSA records
+                    type: integer
+                  altitude:
+                    type: string
+                  certificate:
+                    type: string
+                  content:
+                    description: For URI records
+                    type: string
+                  flags:
+                    description: For CAA records
+                    type: integer
+                  keyTag:
+                    type: integer
+                  latDegrees:
+                    description: For LOC records
+                    type: integer
+                  latDirection:
+                    type: string
+                  latMinutes:
+                    type: integer
+                  latSeconds:
+                    type: string
+                  longDegrees:
+                    type: integer
+                  longDirection:
+                    type: string
+                  longMinutes:
+                    type: integer
+                  longSeconds:
+                    type: string
+                  matchingType:
+                    type: integer
+                  port:
+                    type: integer
+                  precisionHorz:
+                    type: string
+                  precisionVert:
+                    type: string
+                  proto:
+                    type: string
+                  selector:
+                    type: integer
+                  service:
+                    description: For SRV records
+                    type: string
+                  size:
+                    type: string
+                  tag:
+                    type: string
+                  target:
+                    type: string
+                  usage:
+                    type: integer
+                  value:
+                    type: string
+                  weight:
+                    type: integer
+                type: object
               name:
-                description: |-
-                  Name of the Virtual Network in Cloudflare.
-                  If not specified, the Kubernetes resource name will be used.
+                description: Name is the DNS record name (e.g., "www" or "www.example.com").
+                maxLength: 255
+                type: string
+              priority:
+                description: Priority for MX/SRV records.
+                maximum: 65535
+                minimum: 0
+                type: integer
+              proxied:
+                default: false
+                description: Proxied enables Cloudflare proxy for this record.
+                type: boolean
+              tags:
+                description: Tags for the record.
+                items:
+                  type: string
+                type: array
+              ttl:
+                default: 1
+                description: TTL is the Time To Live (1 = automatic).
+                minimum: 1
+                type: integer
+              type:
+                description: Type is the DNS record type.
+                enum:
+                - A
+                - AAAA
+                - CNAME
+                - TXT
+                - MX
+                - NS
+                - SRV
+                - CAA
+                - CERT
+                - DNSKEY
+                - DS
+                - HTTPS
+                - LOC
+                - NAPTR
+                - SMIMEA
+                - SSHFP
+                - SVCB
+                - TLSA
+                - URI
                 type: string
             required:
             - cloudflare
+            - content
+            - name
+            - type
             type: object
           status:
-            description: VirtualNetworkStatus defines the observed state of VirtualNetwork
+            description: DNSRecordStatus defines the observed state
             properties:
-              accountId:
-                description: AccountId is the Cloudflare Account ID.
-                type: string
               conditions:
-                description: Conditions represent the latest available observations
-                  of the VirtualNetwork's state.
+                description: Conditions represent the latest available observations.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -192,22 +294,21 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
-              isDefault:
-                description: IsDefault indicates whether this is the default Virtual
-                  Network for the account.
-                type: boolean
+              fqdn:
+                description: FQDN is the fully qualified domain name.
+                type: string
               observedGeneration:
-                description: ObservedGeneration is the most recent generation observed
-                  by the controller.
+                description: ObservedGeneration is the most recent generation observed.
                 format: int64
                 type: integer
-              state:
-                description: State indicates the current state of the Virtual Network
-                  (active, deleted, etc.).
+              recordId:
+                description: RecordID is the Cloudflare DNS Record ID.
                 type: string
-              virtualNetworkId:
-                description: VirtualNetworkId is the Cloudflare ID of the Virtual
-                  Network.
+              state:
+                description: State indicates the current state.
+                type: string
+              zoneId:
+                description: ZoneID is the Cloudflare Zone ID.
                 type: string
             type: object
         type: object

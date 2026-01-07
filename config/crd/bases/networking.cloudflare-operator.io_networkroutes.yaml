@@ -4,27 +4,27 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: gatewaylists.networking.cfargotunnel.com
+  name: networkroutes.networking.cloudflare-operator.io
 spec:
-  group: networking.cfargotunnel.com
+  group: networking.cloudflare-operator.io
   names:
-    kind: GatewayList
-    listKind: GatewayListList
-    plural: gatewaylists
+    kind: NetworkRoute
+    listKind: NetworkRouteList
+    plural: networkroutes
     shortNames:
-    - gwlist
-    singular: gatewaylist
+    - netroute
+    singular: networkroute
   scope: Cluster
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.type
-      name: Type
+    - jsonPath: .spec.network
+      name: Network
       type: string
-    - jsonPath: .status.itemCount
-      name: Items
-      type: integer
-    - jsonPath: .status.listId
-      name: ListID
+    - jsonPath: .status.tunnelId
+      name: TunnelID
+      type: string
+    - jsonPath: .status.virtualNetworkId
+      name: VNetID
       type: string
     - jsonPath: .status.state
       name: State
@@ -35,7 +35,10 @@ spec:
     name: v1alpha2
     schema:
       openAPIV3Schema:
-        description: GatewayList is the Schema for the gatewaylists API.
+        description: |-
+          NetworkRoute is the Schema for the networkroutes API.
+          A NetworkRoute defines a CIDR range to be routed through a Cloudflare Tunnel,
+          enabling private network access via WARP clients.
         properties:
           apiVersion:
             description: |-
@@ -55,10 +58,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: GatewayListSpec defines the desired state of GatewayList
+            description: NetworkRouteSpec defines the desired state of NetworkRoute
             properties:
               cloudflare:
-                description: Cloudflare contains the Cloudflare API credentials.
+                description: Cloudflare contains the Cloudflare API credentials and
+                  account information.
                 properties:
                   CLOUDFLARE_API_KEY:
                     default: CLOUDFLARE_API_KEY
@@ -105,68 +109,63 @@ spec:
                 - domain
                 - secret
                 type: object
-              description:
-                description: Description is a human-readable description.
-                maxLength: 1000
+              comment:
+                description: Comment is an optional description for the route.
+                maxLength: 500
                 type: string
-              items:
-                description: Items are the list entries.
-                items:
-                  description: GatewayListItem represents a single list item.
-                  properties:
-                    description:
-                      description: Description is an optional description for this
-                        item.
-                      type: string
-                    value:
-                      description: Value is the list entry value.
-                      type: string
-                  required:
-                  - value
-                  type: object
-                type: array
-              itemsFromConfigMap:
-                description: ItemsFromConfigMap references a ConfigMap containing
-                  list items.
+              network:
+                description: Network is the CIDR notation for the IP range to route
+                  (e.g., "10.0.0.0/8").
+                pattern: ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$
+                type: string
+              tunnelRef:
+                description: TunnelRef references the Tunnel or ClusterTunnel that
+                  will handle this route.
                 properties:
-                  key:
-                    description: Key is the key in the ConfigMap.
+                  kind:
+                    default: ClusterTunnel
+                    description: Kind is the type of tunnel resource (Tunnel or ClusterTunnel).
+                    enum:
+                    - Tunnel
+                    - ClusterTunnel
                     type: string
                   name:
-                    description: Name is the ConfigMap name.
+                    description: Name is the name of the Tunnel or ClusterTunnel resource.
                     type: string
                   namespace:
-                    description: Namespace is the ConfigMap namespace.
+                    description: |-
+                      Namespace is the namespace of the Tunnel resource.
+                      Only applicable when Kind is Tunnel. Ignored for ClusterTunnel.
                     type: string
                 required:
-                - key
+                - kind
                 - name
                 type: object
-              name:
-                description: Name of the Gateway List in Cloudflare.
-                maxLength: 255
-                type: string
-              type:
-                description: Type is the list type.
-                enum:
-                - SERIAL
-                - URL
-                - DOMAIN
-                - EMAIL
-                - IP
-                type: string
+              virtualNetworkRef:
+                description: |-
+                  VirtualNetworkRef references the VirtualNetwork for this route.
+                  If not specified, the default Virtual Network will be used.
+                properties:
+                  name:
+                    description: Name is the name of the VirtualNetwork resource.
+                    type: string
+                required:
+                - name
+                type: object
             required:
             - cloudflare
-            - type
+            - network
+            - tunnelRef
             type: object
           status:
-            description: GatewayListStatus defines the observed state
+            description: NetworkRouteStatus defines the observed state of NetworkRoute
             properties:
               accountId:
                 description: AccountID is the Cloudflare Account ID.
                 type: string
               conditions:
-                description: Conditions represent the latest available observations.
+                description: Conditions represent the latest available observations
+                  of the NetworkRoute's state.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -225,18 +224,26 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
-              itemCount:
-                description: ItemCount is the number of items in the list.
-                type: integer
-              listId:
-                description: ListID is the Cloudflare Gateway List ID.
+              network:
+                description: Network is the CIDR from the route in Cloudflare.
                 type: string
               observedGeneration:
-                description: ObservedGeneration is the most recent generation observed.
+                description: ObservedGeneration is the most recent generation observed
+                  by the controller.
                 format: int64
                 type: integer
               state:
-                description: State indicates the current state.
+                description: State indicates the current state of the route.
+                type: string
+              tunnelId:
+                description: TunnelID is the Cloudflare Tunnel ID this route points
+                  to.
+                type: string
+              tunnelName:
+                description: TunnelName is the name of the Tunnel in Cloudflare.
+                type: string
+              virtualNetworkId:
+                description: VirtualNetworkID is the Cloudflare Virtual Network ID.
                 type: string
             type: object
         type: object

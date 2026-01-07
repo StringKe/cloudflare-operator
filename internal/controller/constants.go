@@ -26,10 +26,10 @@ const (
 	// Finalizer for cloudflare.com resources
 	FinalizerCloudflare = "cloudflare.com/finalizer"
 
-	// Legacy prefixes for backward compatibility with cfargotunnel.com resources
-	LegacyLabelPrefix      = "cfargotunnel.com/"
-	LegacyAnnotationPrefix = "cfargotunnel.com/"
-	LegacyFinalizer        = "cfargotunnel.com/finalizer"
+	// Legacy prefixes for backward compatibility with cloudflare-operator.io resources
+	LegacyLabelPrefix      = "cloudflare-operator.io/"
+	LegacyAnnotationPrefix = "cloudflare-operator.io/"
+	LegacyFinalizer        = "cloudflare-operator.io/finalizer"
 )
 
 // VirtualNetwork controller constants

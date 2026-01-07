@@ -4,28 +4,19 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: privateservices.networking.cfargotunnel.com
+  name: gatewayconfigurations.networking.cloudflare-operator.io
 spec:
-  group: networking.cfargotunnel.com
+  group: networking.cloudflare-operator.io
   names:
-    kind: PrivateService
-    listKind: PrivateServiceList
-    plural: privateservices
+    kind: GatewayConfiguration
+    listKind: GatewayConfigurationList
+    plural: gatewayconfigurations
     shortNames:
-    - psvc
-    singular: privateservice
-  scope: Namespaced
+    - gwconfig
+    singular: gatewayconfiguration
+  scope: Cluster
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.serviceRef.name
-      name: Service
-      type: string
-    - jsonPath: .spec.serviceRef.port
-      name: Port
-      type: integer
-    - jsonPath: .status.network
-      name: Network
-      type: string
     - jsonPath: .status.state
       name: State
       type: string
@@ -35,10 +26,8 @@ spec:
     name: v1alpha2
     schema:
       openAPIV3Schema:
-        description: |-
-          PrivateService is the Schema for the privateservices API.
-          A PrivateService exposes a Kubernetes Service privately through a Cloudflare Tunnel,
-          making it accessible only to authenticated WARP clients.
+        description: GatewayConfiguration is the Schema for the gatewayconfigurations
+          API.
         properties:
           apiVersion:
             description: |-
@@ -58,11 +47,10 @@ spec:
           metadata:
             type: object
           spec:
-            description: PrivateServiceSpec defines the desired state of PrivateService
+            description: GatewayConfigurationSpec defines the desired state of GatewayConfiguration
             properties:
               cloudflare:
-                description: Cloudflare contains the Cloudflare API credentials and
-                  account information.
+                description: Cloudflare contains the Cloudflare API credentials.
                 properties:
                   CLOUDFLARE_API_KEY:
                     default: CLOUDFLARE_API_KEY
@@ -109,84 +97,135 @@ spec:
                 - domain
                 - secret
                 type: object
-              comment:
-                description: Comment is an optional description for the private service.
-                maxLength: 500
-                type: string
-              protocol:
-                default: tcp
-                description: Protocol specifies the protocol to use for the private
-                  service.
-                enum:
-                - tcp
-                - udp
-                type: string
-              serviceRef:
-                description: |-
-                  ServiceRef references the Kubernetes Service to expose privately.
-                  The Service must be in the same namespace as the PrivateService.
+              settings:
+                description: Settings contains the Gateway configuration settings.
                 properties:
-                  name:
-                    description: Name is the name of the Service.
-                    type: string
-                  port:
-                    description: Port is the port of the Service to expose.
-                    format: int32
-                    maximum: 65535
-                    minimum: 1
-                    type: integer
-                required:
-                - name
-                - port
-                type: object
-              tunnelRef:
-                description: TunnelRef references the Tunnel or ClusterTunnel that
-                  will handle this private service.
-                properties:
-                  kind:
-                    default: ClusterTunnel
-                    description: Kind is the type of tunnel resource (Tunnel or ClusterTunnel).
-                    enum:
-                    - Tunnel
-                    - ClusterTunnel
-                    type: string
-                  name:
-                    description: Name is the name of the Tunnel or ClusterTunnel resource.
-                    type: string
-                  namespace:
-                    description: |-
-                      Namespace is the namespace of the Tunnel resource.
-                      Only applicable when Kind is Tunnel. Ignored for ClusterTunnel.
-                    type: string
-                required:
-                - kind
-                - name
-                type: object
-              virtualNetworkRef:
-                description: |-
-                  VirtualNetworkRef references the VirtualNetwork for this private service.
-                  If not specified, the default Virtual Network will be used.
-                properties:
-                  name:
-                    description: Name is the name of the VirtualNetwork resource.
-                    type: string
-                required:
-                - name
+                  activityLog:
+                    description: ActivityLog configures activity logging.
+                    properties:
+                      enabled:
+                        type: boolean
+                    required:
+                    - enabled
+                    type: object
+                  antiVirus:
+                    description: AntiVirus configures AV scanning.
+                    properties:
+                      enabled:
+                        type: boolean
+                      enabledDownloadPhase:
+                        type: boolean
+                      enabledUploadPhase:
+                        type: boolean
+                      failClosed:
+                        type: boolean
+                      notificationSettings:
+                        description: NotificationSettings for alerts.
+                        properties:
+                          enabled:
+                            type: boolean
+                          message:
+                            type: string
+                          supportUrl:
+                            type: string
+                        required:
+                        - enabled
+                        type: object
+                    required:
+                    - enabled
+                    type: object
+                  blockPage:
+                    description: BlockPage configures the block page.
+                    properties:
+                      backgroundColor:
+                        type: string
+                      enabled:
+                        type: boolean
+                      footerText:
+                        type: string
+                      headerText:
+                        type: string
+                      logoPath:
+                        type: string
+                      mailtoAddress:
+                        type: string
+                      mailtoSubject:
+                        type: string
+                      name:
+                        type: string
+                      suppressFooter:
+                        type: boolean
+                    required:
+                    - enabled
+                    type: object
+                  bodyScanning:
+                    description: BodyScanning configures body scanning.
+                    properties:
+                      inspectionMode:
+                        type: string
+                    type: object
+                  browserIsolation:
+                    description: BrowserIsolation configures browser isolation.
+                    properties:
+                      nonIdentityEnabled:
+                        type: boolean
+                      urlBrowserIsolationEnabled:
+                        type: boolean
+                    type: object
+                  customCertificate:
+                    description: CustomCertificate configures custom root CA.
+                    properties:
+                      enabled:
+                        type: boolean
+                      id:
+                        type: string
+                    required:
+                    - enabled
+                    type: object
+                  fips:
+                    description: FIPS enables FIPS mode.
+                    properties:
+                      tls:
+                        type: boolean
+                    type: object
+                  nonIdentityBrowserIsolation:
+                    description: NonIdentityBrowserIsolation configures non-identity
+                      isolation.
+                    properties:
+                      enabled:
+                        type: boolean
+                    required:
+                    - enabled
+                    type: object
+                  protocolDetection:
+                    description: ProtocolDetection enables protocol detection.
+                    properties:
+                      enabled:
+                        type: boolean
+                    required:
+                    - enabled
+                    type: object
+                  tlsDecrypt:
+                    description: TLSDecrypt enables TLS decryption.
+                    properties:
+                      enabled:
+                        type: boolean
+                    required:
+                    - enabled
+                    type: object
                 type: object
             required:
             - cloudflare
-            - serviceRef
-            - tunnelRef
+            - settings
             type: object
           status:
-            description: PrivateServiceStatus defines the observed state of PrivateService
+            description: GatewayConfigurationStatus defines the observed state
             properties:
               accountId:
                 description: AccountID is the Cloudflare Account ID.
                 type: string
               conditions:
-                description: Conditions represent the latest available observations
-                  of the PrivateService's state.
+                description: Conditions represent the latest available observations.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -245,30 +284,12 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
-              network:
-                description: Network is the CIDR that was created for this private
-                  service.
-                type: string
               observedGeneration:
-                description: ObservedGeneration is the most recent generation observed
-                  by the controller.
+                description: ObservedGeneration is the most recent generation observed.
                 format: int64
                 type: integer
-              serviceIP:
-                description: ServiceIP is the ClusterIP of the referenced Service.
-                type: string
               state:
-                description: State indicates the current state of the private service.
-                type: string
-              tunnelId:
-                description: TunnelID is the Cloudflare Tunnel ID this service routes
-                  through.
-                type: string
-              tunnelName:
-                description: TunnelName is the name of the Tunnel in Cloudflare.
-                type: string
-              virtualNetworkId:
-                description: VirtualNetworkID is the Cloudflare Virtual Network ID.
+                description: State indicates the current state.
                 type: string
             type: object
         type: object

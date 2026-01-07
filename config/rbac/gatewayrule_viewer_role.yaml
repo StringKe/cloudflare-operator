@@ -5,7 +5,7 @@ metadata:
   name: gatewayrule-viewer-role
 rules:
 - apiGroups:
-  - networking.cfargotunnel.com
+  - networking.cloudflare-operator.io
   resources:
   - gatewayrules
   verbs:
@@ -13,7 +13,7 @@ rules:
   - list
   - watch
 - apiGroups:
-  - networking.cfargotunnel.com
+  - networking.cloudflare-operator.io
   resources:
   - gatewayrules/status
   verbs:

@@ -36,7 +36,7 @@ import (
 )
 
 const (
-	FinalizerName = "accessidentityprovider.networking.cfargotunnel.com/finalizer"
+	FinalizerName = "accessidentityprovider.networking.cloudflare-operator.io/finalizer"
 )
 
 // AccessIdentityProviderReconciler reconciles an AccessIdentityProvider object
@@ -45,9 +45,9 @@ type AccessIdentityProviderReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=networking.cfargotunnel.com,resources=accessidentityproviders,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=networking.cfargotunnel.com,resources=accessidentityproviders/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=networking.cfargotunnel.com,resources=accessidentityproviders/finalizers,verbs=update
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=accessidentityproviders,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=accessidentityproviders/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=accessidentityproviders/finalizers,verbs=update
 
 func (r *AccessIdentityProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)

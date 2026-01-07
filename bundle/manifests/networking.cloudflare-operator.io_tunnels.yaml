@@ -4,15 +4,15 @@ metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.16.1
   creationTimestamp: null
-  name: clustertunnels.networking.cfargotunnel.com
+  name: tunnels.networking.cloudflare-operator.io
 spec:
-  group: networking.cfargotunnel.com
+  group: networking.cloudflare-operator.io
   names:
-    kind: ClusterTunnel
-    listKind: ClusterTunnelList
-    plural: clustertunnels
-    singular: clustertunnel
-  scope: Cluster
+    kind: Tunnel
+    listKind: TunnelList
+    plural: tunnels
+    singular: tunnel
+  scope: Namespaced
   versions:
   - additionalPrinterColumns:
     - jsonPath: .status.tunnelId
@@ -21,7 +21,7 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: ClusterTunnel is the Schema for the clustertunnels API
+        description: Tunnel is the Schema for the tunnels API
         properties:
           apiVersion:
             description: |-

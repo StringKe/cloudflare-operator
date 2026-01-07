@@ -5,7 +5,7 @@ metadata:
   name: tunnel-editor-role
 rules:
 - apiGroups:
-  - networking.cfargotunnel.com
+  - networking.cloudflare-operator.io
   resources:
   - tunnels
   verbs:
@@ -17,7 +17,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - networking.cfargotunnel.com
+  - networking.cloudflare-operator.io
   resources:
   - tunnels/status
   verbs:

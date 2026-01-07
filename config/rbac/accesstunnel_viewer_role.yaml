@@ -8,7 +8,7 @@ metadata:
   name: accesstunnel-viewer-role
 rules:
 - apiGroups:
-  - networking.cfargotunnel.com
+  - networking.cloudflare-operator.io
   resources:
   - accesstunnels
   verbs:
@@ -16,7 +16,7 @@ rules:
   - list
   - watch
 - apiGroups:
-  - networking.cfargotunnel.com
+  - networking.cloudflare-operator.io
   resources:
   - accesstunnels/status
   verbs:

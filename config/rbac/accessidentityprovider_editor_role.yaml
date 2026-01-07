@@ -5,7 +5,7 @@ metadata:
   name: accessidentityprovider-editor-role
 rules:
 - apiGroups:
-  - networking.cfargotunnel.com
+  - networking.cloudflare-operator.io
   resources:
   - accessidentityproviders
   verbs:
@@ -17,7 +17,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - networking.cfargotunnel.com
+  - networking.cloudflare-operator.io
   resources:
   - accessidentityproviders/status
   verbs:

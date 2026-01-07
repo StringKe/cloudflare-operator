@@ -11,7 +11,7 @@ In the source cluster, expose the service using a TunnelBinding as before, using
 Ex: expose a postgres db on the source cluster
 
 ```yaml
-apiVersion: networking.cfargotunnel.com/v1alpha1
+apiVersion: networking.cloudflare-operator.io/v1alpha1
 kind: TunnelBinding
 metadata:
   name: postgres
@@ -29,7 +29,7 @@ tunnelRef:
 Now, on the client cluster, create an `AccessTunnel` object.
 
 ```yaml
-apiVersion: networking.cfargotunnel.com/v1alpha1
+apiVersion: networking.cloudflare-operator.io/v1alpha1
 kind: AccessTunnel
 metadata:
   name: postgres

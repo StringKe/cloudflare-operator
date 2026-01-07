@@ -14,92 +14,92 @@ spec:
     - description: Tunnel is the Schema for the tunnels API
       displayName: Tunnel
       kind: Tunnel
-      name: tunnels.networking.cfargotunnel.com
+      name: tunnels.networking.cloudflare-operator.io
       version: v1alpha2
     - description: ClusterTunnel is the Schema for the clustertunnels API
       displayName: Cluster Tunnel
       kind: ClusterTunnel
-      name: clustertunnels.networking.cfargotunnel.com
+      name: clustertunnels.networking.cloudflare-operator.io
       version: v1alpha2
     - description: AccessTunnel is the Schema for referencing existing tunnels
       displayName: Access Tunnel
       kind: AccessTunnel
-      name: accesstunnels.networking.cfargotunnel.com
+      name: accesstunnels.networking.cloudflare-operator.io
       version: v1alpha1
     # Network CRDs
     - description: VirtualNetwork is the Schema for virtual networks API
       displayName: Virtual Network
       kind: VirtualNetwork
-      name: virtualnetworks.networking.cfargotunnel.com
+      name: virtualnetworks.networking.cloudflare-operator.io
       version: v1alpha2
     - description: NetworkRoute is the Schema for network routes API
       displayName: Network Route
       kind: NetworkRoute
-      name: networkroutes.networking.cfargotunnel.com
+      name: networkroutes.networking.cloudflare-operator.io
       version: v1alpha2
     - description: PrivateService is the Schema for private services API
       displayName: Private Service
       kind: PrivateService
-      name: privateservices.networking.cfargotunnel.com
+      name: privateservices.networking.cloudflare-operator.io
       version: v1alpha2
     - description: WARPConnector is the Schema for WARP connectors API
       displayName: WARP Connector
       kind: WARPConnector
-      name: warpconnectors.networking.cfargotunnel.com
+      name: warpconnectors.networking.cloudflare-operator.io
       version: v1alpha2
     # Access Control CRDs
     - description: AccessApplication is the Schema for access applications API
       displayName: Access Application
       kind: AccessApplication
-      name: accessapplications.networking.cfargotunnel.com
+      name: accessapplications.networking.cloudflare-operator.io
       version: v1alpha2
     - description: AccessGroup is the Schema for access groups API
       displayName: Access Group
       kind: AccessGroup
-      name: accessgroups.networking.cfargotunnel.com
+      name: accessgroups.networking.cloudflare-operator.io
       version: v1alpha2
     - description: AccessIdentityProvider is the Schema for identity providers API
       displayName: Access Identity Provider
       kind: AccessIdentityProvider
-      name: accessidentityproviders.networking.cfargotunnel.com
+      name: accessidentityproviders.networking.cloudflare-operator.io
       version: v1alpha2
     - description: AccessServiceToken is the Schema for service tokens API
       displayName: Access Service Token
       kind: AccessServiceToken
-      name: accessservicetokens.networking.cfargotunnel.com
+      name: accessservicetokens.networking.cloudflare-operator.io
       version: v1alpha2
     # Gateway CRDs
     - description: GatewayRule is the Schema for gateway rules API
       displayName: Gateway Rule
       kind: GatewayRule
-      name: gatewayrules.networking.cfargotunnel.com
+      name: gatewayrules.networking.cloudflare-operator.io
       version: v1alpha2
     - description: GatewayList is the Schema for gateway lists API
       displayName: Gateway List
       kind: GatewayList
-      name: gatewaylists.networking.cfargotunnel.com
+      name: gatewaylists.networking.cloudflare-operator.io
       version: v1alpha2
     - description: GatewayConfiguration is the Schema for gateway configuration API
       displayName: Gateway Configuration
       kind: GatewayConfiguration
-      name: gatewayconfigurations.networking.cfargotunnel.com
+      name: gatewayconfigurations.networking.cloudflare-operator.io
       version: v1alpha2
     # Device CRDs
     - description: DeviceSettingsPolicy is the Schema for device settings API
       displayName: Device Settings Policy
       kind: DeviceSettingsPolicy
-      name: devicesettingspolicies.networking.cfargotunnel.com
+      name: devicesettingspolicies.networking.cloudflare-operator.io
       version: v1alpha2
     - description: DevicePostureRule is the Schema for device posture rules API
       displayName: Device Posture Rule
       kind: DevicePostureRule
-      name: deviceposturerules.networking.cfargotunnel.com
+      name: deviceposturerules.networking.cloudflare-operator.io
       version: v1alpha2
     # DNS CRD
     - description: DNSRecord is the Schema for DNS records API
       displayName: DNS Record
       kind: DNSRecord
-      name: dnsrecords.networking.cfargotunnel.com
+      name: dnsrecords.networking.cloudflare-operator.io
       version: v1alpha2
   description: |
     Cloudflare Operator is a Kubernetes operator for declaratively managing Cloudflare Zero Trust resources.

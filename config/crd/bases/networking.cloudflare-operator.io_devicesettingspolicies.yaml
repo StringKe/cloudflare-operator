@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: devicesettingspolicies.networking.cfargotunnel.com
+  name: devicesettingspolicies.networking.cloudflare-operator.io
 spec:
-  group: networking.cfargotunnel.com
+  group: networking.cloudflare-operator.io
   names:
     kind: DeviceSettingsPolicy
     listKind: DeviceSettingsPolicyList
