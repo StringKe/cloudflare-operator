@@ -21,10 +21,12 @@ import (
 	"fmt"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -41,7 +43,8 @@ const (
 // AccessGroupReconciler reconciles an AccessGroup object
 type AccessGroupReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=accessgroups,verbs=get;list;watch;create;update;patch;delete
@@ -92,7 +95,16 @@ func (r *AccessGroupReconciler) handleDeletion(ctx context.Context, accessGroup 
 		if accessGroup.Status.GroupID != "" {
 			logger.Info("Deleting Access Group from Cloudflare", "groupId", accessGroup.Status.GroupID)
 			if err := apiClient.DeleteAccessGroup(accessGroup.Status.GroupID); err != nil {
-				logger.Error(err, "Failed to delete Access Group from Cloudflare")
+				// Check if resource already deleted
+				if !cf.IsNotFoundError(err) {
+					logger.Error(err, "Failed to delete Access Group from Cloudflare")
+					r.Recorder.Event(accessGroup, corev1.EventTypeWarning, "DeleteFailed",
+						fmt.Sprintf("Failed to delete from Cloudflare: %v", err))
+					return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+				}
+				logger.Info("Access Group already deleted from Cloudflare")
+			} else {
+				r.Recorder.Event(accessGroup, corev1.EventTypeNormal, "Deleted", "Deleted from Cloudflare")
 			}
 		}
 
@@ -131,15 +143,29 @@ func (r *AccessGroupReconciler) reconcileAccessGroup(ctx context.Context, access
 	if accessGroup.Status.GroupID == "" {
 		// Create new access group
 		logger.Info("Creating Access Group", "name", params.Name)
+		r.Recorder.Event(accessGroup, corev1.EventTypeNormal, "Creating",
+			fmt.Sprintf("Creating Access Group '%s' in Cloudflare", params.Name))
 		result, err = apiClient.CreateAccessGroup(params)
+		if err != nil {
+			r.Recorder.Event(accessGroup, corev1.EventTypeWarning, "CreateFailed",
+				fmt.Sprintf("Failed to create Access Group: %v", err))
+			return r.updateStatusError(ctx, accessGroup, err)
+		}
+		r.Recorder.Event(accessGroup, corev1.EventTypeNormal, "Created",
+			fmt.Sprintf("Created Access Group with ID '%s'", result.ID))
 	} else {
 		// Update existing access group
 		logger.Info("Updating Access Group", "groupId", accessGroup.Status.GroupID)
+		r.Recorder.Event(accessGroup, corev1.EventTypeNormal, "Updating",
+			fmt.Sprintf("Updating Access Group '%s' in Cloudflare", accessGroup.Status.GroupID))
 		result, err = apiClient.UpdateAccessGroup(accessGroup.Status.GroupID, params)
-	}
-
-	if err != nil {
-		return r.updateStatusError(ctx, accessGroup, err)
+		if err != nil {
+			r.Recorder.Event(accessGroup, corev1.EventTypeWarning, "UpdateFailed",
+				fmt.Sprintf("Failed to update Access Group: %v", err))
+			return r.updateStatusError(ctx, accessGroup, err)
+		}
+		r.Recorder.Event(accessGroup, corev1.EventTypeNormal, "Updated",
+			fmt.Sprintf("Updated Access Group '%s'", result.ID))
 	}
 
 	// Update status
@@ -278,6 +304,7 @@ func (r *AccessGroupReconciler) updateStatusSuccess(ctx context.Context, accessG
 }
 
 func (r *AccessGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.Recorder = mgr.GetEventRecorderFor("accessgroup-controller")
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.AccessGroup{}).
 		Complete(r)

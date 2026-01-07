@@ -23,6 +23,7 @@ import (
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	apitypes "k8s.io/apimachinery/pkg/types"
@@ -116,10 +117,18 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 
 	if r.app.Status.ApplicationID != "" {
 		if err := r.cfAPI.DeleteAccessApplication(r.app.Status.ApplicationID); err != nil {
-			r.Recorder.Event(r.app, corev1.EventTypeWarning, controller.EventReasonDeleteFailed, err.Error())
-			return ctrl.Result{}, err
+			// P0 FIX: Check if resource is already deleted (NotFound error)
+			if cf.IsNotFoundError(err) {
+				r.log.Info("AccessApplication already deleted from Cloudflare", "id", r.app.Status.ApplicationID)
+				r.Recorder.Event(r.app, corev1.EventTypeNormal, "AlreadyDeleted", "AccessApplication was already deleted from Cloudflare")
+			} else {
+				r.log.Error(err, "failed to delete AccessApplication from Cloudflare")
+				r.Recorder.Event(r.app, corev1.EventTypeWarning, controller.EventReasonDeleteFailed, cf.SanitizeErrorMessage(err))
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+			}
+		} else {
+			r.Recorder.Event(r.app, corev1.EventTypeNormal, controller.EventReasonDeleted, "Deleted from Cloudflare")
 		}
-		r.Recorder.Event(r.app, corev1.EventTypeNormal, controller.EventReasonDeleted, "Deleted from Cloudflare")
 	}
 
 	controllerutil.RemoveFinalizer(r.app, AccessApplicationFinalizer)
@@ -201,38 +210,28 @@ func (r *Reconciler) updateApplication(params cf.AccessApplicationParams) error 
 }
 
 func (r *Reconciler) updateStatus(result *cf.AccessApplicationResult) error {
-	r.app.Status.ApplicationID = result.ID
-	r.app.Status.AUD = result.AUD
-	r.app.Status.AccountID = r.cfAPI.ValidAccountId
-	r.app.Status.Domain = result.Domain
-	r.app.Status.State = "active"
-	r.app.Status.ObservedGeneration = r.app.Generation
+	// Use retry logic for status updates to handle conflicts
+	return controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.app, func() {
+		r.app.Status.ApplicationID = result.ID
+		r.app.Status.AUD = result.AUD
+		r.app.Status.AccountID = r.cfAPI.ValidAccountId
+		r.app.Status.Domain = result.Domain
+		r.app.Status.State = "active"
+		r.app.Status.ObservedGeneration = r.app.Generation
 
-	r.setCondition(metav1.ConditionTrue, controller.EventReasonReconciled, "Reconciled successfully")
-	return r.Status().Update(r.ctx, r.app)
+		r.setCondition(metav1.ConditionTrue, controller.EventReasonReconciled, "Reconciled successfully")
+	})
 }
 
 func (r *Reconciler) setCondition(status metav1.ConditionStatus, reason, message string) {
-	condition := metav1.Condition{
+	meta.SetStatusCondition(&r.app.Status.Conditions, metav1.Condition{
 		Type:               "Ready",
 		Status:             status,
 		ObservedGeneration: r.app.Generation,
 		LastTransitionTime: metav1.Now(),
 		Reason:             reason,
 		Message:            message,
-	}
-
-	found := false
-	for i, c := range r.app.Status.Conditions {
-		if c.Type == condition.Type {
-			r.app.Status.Conditions[i] = condition
-			found = true
-			break
-		}
-	}
-	if !found {
-		r.app.Status.Conditions = append(r.app.Status.Conditions, condition)
-	}
+	})
 }
 
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {

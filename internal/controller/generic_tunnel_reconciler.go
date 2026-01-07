@@ -14,6 +14,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	apitypes "k8s.io/apimachinery/pkg/types"
@@ -166,20 +167,52 @@ func setupNewTunnel(r GenericTunnelReconciler) error {
 			}
 		} else {
 			// Create new tunnel
-			_, creds, err := r.GetCfAPI().CreateTunnel()
-			if err != nil {
-				r.GetLog().Error(err, "unable to create Tunnel")
-				r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning, "FailedCreate", "Unable to create Tunnel on Cloudflare")
-				return err
+			_, creds, createErr := r.GetCfAPI().CreateTunnel()
+			if createErr != nil {
+				// P0 FIX: Handle "tunnel already exists" error gracefully
+				// This can happen when concurrent reconciles race
+				if cf.IsConflictError(createErr) {
+					r.GetLog().Info("Tunnel already exists (concurrent creation detected), attempting to adopt")
+					// Re-fetch tunnel ID
+					retryTunnelID, retryErr := r.GetCfAPI().GetTunnelId()
+					if retryErr == nil && retryTunnelID != "" {
+						r.GetLog().Info("Successfully found tunnel after conflict, adopting",
+							"tunnelId", retryTunnelID)
+						r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal,
+							"Adopted", "Adopted tunnel after concurrent creation conflict")
+						if !secretExists {
+							// Without credentials, we cannot adopt - this is a fatal error
+							err := fmt.Errorf("tunnel %s was created but credentials are missing", retryTunnelID)
+							r.GetLog().Error(err, "Cannot recover tunnel without credentials")
+							r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning,
+								"AdoptionFailed", "Tunnel exists but credentials are lost - manual intervention required")
+							return err
+						}
+						// Adoption successful, continue to status update
+					} else {
+						r.GetLog().Error(createErr, "Tunnel creation conflict but unable to find tunnel")
+						r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning,
+							"FailedCreate", "Tunnel creation conflict - unable to resolve")
+						return createErr
+					}
+				} else {
+					r.GetLog().Error(createErr, "unable to create Tunnel")
+					r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning,
+						"FailedCreate", "Unable to create Tunnel on Cloudflare")
+					return createErr
+				}
+			} else {
+				r.GetLog().Info("Tunnel created on Cloudflare")
+				r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal,
+					"Created", "Tunnel created successfully on Cloudflare")
+				r.SetTunnelCreds(creds)
 			}
-			r.GetLog().Info("Tunnel created on Cloudflare")
-			r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal, "Created", "Tunnel created successfully on Cloudflare")
-			r.SetTunnelCreds(creds)
 		}
 
 		// CRITICAL: Update status immediately after tunnel creation/adoption
 		// This prevents duplicate creation attempts on subsequent reconciles
-		if err := updateTunnelStatusMinimal(r); err != nil {
+		// P0 FIX: Retry status update with conflict handling
+		if err := updateTunnelStatusMinimalWithRetry(r); err != nil {
 			r.GetLog().Error(err, "Failed to update tunnel status after creation")
 			// Don't return error - the tunnel was created, we should continue
 			// The status will be updated on the next reconcile
@@ -212,6 +245,18 @@ func updateTunnelStatusMinimal(r GenericTunnelReconciler) error {
 	status.AccountId = r.GetCfAPI().ValidAccountId
 	status.TunnelId = r.GetCfAPI().ValidTunnelId
 	status.TunnelName = r.GetCfAPI().ValidTunnelName
+	status.State = "creating"
+	status.ObservedGeneration = r.GetTunnel().GetObject().GetGeneration()
+
+	// Set condition for creating state
+	meta.SetStatusCondition(&status.Conditions, metav1.Condition{
+		Type:               "Ready",
+		Status:             metav1.ConditionFalse,
+		Reason:             "Creating",
+		Message:            "Tunnel is being created",
+		ObservedGeneration: r.GetTunnel().GetObject().GetGeneration(),
+	})
+
 	r.GetTunnel().SetStatus(status)
 
 	if err := r.GetClient().Status().Update(r.GetContext(), r.GetTunnel().GetObject()); err != nil {
@@ -223,6 +268,81 @@ func updateTunnelStatusMinimal(r GenericTunnelReconciler) error {
 	return nil
 }
 
+// updateTunnelStatusMinimalWithRetry updates tunnel status with retry on conflict
+// P0 FIX: This ensures status is updated even when concurrent reconciles race
+func updateTunnelStatusMinimalWithRetry(r GenericTunnelReconciler) error {
+	const maxRetries = 3
+	var lastErr error
+
+	for i := 0; i < maxRetries; i++ {
+		if i > 0 {
+			// Re-fetch the tunnel to get latest ResourceVersion
+			if err := r.GetClient().Get(r.GetContext(), TunnelNamespacedName(r), r.GetTunnel().GetObject()); err != nil {
+				r.GetLog().Error(err, "Failed to re-fetch tunnel for status update retry")
+				return err
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		// Apply status updates
+		status := r.GetTunnel().GetStatus()
+		status.AccountId = r.GetCfAPI().ValidAccountId
+		status.TunnelId = r.GetCfAPI().ValidTunnelId
+		status.TunnelName = r.GetCfAPI().ValidTunnelName
+		status.State = "creating"
+		status.ObservedGeneration = r.GetTunnel().GetObject().GetGeneration()
+
+		meta.SetStatusCondition(&status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			Reason:             "Creating",
+			Message:            "Tunnel is being created",
+			ObservedGeneration: r.GetTunnel().GetObject().GetGeneration(),
+		})
+
+		r.GetTunnel().SetStatus(status)
+
+		if err := r.GetClient().Status().Update(r.GetContext(), r.GetTunnel().GetObject()); err != nil {
+			if apierrors.IsConflict(err) {
+				r.GetLog().Info("Tunnel status update conflict, retrying", "attempt", i+1)
+				lastErr = err
+				continue
+			}
+			return err
+		}
+
+		r.GetLog().Info("Tunnel status updated with tunnel ID", "tunnelId", status.TunnelId)
+		return nil
+	}
+
+	return fmt.Errorf("failed to update tunnel status after %d retries: %w", maxRetries, lastErr)
+}
+
+// setTunnelState sets the tunnel state and condition (best effort, logs errors but doesn't return them)
+func setTunnelState(r GenericTunnelReconciler, state string, conditionStatus metav1.ConditionStatus, reason, message string) {
+	status := r.GetTunnel().GetStatus()
+	status.State = state
+	status.ObservedGeneration = r.GetTunnel().GetObject().GetGeneration()
+
+	meta.SetStatusCondition(&status.Conditions, metav1.Condition{
+		Type:               "Ready",
+		Status:             conditionStatus,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: r.GetTunnel().GetObject().GetGeneration(),
+	})
+
+	r.GetTunnel().SetStatus(status)
+	if err := r.GetClient().Status().Update(r.GetContext(), r.GetTunnel().GetObject()); err != nil {
+		r.GetLog().Error(err, "Failed to update tunnel state", "state", state)
+	}
+}
+
+// setTunnelError sets error state on the tunnel
+func setTunnelError(r GenericTunnelReconciler, reason, message string) {
+	setTunnelState(r, "error", metav1.ConditionFalse, reason, message)
+}
+
 func cleanupTunnel(r GenericTunnelReconciler) (ctrl.Result, bool, error) {
 	if controllerutil.ContainsFinalizer(r.GetTunnel().GetObject(), tunnelFinalizer) {
 		// Run finalization logic. If the finalization logic fails,
@@ -230,6 +350,9 @@ func cleanupTunnel(r GenericTunnelReconciler) (ctrl.Result, bool, error) {
 
 		r.GetLog().Info("starting deletion cycle")
 		r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal, "Deleting", "Starting Tunnel Deletion")
+
+		// Set deleting state (best effort, don't block on failure)
+		setTunnelState(r, "deleting", metav1.ConditionFalse, "Deleting", "Tunnel is being deleted")
 		cfDeployment := &appsv1.Deployment{}
 		var bypass bool
 		if err := r.GetClient().Get(r.GetContext(), TunnelNamespacedName(r), cfDeployment); err != nil {
@@ -251,12 +374,24 @@ func cleanupTunnel(r GenericTunnelReconciler) (ctrl.Result, bool, error) {
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, false, nil
 		}
 		if bypass || *cfDeployment.Spec.Replicas == 0 {
+			// P0 FIX: Improve deletion idempotency
+			// Handle case where tunnel is already deleted from Cloudflare
 			if err := r.GetCfAPI().DeleteTunnel(); err != nil {
-				r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning, "FailedDeleting", "Tunnel deletion failed")
-				return ctrl.Result{}, false, err
+				// P0 FIX: Check if tunnel is already deleted (NotFound error)
+				if cf.IsNotFoundError(err) {
+					r.GetLog().Info("Tunnel already deleted from Cloudflare, continuing with cleanup",
+						"tunnelID", r.GetTunnel().GetStatus().TunnelId)
+					r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal,
+						"AlreadyDeleted", "Tunnel was already deleted from Cloudflare")
+				} else {
+					r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning,
+						"FailedDeleting", fmt.Sprintf("Tunnel deletion failed: %v", cf.SanitizeErrorMessage(err)))
+					return ctrl.Result{RequeueAfter: 30 * time.Second}, false, err
+				}
+			} else {
+				r.GetLog().Info("Tunnel deleted", "tunnelID", r.GetTunnel().GetStatus().TunnelId)
+				r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal, "Deleted", "Tunnel deletion successful")
 			}
-			r.GetLog().Info("Tunnel deleted", "tunnelID", r.GetTunnel().GetStatus().TunnelId)
-			r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal, "Deleted", "Tunnel deletion successful")
 
 			// PR #158 fix: Remove Secret finalizer BEFORE tunnel finalizer
 			// This ensures the Secret can be cleaned up properly
@@ -267,9 +402,15 @@ func cleanupTunnel(r GenericTunnelReconciler) (ctrl.Result, bool, error) {
 
 			// Remove tunnelFinalizer. Once all finalizers have been
 			// removed, the object will be deleted.
+			// P0 FIX: Use retry for finalizer removal
 			controllerutil.RemoveFinalizer(r.GetTunnel().GetObject(), tunnelFinalizer)
 			err := r.GetClient().Update(r.GetContext(), r.GetTunnel().GetObject())
 			if err != nil {
+				if apierrors.IsConflict(err) {
+					// Conflict - requeue to retry
+					r.GetLog().Info("Finalizer removal conflict, will retry")
+					return ctrl.Result{RequeueAfter: time.Second}, false, nil
+				}
 				r.GetLog().Error(err, "unable to continue with tunnel deletion")
 				r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning, "FailedFinalizerUnset", "Unable to remove Tunnel Finalizer")
 				return ctrl.Result{}, false, err
@@ -380,6 +521,18 @@ func updateTunnelStatus(r GenericTunnelReconciler) error {
 	status.TunnelId = r.GetCfAPI().ValidTunnelId
 	status.TunnelName = r.GetCfAPI().ValidTunnelName
 	status.ZoneId = r.GetCfAPI().ValidZoneId
+	status.State = "active"
+	status.ObservedGeneration = r.GetTunnel().GetObject().GetGeneration()
+
+	// Set condition for ready state
+	meta.SetStatusCondition(&status.Conditions, metav1.Condition{
+		Type:               "Ready",
+		Status:             metav1.ConditionTrue,
+		Reason:             "Reconciled",
+		Message:            "Tunnel is active and ready",
+		ObservedGeneration: r.GetTunnel().GetObject().GetGeneration(),
+	})
+
 	r.GetTunnel().SetStatus(status)
 	if err := r.GetClient().Status().Update(r.GetContext(), r.GetTunnel().GetObject()); err != nil {
 		r.GetLog().Error(err, "Failed to update Tunnel status",

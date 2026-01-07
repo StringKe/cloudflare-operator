@@ -24,6 +24,7 @@ import (
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -275,17 +276,20 @@ func (r *Reconciler) getAutoPopulatedEntries() ([]cf.SplitTunnelEntry, error) {
 
 // updateStatus updates the DeviceSettingsPolicy status.
 func (r *Reconciler) updateStatus(excludeCount, includeCount, fallbackCount, autoPopulatedCount int) error {
-	r.policy.Status.AccountID = r.cfAPI.ValidAccountId
-	r.policy.Status.SplitTunnelExcludeCount = excludeCount
-	r.policy.Status.SplitTunnelIncludeCount = includeCount
-	r.policy.Status.FallbackDomainsCount = fallbackCount
-	r.policy.Status.AutoPopulatedRoutesCount = autoPopulatedCount
-	r.policy.Status.State = "active"
-	r.policy.Status.ObservedGeneration = r.policy.Generation
+	// Use retry logic for status updates to handle conflicts
+	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.policy, func() {
+		r.policy.Status.AccountID = r.cfAPI.ValidAccountId
+		r.policy.Status.SplitTunnelExcludeCount = excludeCount
+		r.policy.Status.SplitTunnelIncludeCount = includeCount
+		r.policy.Status.FallbackDomainsCount = fallbackCount
+		r.policy.Status.AutoPopulatedRoutesCount = autoPopulatedCount
+		r.policy.Status.State = "active"
+		r.policy.Status.ObservedGeneration = r.policy.Generation
 
-	r.setCondition(metav1.ConditionTrue, controller.EventReasonReconciled, "DeviceSettingsPolicy reconciled successfully")
+		r.setCondition(metav1.ConditionTrue, controller.EventReasonReconciled, "DeviceSettingsPolicy reconciled successfully")
+	})
 
-	if err := r.Status().Update(r.ctx, r.policy); err != nil {
+	if err != nil {
 		r.log.Error(err, "failed to update DeviceSettingsPolicy status")
 		return err
 	}
@@ -298,29 +302,16 @@ func (r *Reconciler) updateStatus(excludeCount, includeCount, fallbackCount, aut
 	return nil
 }
 
-// setCondition sets a condition on the DeviceSettingsPolicy status.
+// setCondition sets a condition on the DeviceSettingsPolicy status using meta.SetStatusCondition.
 func (r *Reconciler) setCondition(status metav1.ConditionStatus, reason, message string) {
-	condition := metav1.Condition{
+	meta.SetStatusCondition(&r.policy.Status.Conditions, metav1.Condition{
 		Type:               "Ready",
 		Status:             status,
 		ObservedGeneration: r.policy.Generation,
 		LastTransitionTime: metav1.Now(),
 		Reason:             reason,
 		Message:            message,
-	}
-
-	// Update or append condition
-	found := false
-	for i, c := range r.policy.Status.Conditions {
-		if c.Type == condition.Type {
-			r.policy.Status.Conditions[i] = condition
-			found = true
-			break
-		}
-	}
-	if !found {
-		r.policy.Status.Conditions = append(r.policy.Status.Conditions, condition)
-	}
+	})
 }
 
 // SetupWithManager sets up the controller with the Manager.

@@ -585,10 +585,35 @@ func (r *TunnelBindingReconciler) setConfigMapConfiguration(config *cf.Configura
 		r.log.Error(err, "unable to marshal config to ConfigMap", "key", configmapKey)
 		return err
 	}
-	r.configmap.Data[configmapKey] = configStr
-	if err := r.Update(r.ctx, r.configmap); err != nil {
-		r.log.Error(err, "unable to marshal config to ConfigMap", "key", configmapKey)
-		return err
+
+	// Update ConfigMap with retry on conflict (optimistic locking)
+	const maxRetries = 5
+	var lastErr error
+	for i := 0; i < maxRetries; i++ {
+		// Re-fetch ConfigMap to get latest ResourceVersion (except on first attempt)
+		if i > 0 {
+			if err := r.Get(r.ctx, apitypes.NamespacedName{Name: r.configmap.Name, Namespace: r.configmap.Namespace}, r.configmap); err != nil {
+				r.log.Error(err, "unable to re-fetch ConfigMap for retry")
+				return err
+			}
+		}
+
+		r.configmap.Data[configmapKey] = configStr
+		if err := r.Update(r.ctx, r.configmap); err != nil {
+			if apierrors.IsConflict(err) {
+				r.log.Info("ConfigMap update conflict, retrying", "attempt", i+1)
+				lastErr = err
+				continue
+			}
+			r.log.Error(err, "unable to update ConfigMap", "key", configmapKey)
+			return err
+		}
+		lastErr = nil
+		break
+	}
+	if lastErr != nil {
+		r.log.Error(lastErr, "unable to update ConfigMap after retries", "maxRetries", maxRetries)
+		return lastErr
 	}
 
 	// Set checksum as annotation on Deployment, causing a restart of the Pods to take config
@@ -599,19 +624,44 @@ func (r *TunnelBindingReconciler) setConfigMapConfiguration(config *cf.Configura
 		return err
 	}
 	hash := md5.Sum([]byte(configStr))
-	// Restart pods
-	r.Recorder.Event(r.binding, corev1.EventTypeNormal, "ApplyingConfig", "Applying ConfigMap to Deployment")
-	r.Recorder.Event(cfDeployment, corev1.EventTypeNormal, "ApplyingConfig", "Applying ConfigMap to Deployment")
-	if cfDeployment.Spec.Template.Annotations == nil {
-		cfDeployment.Spec.Template.Annotations = map[string]string{}
+
+	// Update Deployment with retry on conflict
+	for i := 0; i < maxRetries; i++ {
+		// Re-fetch Deployment to get latest ResourceVersion (except on first attempt)
+		if i > 0 {
+			if err := r.Get(r.ctx, apitypes.NamespacedName{Name: r.configmap.Name, Namespace: r.configmap.Namespace}, cfDeployment); err != nil {
+				r.log.Error(err, "unable to re-fetch Deployment for retry")
+				return err
+			}
+		}
+
+		// Restart pods
+		r.Recorder.Event(r.binding, corev1.EventTypeNormal, "ApplyingConfig", "Applying ConfigMap to Deployment")
+		r.Recorder.Event(cfDeployment, corev1.EventTypeNormal, "ApplyingConfig", "Applying ConfigMap to Deployment")
+		if cfDeployment.Spec.Template.Annotations == nil {
+			cfDeployment.Spec.Template.Annotations = map[string]string{}
+		}
+		cfDeployment.Spec.Template.Annotations[tunnelConfigChecksum] = hex.EncodeToString(hash[:])
+		if err := r.Update(r.ctx, cfDeployment); err != nil {
+			if apierrors.IsConflict(err) {
+				r.log.Info("Deployment update conflict, retrying", "attempt", i+1)
+				lastErr = err
+				continue
+			}
+			r.log.Error(err, "Failed to update Deployment for restart")
+			r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedApplyingConfig", "Failed to apply ConfigMap to Deployment")
+			r.Recorder.Event(cfDeployment, corev1.EventTypeWarning, "FailedApplyingConfig", "Failed to apply ConfigMap to Deployment")
+			return err
+		}
+		lastErr = nil
+		break
 	}
-	cfDeployment.Spec.Template.Annotations[tunnelConfigChecksum] = hex.EncodeToString(hash[:])
-	if err := r.Update(r.ctx, cfDeployment); err != nil {
-		r.log.Error(err, "Failed to update Deployment for restart")
-		r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedApplyingConfig", "Failed to apply ConfigMap to Deployment")
-		r.Recorder.Event(cfDeployment, corev1.EventTypeWarning, "FailedApplyingConfig", "Failed to apply ConfigMap to Deployment")
-		return err
+	if lastErr != nil {
+		r.log.Error(lastErr, "unable to update Deployment after retries", "maxRetries", maxRetries)
+		r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedApplyingConfig", "Failed to apply ConfigMap to Deployment after retries")
+		return lastErr
 	}
+
 	r.log.Info("Restarted deployment")
 	r.Recorder.Event(r.binding, corev1.EventTypeNormal, "AppliedConfig", "ConfigMap applied to Deployment")
 	r.Recorder.Event(cfDeployment, corev1.EventTypeNormal, "AppliedConfig", "ConfigMap applied to Deployment")

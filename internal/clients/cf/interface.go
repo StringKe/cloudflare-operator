@@ -71,14 +71,17 @@ type CloudflareClient interface {
 	GetAccessGroup(groupID string) (*AccessGroupResult, error)
 	UpdateAccessGroup(groupID string, params AccessGroupParams) (*AccessGroupResult, error)
 	DeleteAccessGroup(groupID string) error
+	ListAccessGroupsByName(name string) (*AccessGroupResult, error)
 
 	// Access Identity Provider operations
 	CreateAccessIdentityProvider(params AccessIdentityProviderParams) (*AccessIdentityProviderResult, error)
 	GetAccessIdentityProvider(idpID string) (*AccessIdentityProviderResult, error)
 	UpdateAccessIdentityProvider(idpID string, params AccessIdentityProviderParams) (*AccessIdentityProviderResult, error)
 	DeleteAccessIdentityProvider(idpID string) error
+	ListAccessIdentityProvidersByName(name string) (*AccessIdentityProviderResult, error)
 
 	// Access Service Token operations
+	GetAccessServiceTokenByName(name string) (*AccessServiceTokenResult, error)
 	CreateAccessServiceToken(name string, duration string) (*AccessServiceTokenResult, error)
 	UpdateAccessServiceToken(tokenID string, name string, duration string) (*AccessServiceTokenResult, error)
 	RefreshAccessServiceToken(tokenID string) (*AccessServiceTokenResult, error)
@@ -89,6 +92,7 @@ type CloudflareClient interface {
 	GetDevicePostureRule(ruleID string) (*DevicePostureRuleResult, error)
 	UpdateDevicePostureRule(ruleID string, params DevicePostureRuleParams) (*DevicePostureRuleResult, error)
 	DeleteDevicePostureRule(ruleID string) error
+	ListDevicePostureRulesByName(name string) (*DevicePostureRuleResult, error)
 
 	// Gateway Rule operations
 	CreateGatewayRule(params GatewayRuleParams) (*GatewayRuleResult, error)

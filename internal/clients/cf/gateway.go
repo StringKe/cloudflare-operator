@@ -18,7 +18,6 @@ package cf
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/cloudflare/cloudflare-go"
 )
@@ -312,6 +311,7 @@ func (c *API) DeleteGatewayList(listID string) error {
 }
 
 // ListGatewayRulesByName finds a Gateway Rule by name.
+// Returns nil if no rule with the given name is found.
 func (c *API) ListGatewayRulesByName(name string) (*GatewayRuleResult, error) {
 	if _, err := c.GetAccountId(); err != nil {
 		c.Log.Error(err, "error getting account ID")
@@ -339,10 +339,11 @@ func (c *API) ListGatewayRulesByName(name string) (*GatewayRuleResult, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("gateway rule not found: %s", name)
+	return nil, nil // Not found, return nil without error
 }
 
 // ListGatewayListsByName finds a Gateway List by name.
+// Returns nil if no list with the given name is found.
 func (c *API) ListGatewayListsByName(name string) (*GatewayListResult, error) {
 	if _, err := c.GetAccountId(); err != nil {
 		c.Log.Error(err, "error getting account ID")
@@ -370,5 +371,5 @@ func (c *API) ListGatewayListsByName(name string) (*GatewayListResult, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("gateway list not found: %s", name)
+	return nil, nil // Not found, return nil without error
 }

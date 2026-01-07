@@ -24,6 +24,7 @@ import (
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	apitypes "k8s.io/apimachinery/pkg/types"
@@ -135,20 +136,52 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 	r.log.Info("Deleting PrivateService")
 	r.Recorder.Event(r.privateService, corev1.EventTypeNormal, "Deleting", "Starting PrivateService deletion")
 
-	// Delete the tunnel route from Cloudflare if it exists
-	if r.privateService.Status.Network != "" {
+	// Try to get network from status or compute from Service to prevent orphaned resources
+	network := r.privateService.Status.Network
+	if network == "" {
+		// Status is empty - try to compute network from Service
+		r.log.Info("Status.Network is empty, trying to compute from Service")
+		svc := &corev1.Service{}
+		if err := r.Get(r.ctx, apitypes.NamespacedName{
+			Name:      r.privateService.Spec.ServiceRef.Name,
+			Namespace: r.privateService.Namespace,
+		}, svc); err == nil && svc.Spec.ClusterIP != "" && svc.Spec.ClusterIP != "None" {
+			network = fmt.Sprintf("%s/32", svc.Spec.ClusterIP)
+			r.log.Info("Computed network from Service ClusterIP", "network", network)
+		} else {
+			r.log.Info("Could not compute network from Service, assuming route was never created or already deleted")
+		}
+	}
+
+	// Delete from Cloudflare if we have a network
+	if network != "" {
+		// Determine virtual network ID - prefer status, fall back to resolving from spec
 		virtualNetworkID := r.privateService.Status.VirtualNetworkID
+		if virtualNetworkID == "" && r.privateService.Spec.VirtualNetworkRef != nil {
+			// Try to resolve from spec reference
+			vnet := &networkingv1alpha2.VirtualNetwork{}
+			if err := r.Get(r.ctx, apitypes.NamespacedName{Name: r.privateService.Spec.VirtualNetworkRef.Name}, vnet); err == nil {
+				virtualNetworkID = vnet.Status.VirtualNetworkId
+			}
+		}
 		if virtualNetworkID == "" {
 			virtualNetworkID = "default"
 		}
 
-		if err := r.cfAPI.DeleteTunnelRoute(r.privateService.Status.Network, virtualNetworkID); err != nil {
-			r.log.Error(err, "failed to delete tunnel route from Cloudflare")
-			r.Recorder.Event(r.privateService, corev1.EventTypeWarning, controller.EventReasonDeleteFailed, err.Error())
-			return ctrl.Result{}, err
+		if err := r.cfAPI.DeleteTunnelRoute(network, virtualNetworkID); err != nil {
+			// P0 FIX: Check if route is already deleted (NotFound error)
+			if cf.IsNotFoundError(err) {
+				r.log.Info("Tunnel route already deleted from Cloudflare", "network", network)
+				r.Recorder.Event(r.privateService, corev1.EventTypeNormal, "AlreadyDeleted", "Tunnel route was already deleted from Cloudflare")
+			} else {
+				r.log.Error(err, "failed to delete tunnel route from Cloudflare")
+				r.Recorder.Event(r.privateService, corev1.EventTypeWarning, controller.EventReasonDeleteFailed, cf.SanitizeErrorMessage(err))
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+			}
+		} else {
+			r.log.Info("Tunnel route deleted from Cloudflare", "network", network)
+			r.Recorder.Event(r.privateService, corev1.EventTypeNormal, controller.EventReasonDeleted, "Deleted from Cloudflare")
 		}
-		r.log.Info("Tunnel route deleted from Cloudflare", "network", r.privateService.Status.Network)
-		r.Recorder.Event(r.privateService, corev1.EventTypeNormal, controller.EventReasonDeleted, "Deleted from Cloudflare")
 	}
 
 	// Remove finalizer
@@ -217,8 +250,20 @@ func (r *Reconciler) reconcilePrivateService() error {
 	// Try to find existing route
 	existing, err := r.cfAPI.GetTunnelRoute(network, virtualNetworkID)
 	if err == nil && existing != nil {
+		// Check if we can adopt this resource (no conflict with another K8s resource)
+		mgmtInfo := controller.NewManagementInfo(r.privateService, "PrivateService")
+		if conflict := controller.GetConflictingManager(existing.Comment, mgmtInfo); conflict != nil {
+			err := fmt.Errorf("tunnel route %s is already managed by %s/%s/%s", existing.Network, conflict.Kind, conflict.Namespace, conflict.Name)
+			r.log.Error(err, "adoption conflict detected")
+			r.Recorder.Event(r.privateService, corev1.EventTypeWarning, controller.EventReasonAdoptionConflict, err.Error())
+			r.setCondition(metav1.ConditionFalse, controller.EventReasonAdoptionConflict, err.Error())
+			return err
+		}
+		// Found existing - adopt it
 		r.log.Info("Found existing tunnel route, adopting", "network", existing.Network)
-		return r.updateStatus(network, existing.TunnelID, tunnelName, existing.VirtualNetworkID, svc.Spec.ClusterIP)
+		r.Recorder.Event(r.privateService, corev1.EventTypeNormal, controller.EventReasonAdopted, fmt.Sprintf("Adopted existing tunnel route: %s", existing.Network))
+		// Update with management marker
+		return r.createPrivateService(network, tunnelID, tunnelName, virtualNetworkID, svc.Spec.ClusterIP)
 	}
 
 	// Create new route
@@ -278,10 +323,13 @@ func (r *Reconciler) createPrivateService(network, tunnelID, tunnelName, virtual
 	r.log.Info("Creating tunnel route for PrivateService", "network", network, "tunnelId", tunnelID)
 	r.Recorder.Event(r.privateService, corev1.EventTypeNormal, "Creating", fmt.Sprintf("Creating tunnel route: %s", network))
 
-	comment := r.privateService.Spec.Comment
-	if comment == "" {
-		comment = fmt.Sprintf("PrivateService %s/%s", r.privateService.Namespace, r.privateService.Name)
+	// Build comment with management marker to prevent adoption conflicts
+	userComment := r.privateService.Spec.Comment
+	if userComment == "" {
+		userComment = fmt.Sprintf("PrivateService %s/%s", r.privateService.Namespace, r.privateService.Name)
 	}
+	mgmtInfo := controller.NewManagementInfo(r.privateService, "PrivateService")
+	comment := controller.BuildManagedComment(mgmtInfo, userComment)
 
 	result, err := r.cfAPI.CreateTunnelRoute(cf.TunnelRouteParams{
 		Network:          network,
@@ -320,18 +368,21 @@ func (r *Reconciler) updatePrivateService(network, tunnelID, tunnelName, virtual
 
 // updateStatus updates the PrivateService status.
 func (r *Reconciler) updateStatus(network, tunnelID, tunnelName, virtualNetworkID, serviceIP string) error {
-	r.privateService.Status.Network = network
-	r.privateService.Status.ServiceIP = serviceIP
-	r.privateService.Status.TunnelID = tunnelID
-	r.privateService.Status.TunnelName = tunnelName
-	r.privateService.Status.VirtualNetworkID = virtualNetworkID
-	r.privateService.Status.AccountID = r.cfAPI.ValidAccountId
-	r.privateService.Status.State = "active"
-	r.privateService.Status.ObservedGeneration = r.privateService.Generation
+	// Use retry logic for status updates to handle conflicts
+	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.privateService, func() {
+		r.privateService.Status.Network = network
+		r.privateService.Status.ServiceIP = serviceIP
+		r.privateService.Status.TunnelID = tunnelID
+		r.privateService.Status.TunnelName = tunnelName
+		r.privateService.Status.VirtualNetworkID = virtualNetworkID
+		r.privateService.Status.AccountID = r.cfAPI.ValidAccountId
+		r.privateService.Status.State = "active"
+		r.privateService.Status.ObservedGeneration = r.privateService.Generation
 
-	r.setCondition(metav1.ConditionTrue, controller.EventReasonReconciled, "PrivateService reconciled successfully")
+		r.setCondition(metav1.ConditionTrue, controller.EventReasonReconciled, "PrivateService reconciled successfully")
+	})
 
-	if err := r.Status().Update(r.ctx, r.privateService); err != nil {
+	if err != nil {
 		r.log.Error(err, "failed to update PrivateService status")
 		return err
 	}
@@ -340,29 +391,16 @@ func (r *Reconciler) updateStatus(network, tunnelID, tunnelName, virtualNetworkI
 	return nil
 }
 
-// setCondition sets a condition on the PrivateService status.
+// setCondition sets a condition on the PrivateService status using meta.SetStatusCondition.
 func (r *Reconciler) setCondition(status metav1.ConditionStatus, reason, message string) {
-	condition := metav1.Condition{
+	meta.SetStatusCondition(&r.privateService.Status.Conditions, metav1.Condition{
 		Type:               "Ready",
 		Status:             status,
 		ObservedGeneration: r.privateService.Generation,
 		LastTransitionTime: metav1.Now(),
 		Reason:             reason,
 		Message:            message,
-	}
-
-	// Update or append condition
-	found := false
-	for i, c := range r.privateService.Status.Conditions {
-		if c.Type == condition.Type {
-			r.privateService.Status.Conditions[i] = condition
-			found = true
-			break
-		}
-	}
-	if !found {
-		r.privateService.Status.Conditions = append(r.privateService.Status.Conditions, condition)
-	}
+	})
 }
 
 // SetupWithManager sets up the controller with the Manager.

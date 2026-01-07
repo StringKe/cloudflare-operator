@@ -21,10 +21,12 @@ import (
 	"fmt"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -41,7 +43,8 @@ const (
 // DevicePostureRuleReconciler reconciles a DevicePostureRule object
 type DevicePostureRuleReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=deviceposturerules,verbs=get;list;watch;create;update;patch;delete
@@ -92,7 +95,16 @@ func (r *DevicePostureRuleReconciler) handleDeletion(ctx context.Context, rule *
 		if rule.Status.RuleID != "" {
 			logger.Info("Deleting Device Posture Rule from Cloudflare", "ruleId", rule.Status.RuleID)
 			if err := apiClient.DeleteDevicePostureRule(rule.Status.RuleID); err != nil {
-				logger.Error(err, "Failed to delete Device Posture Rule from Cloudflare")
+				// Check if resource already deleted
+				if !cf.IsNotFoundError(err) {
+					logger.Error(err, "Failed to delete Device Posture Rule from Cloudflare")
+					r.Recorder.Event(rule, corev1.EventTypeWarning, "DeleteFailed",
+						fmt.Sprintf("Failed to delete from Cloudflare: %v", err))
+					return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+				}
+				logger.Info("Device Posture Rule already deleted from Cloudflare")
+			} else {
+				r.Recorder.Event(rule, corev1.EventTypeNormal, "Deleted", "Deleted from Cloudflare")
 			}
 		}
 
@@ -137,15 +149,29 @@ func (r *DevicePostureRuleReconciler) reconcileDevicePostureRule(ctx context.Con
 	if rule.Status.RuleID == "" {
 		// Create new device posture rule
 		logger.Info("Creating Device Posture Rule", "name", params.Name, "type", params.Type)
+		r.Recorder.Event(rule, corev1.EventTypeNormal, "Creating",
+			fmt.Sprintf("Creating Device Posture Rule '%s' in Cloudflare", params.Name))
 		result, err = apiClient.CreateDevicePostureRule(params)
+		if err != nil {
+			r.Recorder.Event(rule, corev1.EventTypeWarning, "CreateFailed",
+				fmt.Sprintf("Failed to create Device Posture Rule: %v", err))
+			return r.updateStatusError(ctx, rule, err)
+		}
+		r.Recorder.Event(rule, corev1.EventTypeNormal, "Created",
+			fmt.Sprintf("Created Device Posture Rule with ID '%s'", result.ID))
 	} else {
 		// Update existing device posture rule
 		logger.Info("Updating Device Posture Rule", "ruleId", rule.Status.RuleID)
+		r.Recorder.Event(rule, corev1.EventTypeNormal, "Updating",
+			fmt.Sprintf("Updating Device Posture Rule '%s' in Cloudflare", rule.Status.RuleID))
 		result, err = apiClient.UpdateDevicePostureRule(rule.Status.RuleID, params)
-	}
-
-	if err != nil {
-		return r.updateStatusError(ctx, rule, err)
+		if err != nil {
+			r.Recorder.Event(rule, corev1.EventTypeWarning, "UpdateFailed",
+				fmt.Sprintf("Failed to update Device Posture Rule: %v", err))
+			return r.updateStatusError(ctx, rule, err)
+		}
+		r.Recorder.Event(rule, corev1.EventTypeNormal, "Updated",
+			fmt.Sprintf("Updated Device Posture Rule '%s'", result.ID))
 	}
 
 	// Update status
@@ -273,6 +299,7 @@ func (r *DevicePostureRuleReconciler) updateStatusSuccess(ctx context.Context, r
 }
 
 func (r *DevicePostureRuleReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.Recorder = mgr.GetEventRecorderFor("deviceposturerule-controller")
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.DevicePostureRule{}).
 		Complete(r)

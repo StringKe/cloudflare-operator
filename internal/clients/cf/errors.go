@@ -1,0 +1,302 @@
+/*
+Copyright 2025 Adyanth H.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package cf
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+)
+
+// Error types for Cloudflare API operations
+var (
+	// ErrResourceNotFound indicates the requested resource was not found
+	ErrResourceNotFound = errors.New("resource not found")
+
+	// ErrResourceConflict indicates the resource is already managed by another K8s object
+	ErrResourceConflict = errors.New("resource already managed by another object")
+
+	// ErrMultipleResourcesFound indicates multiple resources matched when only one was expected
+	ErrMultipleResourcesFound = errors.New("multiple resources found")
+
+	// ErrAPIRateLimited indicates the API rate limit was exceeded
+	ErrAPIRateLimited = errors.New("API rate limit exceeded")
+
+	// ErrTemporaryFailure indicates a temporary failure that should be retried
+	ErrTemporaryFailure = errors.New("temporary failure")
+
+	// ErrInvalidConfiguration indicates invalid configuration
+	ErrInvalidConfiguration = errors.New("invalid configuration")
+
+	// ErrAuthenticationFailed indicates authentication failed
+	ErrAuthenticationFailed = errors.New("authentication failed")
+
+	// ErrPermissionDenied indicates permission was denied
+	ErrPermissionDenied = errors.New("permission denied")
+)
+
+// APIError wraps a Cloudflare API error with additional context
+type APIError struct {
+	Operation string
+	Resource  string
+	Err       error
+}
+
+func (e *APIError) Error() string {
+	if e.Resource != "" {
+		return fmt.Sprintf("%s %s: %v", e.Operation, e.Resource, e.Err)
+	}
+	return fmt.Sprintf("%s: %v", e.Operation, e.Err)
+}
+
+func (e *APIError) Unwrap() error {
+	return e.Err
+}
+
+// NewAPIError creates a new APIError
+func NewAPIError(operation, resource string, err error) *APIError {
+	return &APIError{
+		Operation: operation,
+		Resource:  resource,
+		Err:       err,
+	}
+}
+
+// IsNotFoundError checks if the error indicates a resource was not found
+func IsNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrResourceNotFound) {
+		return true
+	}
+	// Check for common "not found" patterns in error messages
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "not found") ||
+		strings.Contains(errStr, "does not exist") ||
+		strings.Contains(errStr, "no such") ||
+		strings.Contains(errStr, "404")
+}
+
+// IsConflictError checks if the error indicates a resource conflict
+func IsConflictError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrResourceConflict) {
+		return true
+	}
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "already exists") ||
+		strings.Contains(errStr, "conflict") ||
+		strings.Contains(errStr, "duplicate")
+}
+
+// IsRateLimitError checks if the error indicates rate limiting
+func IsRateLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrAPIRateLimited) {
+		return true
+	}
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "rate limit") ||
+		strings.Contains(errStr, "too many requests") ||
+		strings.Contains(errStr, "429")
+}
+
+// IsTemporaryError checks if the error is temporary and should be retried
+func IsTemporaryError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrTemporaryFailure) {
+		return true
+	}
+	if IsRateLimitError(err) {
+		return true
+	}
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "timeout") ||
+		strings.Contains(errStr, "connection refused") ||
+		strings.Contains(errStr, "temporary") ||
+		strings.Contains(errStr, "503") ||
+		strings.Contains(errStr, "502") ||
+		strings.Contains(errStr, "504")
+}
+
+// IsAuthError checks if the error indicates an authentication/authorization failure
+func IsAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrAuthenticationFailed) || errors.Is(err, ErrPermissionDenied) {
+		return true
+	}
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "unauthorized") ||
+		strings.Contains(errStr, "authentication") ||
+		strings.Contains(errStr, "permission denied") ||
+		strings.Contains(errStr, "forbidden") ||
+		strings.Contains(errStr, "401") ||
+		strings.Contains(errStr, "403")
+}
+
+// WrapNotFound wraps an error as a not found error
+func WrapNotFound(resource string, err error) error {
+	if err == nil {
+		return fmt.Errorf("%s: %w", resource, ErrResourceNotFound)
+	}
+	return fmt.Errorf("%s: %w: %v", resource, ErrResourceNotFound, err)
+}
+
+// WrapConflict wraps an error as a conflict error
+func WrapConflict(resource string, err error) error {
+	if err == nil {
+		return fmt.Errorf("%s: %w", resource, ErrResourceConflict)
+	}
+	return fmt.Errorf("%s: %w: %v", resource, ErrResourceConflict, err)
+}
+
+// RetryConfig holds configuration for retry behavior
+type RetryConfig struct {
+	// BaseDelay is the initial delay before retry
+	BaseDelay time.Duration
+	// MaxDelay is the maximum delay between retries
+	MaxDelay time.Duration
+	// MaxRetries is the maximum number of retries (0 = no limit)
+	MaxRetries int
+	// RetryCount tracks the current retry count (for exponential backoff)
+	RetryCount int
+}
+
+// DefaultRetryConfig returns a default retry configuration
+func DefaultRetryConfig() RetryConfig {
+	return RetryConfig{
+		BaseDelay:  10 * time.Second,
+		MaxDelay:   5 * time.Minute,
+		MaxRetries: 10,
+	}
+}
+
+// GetRequeueDelay calculates the appropriate requeue delay based on error type
+// Uses exponential backoff for temporary errors
+func GetRequeueDelay(err error, cfg RetryConfig) time.Duration {
+	if err == nil {
+		return cfg.MaxDelay // Success - use longer interval for periodic reconcile
+	}
+
+	// Auth errors should not be retried aggressively
+	if IsAuthError(err) {
+		return cfg.MaxDelay
+	}
+
+	// Rate limit errors - use longer delay
+	if IsRateLimitError(err) {
+		delay := cfg.BaseDelay * time.Duration(1<<min(cfg.RetryCount, 6)) // max 64x base delay
+		if delay > cfg.MaxDelay {
+			return cfg.MaxDelay
+		}
+		return delay
+	}
+
+	// Temporary errors - use exponential backoff
+	if IsTemporaryError(err) {
+		delay := cfg.BaseDelay * time.Duration(1<<min(cfg.RetryCount, 4)) // max 16x base delay
+		if delay > cfg.MaxDelay {
+			return cfg.MaxDelay
+		}
+		return delay
+	}
+
+	// NotFound errors during deletion should not requeue
+	if IsNotFoundError(err) {
+		return 0
+	}
+
+	// Default - use base delay
+	return cfg.BaseDelay
+}
+
+// ShouldRetry determines if an operation should be retried based on error type and retry count
+func ShouldRetry(err error, retryCount int, maxRetries int) bool {
+	if err == nil {
+		return false
+	}
+	if maxRetries > 0 && retryCount >= maxRetries {
+		return false
+	}
+	// Auth errors should not be retried
+	if IsAuthError(err) {
+		return false
+	}
+	// Temporary errors and rate limits should be retried
+	if IsTemporaryError(err) || IsRateLimitError(err) {
+		return true
+	}
+	return true // Default to retry
+}
+
+// min returns the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// SanitizeErrorMessage removes potentially sensitive information from error messages
+// before storing them in Status conditions
+func SanitizeErrorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+
+	// 截断过长的错误消息
+	const maxLen = 512
+	if len(msg) > maxLen {
+		msg = msg[:maxLen-3] + "..."
+	}
+
+	// 检查并移除可能的敏感信息模式
+	sensitivePatterns := []string{
+		"token", "secret", "password", "credential", "api_key", "apikey",
+		"bearer", "authorization",
+	}
+
+	lowerMsg := strings.ToLower(msg)
+	for _, pattern := range sensitivePatterns {
+		if strings.Contains(lowerMsg, pattern) {
+			// 如果消息包含敏感模式，返回通用错误
+			if IsAuthError(err) {
+				return "authentication failed - check credentials"
+			}
+			if IsRateLimitError(err) {
+				return "API rate limit exceeded"
+			}
+			if IsNotFoundError(err) {
+				return "resource not found"
+			}
+			return "operation failed - check operator logs for details"
+		}
+	}
+
+	return msg
+}

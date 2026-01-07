@@ -32,10 +32,13 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
+	"github.com/StringKe/cloudflare-operator/internal/controller"
 )
 
 const (
@@ -115,7 +118,13 @@ func (r *WARPConnectorReconciler) handleDeletion(ctx context.Context, connector 
 			for _, route := range connector.Spec.Routes {
 				logger.Info("Deleting route", "network", route.Network)
 				if err := apiClient.DeleteTunnelRoute(route.Network, ""); err != nil {
-					logger.Error(err, "Failed to delete route", "network", route.Network)
+					// P0 FIX: Check if route is already deleted (NotFound error)
+					if cf.IsNotFoundError(err) {
+						logger.Info("Route already deleted from Cloudflare", "network", route.Network)
+					} else {
+						logger.Error(err, "Failed to delete route", "network", route.Network)
+						// Continue with other routes even if one fails
+					}
 				}
 			}
 		}
@@ -124,7 +133,13 @@ func (r *WARPConnectorReconciler) handleDeletion(ctx context.Context, connector 
 		if connector.Status.ConnectorID != "" {
 			logger.Info("Deleting WARP Connector from Cloudflare", "connectorId", connector.Status.ConnectorID)
 			if err := apiClient.DeleteWARPConnector(connector.Status.ConnectorID); err != nil {
-				logger.Error(err, "Failed to delete WARP Connector from Cloudflare")
+				// P0 FIX: Check if connector is already deleted (NotFound error)
+				if cf.IsNotFoundError(err) {
+					logger.Info("WARP Connector already deleted from Cloudflare", "connectorId", connector.Status.ConnectorID)
+				} else {
+					logger.Error(err, "Failed to delete WARP Connector from Cloudflare")
+					return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+				}
 			}
 		}
 
@@ -170,14 +185,29 @@ func (r *WARPConnectorReconciler) reconcileWARPConnector(ctx context.Context, co
 		return r.updateStatusError(ctx, connector, err)
 	}
 
+	// Resolve VirtualNetwork reference to get Cloudflare VirtualNetwork ID
+	vnetID := ""
+	if connector.Spec.VirtualNetworkRef != nil {
+		vnet := &networkingv1alpha2.VirtualNetwork{}
+		if err := r.Get(ctx, types.NamespacedName{Name: connector.Spec.VirtualNetworkRef.Name}, vnet); err != nil {
+			if errors.IsNotFound(err) {
+				logger.Error(err, "VirtualNetwork not found", "name", connector.Spec.VirtualNetworkRef.Name)
+				return r.updateStatusError(ctx, connector, fmt.Errorf("VirtualNetwork '%s' not found", connector.Spec.VirtualNetworkRef.Name))
+			}
+			return r.updateStatusError(ctx, connector, err)
+		}
+		if vnet.Status.VirtualNetworkId == "" {
+			logger.Info("VirtualNetwork not yet ready", "name", connector.Spec.VirtualNetworkRef.Name)
+			return r.updateStatusError(ctx, connector, fmt.Errorf("VirtualNetwork '%s' is not ready (no Cloudflare ID)", connector.Spec.VirtualNetworkRef.Name))
+		}
+		vnetID = vnet.Status.VirtualNetworkId
+		logger.Info("Resolved VirtualNetwork", "name", connector.Spec.VirtualNetworkRef.Name, "id", vnetID)
+	}
+
 	// Configure routes
 	routesConfigured := 0
 	for _, route := range connector.Spec.Routes {
 		logger.Info("Configuring route", "network", route.Network)
-		vnetID := ""
-		if connector.Spec.VirtualNetworkRef != nil {
-			vnetID = connector.Spec.VirtualNetworkRef.Name
-		}
 		routeParams := cf.TunnelRouteParams{
 			Network:          route.Network,
 			TunnelID:         tunnelID,
@@ -340,17 +370,20 @@ func (r *WARPConnectorReconciler) buildResources(res *networkingv1alpha2.Resourc
 }
 
 func (r *WARPConnectorReconciler) updateStatusError(ctx context.Context, connector *networkingv1alpha2.WARPConnector, err error) (ctrl.Result, error) {
-	connector.Status.State = "Error"
-	meta.SetStatusCondition(&connector.Status.Conditions, metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionFalse,
-		Reason:             "ReconcileError",
-		Message:            err.Error(),
-		LastTransitionTime: metav1.Now(),
+	// Use retry logic for status updates to handle conflicts
+	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, connector, func() {
+		connector.Status.State = "Error"
+		meta.SetStatusCondition(&connector.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			Reason:             "ReconcileError",
+			Message:            cf.SanitizeErrorMessage(err),
+			LastTransitionTime: metav1.Now(),
+		})
+		connector.Status.ObservedGeneration = connector.Generation
 	})
-	connector.Status.ObservedGeneration = connector.Generation
 
-	if updateErr := r.Status().Update(ctx, connector); updateErr != nil {
+	if updateErr != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
 	}
 
@@ -358,25 +391,60 @@ func (r *WARPConnectorReconciler) updateStatusError(ctx context.Context, connect
 }
 
 func (r *WARPConnectorReconciler) updateStatusSuccess(ctx context.Context, connector *networkingv1alpha2.WARPConnector, connectorID, tunnelID string, readyReplicas int32, routesConfigured int) (ctrl.Result, error) {
-	connector.Status.ConnectorID = connectorID
-	connector.Status.TunnelID = tunnelID
-	connector.Status.ReadyReplicas = readyReplicas
-	connector.Status.RoutesConfigured = routesConfigured
-	connector.Status.State = "Ready"
-	meta.SetStatusCondition(&connector.Status.Conditions, metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionTrue,
-		Reason:             "Reconciled",
-		Message:            "WARP Connector successfully reconciled",
-		LastTransitionTime: metav1.Now(),
+	// Use retry logic for status updates to handle conflicts
+	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, connector, func() {
+		connector.Status.ConnectorID = connectorID
+		connector.Status.TunnelID = tunnelID
+		connector.Status.ReadyReplicas = readyReplicas
+		connector.Status.RoutesConfigured = routesConfigured
+		connector.Status.State = "Ready"
+		meta.SetStatusCondition(&connector.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionTrue,
+			Reason:             "Reconciled",
+			Message:            "WARP Connector successfully reconciled",
+			LastTransitionTime: metav1.Now(),
+		})
+		connector.Status.ObservedGeneration = connector.Generation
 	})
-	connector.Status.ObservedGeneration = connector.Generation
 
-	if err := r.Status().Update(ctx, connector); err != nil {
+	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
 	}
 
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+}
+
+// findWARPConnectorsForVirtualNetwork returns reconcile requests for WARPConnectors
+// that reference the given VirtualNetwork
+func (r *WARPConnectorReconciler) findWARPConnectorsForVirtualNetwork(ctx context.Context, obj client.Object) []reconcile.Request {
+	vnet := obj.(*networkingv1alpha2.VirtualNetwork)
+	logger := log.FromContext(ctx)
+
+	// List all WARPConnectors
+	connectors := &networkingv1alpha2.WARPConnectorList{}
+	if err := r.List(ctx, connectors); err != nil {
+		logger.Error(err, "Failed to list WARPConnectors for VirtualNetwork watch")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, connector := range connectors.Items {
+		if connector.Spec.VirtualNetworkRef != nil && connector.Spec.VirtualNetworkRef.Name == vnet.Name {
+			logger.Info("VirtualNetwork changed, triggering WARPConnector reconcile",
+				"virtualnetwork", vnet.Name,
+				"warpconnector", connector.Name,
+				"namespace", connector.Namespace)
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      connector.Name,
+					Namespace: connector.Namespace,
+				},
+			})
+		}
+	}
+
+	return requests
 }
 
 func (r *WARPConnectorReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -384,5 +452,10 @@ func (r *WARPConnectorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&networkingv1alpha2.WARPConnector{}).
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Secret{}).
+		// Watch VirtualNetwork changes to trigger WARPConnector reconcile
+		Watches(
+			&networkingv1alpha2.VirtualNetwork{},
+			handler.EnqueueRequestsFromMapFunc(r.findWARPConnectorsForVirtualNetwork),
+		).
 		Complete(r)
 }

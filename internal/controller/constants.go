@@ -96,14 +96,27 @@ const (
 	EventReasonReconciled       = "Reconciled"
 	EventReasonFinalizerSet     = "FinalizerSet"
 	EventReasonFinalizerRemoved = "FinalizerRemoved"
+	EventReasonAdopted          = "Adopted"
 
 	// Failure events
-	EventReasonCreateFailed    = "CreateFailed"
-	EventReasonUpdateFailed    = "UpdateFailed"
-	EventReasonDeleteFailed    = "DeleteFailed"
-	EventReasonSyncFailed      = "SyncFailed"
-	EventReasonReconcileFailed = "ReconcileFailed"
-	EventReasonAPIError        = "APIError"
-	EventReasonInvalidConfig   = "InvalidConfig"
-	EventReasonDependencyError = "DependencyError"
+	EventReasonCreateFailed     = "CreateFailed"
+	EventReasonUpdateFailed     = "UpdateFailed"
+	EventReasonDeleteFailed     = "DeleteFailed"
+	EventReasonSyncFailed       = "SyncFailed"
+	EventReasonReconcileFailed  = "ReconcileFailed"
+	EventReasonAPIError         = "APIError"
+	EventReasonInvalidConfig    = "InvalidConfig"
+	EventReasonDependencyError  = "DependencyError"
+	EventReasonAdoptionConflict = "AdoptionConflict"
+)
+
+// Management tracking constants
+// These are used to track which K8s resource manages a Cloudflare resource,
+// preventing adoption race conditions where multiple K8s resources try to
+// manage the same Cloudflare resource.
+const (
+	// ManagementMarkerPrefix is the prefix for management markers in comments
+	// Format: [managed:kind/namespace/name] or [managed:kind/name] for cluster-scoped
+	ManagementMarkerPrefix = "[managed:"
+	ManagementMarkerSuffix = "]"
 )

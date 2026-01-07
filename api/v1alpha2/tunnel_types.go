@@ -150,18 +150,39 @@ type TunnelSpec struct {
 
 // TunnelStatus defines the observed state of Tunnel
 type TunnelStatus struct {
-	TunnelId   string `json:"tunnelId"`
+	// TunnelId is the Cloudflare tunnel ID
+	TunnelId string `json:"tunnelId"`
+
+	// TunnelName is the Cloudflare tunnel name
 	TunnelName string `json:"tunnelName"`
-	AccountId  string `json:"accountId"`
-	ZoneId     string `json:"zoneId"`
+
+	// AccountId is the Cloudflare account ID
+	AccountId string `json:"accountId"`
+
+	// ZoneId is the Cloudflare zone ID (optional, for DNS features)
+	ZoneId string `json:"zoneId"`
+
+	// State represents the current state of the tunnel
+	// +kubebuilder:validation:Enum=pending;creating;active;error;deleting
+	State string `json:"state,omitempty"`
+
+	// ObservedGeneration is the generation observed by the controller
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// Conditions represent the latest available observations of the tunnel's state
+	// +optional
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:storageversion
 // +kubebuilder:conversion:hub
 // +kubebuilder:subresource:status
-// +kubebuilder:storageversion
 // +kubebuilder:printcolumn:name="TunnelID",type=string,JSONPath=`.status.tunnelId`
+// +kubebuilder:printcolumn:name="State",type=string,JSONPath=`.status.state`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Tunnel is the Schema for the tunnels API
 type Tunnel struct {

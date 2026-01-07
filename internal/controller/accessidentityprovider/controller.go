@@ -22,10 +22,12 @@ import (
 	"time"
 
 	"github.com/cloudflare/cloudflare-go"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -42,7 +44,8 @@ const (
 // AccessIdentityProviderReconciler reconciles an AccessIdentityProvider object
 type AccessIdentityProviderReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=accessidentityproviders,verbs=get;list;watch;create;update;patch;delete
@@ -93,7 +96,16 @@ func (r *AccessIdentityProviderReconciler) handleDeletion(ctx context.Context, i
 		if idp.Status.ProviderID != "" {
 			logger.Info("Deleting Access Identity Provider from Cloudflare", "providerId", idp.Status.ProviderID)
 			if err := apiClient.DeleteAccessIdentityProvider(idp.Status.ProviderID); err != nil {
-				logger.Error(err, "Failed to delete Access Identity Provider from Cloudflare")
+				// Check if resource already deleted
+				if !cf.IsNotFoundError(err) {
+					logger.Error(err, "Failed to delete Access Identity Provider from Cloudflare")
+					r.Recorder.Event(idp, corev1.EventTypeWarning, "DeleteFailed",
+						fmt.Sprintf("Failed to delete from Cloudflare: %v", err))
+					return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+				}
+				logger.Info("Access Identity Provider already deleted from Cloudflare")
+			} else {
+				r.Recorder.Event(idp, corev1.EventTypeNormal, "Deleted", "Deleted from Cloudflare")
 			}
 		}
 
@@ -127,15 +139,29 @@ func (r *AccessIdentityProviderReconciler) reconcileIdentityProvider(ctx context
 	if idp.Status.ProviderID == "" {
 		// Create new identity provider
 		logger.Info("Creating Access Identity Provider", "name", params.Name, "type", params.Type)
+		r.Recorder.Event(idp, corev1.EventTypeNormal, "Creating",
+			fmt.Sprintf("Creating Access Identity Provider '%s' (type: %s) in Cloudflare", params.Name, params.Type))
 		result, err = apiClient.CreateAccessIdentityProvider(params)
+		if err != nil {
+			r.Recorder.Event(idp, corev1.EventTypeWarning, "CreateFailed",
+				fmt.Sprintf("Failed to create Access Identity Provider: %v", err))
+			return r.updateStatusError(ctx, idp, err)
+		}
+		r.Recorder.Event(idp, corev1.EventTypeNormal, "Created",
+			fmt.Sprintf("Created Access Identity Provider with ID '%s'", result.ID))
 	} else {
 		// Update existing identity provider
 		logger.Info("Updating Access Identity Provider", "providerId", idp.Status.ProviderID)
+		r.Recorder.Event(idp, corev1.EventTypeNormal, "Updating",
+			fmt.Sprintf("Updating Access Identity Provider '%s' in Cloudflare", idp.Status.ProviderID))
 		result, err = apiClient.UpdateAccessIdentityProvider(idp.Status.ProviderID, params)
-	}
-
-	if err != nil {
-		return r.updateStatusError(ctx, idp, err)
+		if err != nil {
+			r.Recorder.Event(idp, corev1.EventTypeWarning, "UpdateFailed",
+				fmt.Sprintf("Failed to update Access Identity Provider: %v", err))
+			return r.updateStatusError(ctx, idp, err)
+		}
+		r.Recorder.Event(idp, corev1.EventTypeNormal, "Updated",
+			fmt.Sprintf("Updated Access Identity Provider '%s'", result.ID))
 	}
 
 	// Update status
@@ -262,6 +288,7 @@ func (r *AccessIdentityProviderReconciler) updateStatusSuccess(ctx context.Conte
 }
 
 func (r *AccessIdentityProviderReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.Recorder = mgr.GetEventRecorderFor("accessidentityprovider-controller")
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.AccessIdentityProvider{}).
 		Complete(r)

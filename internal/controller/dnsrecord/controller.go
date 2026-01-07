@@ -21,10 +21,12 @@ import (
 	"fmt"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -41,7 +43,8 @@ const (
 // DNSRecordReconciler reconciles a DNSRecord object
 type DNSRecordReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=dnsrecords,verbs=get;list;watch;create;update;patch;delete
@@ -96,7 +99,16 @@ func (r *DNSRecordReconciler) handleDeletion(ctx context.Context, record *networ
 		if record.Status.RecordID != "" && record.Status.ZoneID != "" {
 			logger.Info("Deleting DNS Record from Cloudflare", "recordId", record.Status.RecordID)
 			if err := apiClient.DeleteDNSRecord(record.Status.ZoneID, record.Status.RecordID); err != nil {
-				logger.Error(err, "Failed to delete DNS Record from Cloudflare")
+				// Check if resource already deleted
+				if !cf.IsNotFoundError(err) {
+					logger.Error(err, "Failed to delete DNS Record from Cloudflare")
+					r.Recorder.Event(record, corev1.EventTypeWarning, "DeleteFailed",
+						fmt.Sprintf("Failed to delete from Cloudflare: %v", err))
+					return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+				}
+				logger.Info("DNS Record already deleted from Cloudflare")
+			} else {
+				r.Recorder.Event(record, corev1.EventTypeNormal, "Deleted", "Deleted from Cloudflare")
 			}
 		}
 
@@ -139,15 +151,29 @@ func (r *DNSRecordReconciler) reconcileDNSRecord(ctx context.Context, record *ne
 	if record.Status.RecordID == "" {
 		// Create new DNS record
 		logger.Info("Creating DNS Record", "name", params.Name, "type", params.Type)
+		r.Recorder.Event(record, corev1.EventTypeNormal, "Creating",
+			fmt.Sprintf("Creating DNS Record '%s' (type: %s) in Cloudflare", params.Name, params.Type))
 		result, err = apiClient.CreateDNSRecord(params)
+		if err != nil {
+			r.Recorder.Event(record, corev1.EventTypeWarning, "CreateFailed",
+				fmt.Sprintf("Failed to create DNS Record: %v", err))
+			return r.updateStatusError(ctx, record, err)
+		}
+		r.Recorder.Event(record, corev1.EventTypeNormal, "Created",
+			fmt.Sprintf("Created DNS Record with ID '%s'", result.ID))
 	} else {
 		// Update existing DNS record
 		logger.Info("Updating DNS Record", "recordId", record.Status.RecordID)
+		r.Recorder.Event(record, corev1.EventTypeNormal, "Updating",
+			fmt.Sprintf("Updating DNS Record '%s' in Cloudflare", record.Status.RecordID))
 		result, err = apiClient.UpdateDNSRecord(record.Status.ZoneID, record.Status.RecordID, params)
-	}
-
-	if err != nil {
-		return r.updateStatusError(ctx, record, err)
+		if err != nil {
+			r.Recorder.Event(record, corev1.EventTypeWarning, "UpdateFailed",
+				fmt.Sprintf("Failed to update DNS Record: %v", err))
+			return r.updateStatusError(ctx, record, err)
+		}
+		r.Recorder.Event(record, corev1.EventTypeNormal, "Updated",
+			fmt.Sprintf("Updated DNS Record '%s'", result.ID))
 	}
 
 	// Update status
@@ -291,6 +317,7 @@ func (r *DNSRecordReconciler) updateStatusSuccess(ctx context.Context, record *n
 }
 
 func (r *DNSRecordReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.Recorder = mgr.GetEventRecorderFor("dnsrecord-controller")
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.DNSRecord{}).
 		Complete(r)

@@ -24,6 +24,7 @@ import (
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	apitypes "k8s.io/apimachinery/pkg/types"
@@ -31,7 +32,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
@@ -133,21 +136,46 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 	r.log.Info("Deleting NetworkRoute")
 	r.Recorder.Event(r.networkRoute, corev1.EventTypeNormal, "Deleting", "Starting NetworkRoute deletion")
 
-	// Delete from Cloudflare if it exists
-	if r.networkRoute.Status.Network != "" {
+	// Try to get network from status or fall back to spec to prevent orphaned resources
+	network := r.networkRoute.Status.Network
+	if network == "" {
+		// Status is empty - use spec.Network to find and delete
+		network = r.networkRoute.Spec.Network
+		r.log.Info("Status.Network is empty, using spec.Network for deletion", "network", network)
+	}
+
+	// Delete from Cloudflare if we have a network
+	if network != "" {
+		// Determine virtual network ID - prefer status, fall back to resolving from spec
 		virtualNetworkID := r.networkRoute.Status.VirtualNetworkID
+		if virtualNetworkID == "" && r.networkRoute.Spec.VirtualNetworkRef != nil {
+			// Try to resolve from spec reference
+			vnet := &networkingv1alpha2.VirtualNetwork{}
+			if err := r.Get(r.ctx, apitypes.NamespacedName{Name: r.networkRoute.Spec.VirtualNetworkRef.Name}, vnet); err == nil {
+				virtualNetworkID = vnet.Status.VirtualNetworkId
+			}
+		}
 		if virtualNetworkID == "" {
-			// If no vnet is specified, we need to get the default one
+			// If still no vnet, use default
 			virtualNetworkID = "default"
 		}
 
-		if err := r.cfAPI.DeleteTunnelRoute(r.networkRoute.Status.Network, virtualNetworkID); err != nil {
-			r.log.Error(err, "failed to delete NetworkRoute from Cloudflare")
-			r.Recorder.Event(r.networkRoute, corev1.EventTypeWarning, controller.EventReasonDeleteFailed, err.Error())
-			return ctrl.Result{}, err
+		if err := r.cfAPI.DeleteTunnelRoute(network, virtualNetworkID); err != nil {
+			// P0 FIX: Check if route is already deleted (NotFound error)
+			if cf.IsNotFoundError(err) {
+				r.log.Info("NetworkRoute already deleted from Cloudflare", "network", network)
+				r.Recorder.Event(r.networkRoute, corev1.EventTypeNormal, "AlreadyDeleted", "NetworkRoute was already deleted from Cloudflare")
+			} else {
+				r.log.Error(err, "failed to delete NetworkRoute from Cloudflare")
+				r.Recorder.Event(r.networkRoute, corev1.EventTypeWarning, controller.EventReasonDeleteFailed, cf.SanitizeErrorMessage(err))
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+			}
+		} else {
+			r.log.Info("NetworkRoute deleted from Cloudflare", "network", network)
+			r.Recorder.Event(r.networkRoute, corev1.EventTypeNormal, controller.EventReasonDeleted, "Deleted from Cloudflare")
 		}
-		r.log.Info("NetworkRoute deleted from Cloudflare", "network", r.networkRoute.Status.Network)
-		r.Recorder.Event(r.networkRoute, corev1.EventTypeNormal, controller.EventReasonDeleted, "Deleted from Cloudflare")
+	} else {
+		r.log.Info("No network specified, assuming route was never created or already deleted")
 	}
 
 	// Remove finalizer
@@ -193,9 +221,19 @@ func (r *Reconciler) reconcileNetworkRoute() error {
 	// Try to find existing route
 	existing, err := r.cfAPI.GetTunnelRoute(network, virtualNetworkID)
 	if err == nil && existing != nil {
-		// Found existing - adopt it
+		// Check if we can adopt this resource (no conflict with another K8s resource)
+		mgmtInfo := controller.NewManagementInfo(r.networkRoute, "NetworkRoute")
+		if conflict := controller.GetConflictingManager(existing.Comment, mgmtInfo); conflict != nil {
+			err := fmt.Errorf("NetworkRoute %s is already managed by %s/%s/%s", existing.Network, conflict.Kind, conflict.Namespace, conflict.Name)
+			r.log.Error(err, "adoption conflict detected")
+			r.Recorder.Event(r.networkRoute, corev1.EventTypeWarning, controller.EventReasonAdoptionConflict, err.Error())
+			r.setCondition(metav1.ConditionFalse, controller.EventReasonAdoptionConflict, err.Error())
+			return err
+		}
+		// Found existing - adopt it and update with management marker
 		r.log.Info("Found existing NetworkRoute, adopting", "network", existing.Network, "tunnelId", existing.TunnelID)
-		return r.updateStatus(existing, tunnelName)
+		r.Recorder.Event(r.networkRoute, corev1.EventTypeNormal, controller.EventReasonAdopted, fmt.Sprintf("Adopted existing NetworkRoute: %s", existing.Network))
+		return r.updateNetworkRoute(network, tunnelID, tunnelName, virtualNetworkID)
 	}
 
 	// Create new route
@@ -255,11 +293,15 @@ func (r *Reconciler) createNetworkRoute(network, tunnelID, tunnelName, virtualNe
 	r.log.Info("Creating NetworkRoute", "network", network, "tunnelId", tunnelID)
 	r.Recorder.Event(r.networkRoute, corev1.EventTypeNormal, "Creating", fmt.Sprintf("Creating NetworkRoute: %s", network))
 
+	// Build comment with management marker to prevent adoption conflicts
+	mgmtInfo := controller.NewManagementInfo(r.networkRoute, "NetworkRoute")
+	comment := controller.BuildManagedComment(mgmtInfo, r.networkRoute.Spec.Comment)
+
 	result, err := r.cfAPI.CreateTunnelRoute(cf.TunnelRouteParams{
 		Network:          network,
 		TunnelID:         tunnelID,
 		VirtualNetworkID: virtualNetworkID,
-		Comment:          r.networkRoute.Spec.Comment,
+		Comment:          comment,
 	})
 	if err != nil {
 		r.log.Error(err, "failed to create NetworkRoute")
@@ -276,11 +318,15 @@ func (r *Reconciler) createNetworkRoute(network, tunnelID, tunnelName, virtualNe
 func (r *Reconciler) updateNetworkRoute(network, tunnelID, tunnelName, virtualNetworkID string) error {
 	r.log.Info("Updating NetworkRoute", "network", network, "tunnelId", tunnelID)
 
+	// Build comment with management marker to prevent adoption conflicts
+	mgmtInfo := controller.NewManagementInfo(r.networkRoute, "NetworkRoute")
+	comment := controller.BuildManagedComment(mgmtInfo, r.networkRoute.Spec.Comment)
+
 	result, err := r.cfAPI.UpdateTunnelRoute(r.networkRoute.Status.Network, cf.TunnelRouteParams{
 		Network:          network,
 		TunnelID:         tunnelID,
 		VirtualNetworkID: virtualNetworkID,
-		Comment:          r.networkRoute.Spec.Comment,
+		Comment:          comment,
 	})
 	if err != nil {
 		r.log.Error(err, "failed to update NetworkRoute")
@@ -295,20 +341,23 @@ func (r *Reconciler) updateNetworkRoute(network, tunnelID, tunnelName, virtualNe
 
 // updateStatus updates the NetworkRoute status with the Cloudflare state.
 func (r *Reconciler) updateStatus(result *cf.TunnelRouteResult, tunnelName string) error {
-	r.networkRoute.Status.Network = result.Network
-	r.networkRoute.Status.TunnelID = result.TunnelID
-	r.networkRoute.Status.TunnelName = tunnelName
-	if result.TunnelName != "" {
-		r.networkRoute.Status.TunnelName = result.TunnelName
-	}
-	r.networkRoute.Status.VirtualNetworkID = result.VirtualNetworkID
-	r.networkRoute.Status.AccountID = r.cfAPI.ValidAccountId
-	r.networkRoute.Status.State = "active"
-	r.networkRoute.Status.ObservedGeneration = r.networkRoute.Generation
+	// Use retry logic for status updates to handle conflicts
+	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.networkRoute, func() {
+		r.networkRoute.Status.Network = result.Network
+		r.networkRoute.Status.TunnelID = result.TunnelID
+		r.networkRoute.Status.TunnelName = tunnelName
+		if result.TunnelName != "" {
+			r.networkRoute.Status.TunnelName = result.TunnelName
+		}
+		r.networkRoute.Status.VirtualNetworkID = result.VirtualNetworkID
+		r.networkRoute.Status.AccountID = r.cfAPI.ValidAccountId
+		r.networkRoute.Status.State = "active"
+		r.networkRoute.Status.ObservedGeneration = r.networkRoute.Generation
 
-	r.setCondition(metav1.ConditionTrue, controller.EventReasonReconciled, "NetworkRoute reconciled successfully")
+		r.setCondition(metav1.ConditionTrue, controller.EventReasonReconciled, "NetworkRoute reconciled successfully")
+	})
 
-	if err := r.Status().Update(r.ctx, r.networkRoute); err != nil {
+	if err != nil {
 		r.log.Error(err, "failed to update NetworkRoute status")
 		return err
 	}
@@ -317,29 +366,46 @@ func (r *Reconciler) updateStatus(result *cf.TunnelRouteResult, tunnelName strin
 	return nil
 }
 
-// setCondition sets a condition on the NetworkRoute status.
+// setCondition sets a condition on the NetworkRoute status using meta.SetStatusCondition.
 func (r *Reconciler) setCondition(status metav1.ConditionStatus, reason, message string) {
-	condition := metav1.Condition{
+	meta.SetStatusCondition(&r.networkRoute.Status.Conditions, metav1.Condition{
 		Type:               "Ready",
 		Status:             status,
 		ObservedGeneration: r.networkRoute.Generation,
 		LastTransitionTime: metav1.Now(),
 		Reason:             reason,
 		Message:            message,
+	})
+}
+
+// findNetworkRoutesForVirtualNetwork returns reconcile requests for NetworkRoutes
+// that reference the given VirtualNetwork
+func (r *Reconciler) findNetworkRoutesForVirtualNetwork(ctx context.Context, obj client.Object) []reconcile.Request {
+	vnet := obj.(*networkingv1alpha2.VirtualNetwork)
+	log := ctrllog.FromContext(ctx)
+
+	// List all NetworkRoutes
+	routes := &networkingv1alpha2.NetworkRouteList{}
+	if err := r.List(ctx, routes); err != nil {
+		log.Error(err, "Failed to list NetworkRoutes for VirtualNetwork watch")
+		return nil
 	}
 
-	// Update or append condition
-	found := false
-	for i, c := range r.networkRoute.Status.Conditions {
-		if c.Type == condition.Type {
-			r.networkRoute.Status.Conditions[i] = condition
-			found = true
-			break
+	var requests []reconcile.Request
+	for _, route := range routes.Items {
+		if route.Spec.VirtualNetworkRef != nil && route.Spec.VirtualNetworkRef.Name == vnet.Name {
+			log.Info("VirtualNetwork changed, triggering NetworkRoute reconcile",
+				"virtualnetwork", vnet.Name,
+				"networkroute", route.Name)
+			requests = append(requests, reconcile.Request{
+				NamespacedName: apitypes.NamespacedName{
+					Name: route.Name,
+				},
+			})
 		}
 	}
-	if !found {
-		r.networkRoute.Status.Conditions = append(r.networkRoute.Status.Conditions, condition)
-	}
+
+	return requests
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -347,5 +413,10 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("networkroute-controller")
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.NetworkRoute{}).
+		// Watch VirtualNetwork changes to trigger NetworkRoute reconcile
+		Watches(
+			&networkingv1alpha2.VirtualNetwork{},
+			handler.EnqueueRequestsFromMapFunc(r.findNetworkRoutesForVirtualNetwork),
+		).
 		Complete(r)
 }

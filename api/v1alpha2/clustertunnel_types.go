@@ -25,8 +25,9 @@ import (
 // +kubebuilder:conversion:hub
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster
-// +kubebuilder:storageversion
 // +kubebuilder:printcolumn:name="TunnelID",type=string,JSONPath=`.status.tunnelId`
+// +kubebuilder:printcolumn:name="State",type=string,JSONPath=`.status.state`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // ClusterTunnel is the Schema for the clustertunnels API
 type ClusterTunnel struct {

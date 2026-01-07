@@ -24,6 +24,7 @@ import (
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
@@ -134,15 +135,37 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 	r.log.Info("Deleting VirtualNetwork")
 	r.Recorder.Event(r.vnet, corev1.EventTypeNormal, "Deleting", "Starting VirtualNetwork deletion")
 
-	// Delete from Cloudflare if it exists
-	if r.vnet.Status.VirtualNetworkId != "" {
-		if err := r.cfAPI.DeleteVirtualNetwork(r.vnet.Status.VirtualNetworkId); err != nil {
-			r.log.Error(err, "failed to delete VirtualNetwork from Cloudflare")
-			r.Recorder.Event(r.vnet, corev1.EventTypeWarning, controller.EventReasonDeleteFailed, err.Error())
-			return ctrl.Result{}, err
+	// Try to get VNet ID from status or by looking up by name
+	vnetID := r.vnet.Status.VirtualNetworkId
+	if vnetID == "" {
+		// Status ID is empty - try to find by name to prevent orphaned resources
+		vnetName := r.vnet.GetVirtualNetworkName()
+		r.log.Info("Status.VirtualNetworkId is empty, trying to find VNet by name", "name", vnetName)
+		existing, err := r.cfAPI.GetVirtualNetworkByName(vnetName)
+		if err == nil && existing != nil {
+			vnetID = existing.ID
+			r.log.Info("Found VirtualNetwork by name", "id", vnetID)
+		} else {
+			r.log.Info("VirtualNetwork not found by name, assuming it was never created or already deleted")
 		}
-		r.log.Info("VirtualNetwork deleted from Cloudflare", "id", r.vnet.Status.VirtualNetworkId)
-		r.Recorder.Event(r.vnet, corev1.EventTypeNormal, controller.EventReasonDeleted, "Deleted from Cloudflare")
+	}
+
+	// Delete from Cloudflare if we have an ID
+	if vnetID != "" {
+		if err := r.cfAPI.DeleteVirtualNetwork(vnetID); err != nil {
+			// P0 FIX: Check if resource is already deleted (NotFound error)
+			if cf.IsNotFoundError(err) {
+				r.log.Info("VirtualNetwork already deleted from Cloudflare", "id", vnetID)
+				r.Recorder.Event(r.vnet, corev1.EventTypeNormal, "AlreadyDeleted", "VirtualNetwork was already deleted from Cloudflare")
+			} else {
+				r.log.Error(err, "failed to delete VirtualNetwork from Cloudflare")
+				r.Recorder.Event(r.vnet, corev1.EventTypeWarning, controller.EventReasonDeleteFailed, cf.SanitizeErrorMessage(err))
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+			}
+		} else {
+			r.log.Info("VirtualNetwork deleted from Cloudflare", "id", vnetID)
+			r.Recorder.Event(r.vnet, corev1.EventTypeNormal, controller.EventReasonDeleted, "Deleted from Cloudflare")
+		}
 	}
 
 	// Remove finalizer
@@ -169,9 +192,19 @@ func (r *Reconciler) reconcileVirtualNetwork() error {
 	// Try to find existing VirtualNetwork by name
 	existing, err := r.cfAPI.GetVirtualNetworkByName(vnetName)
 	if err == nil && existing != nil {
-		// Found existing - adopt it
+		// Check if we can adopt this resource (no conflict with another K8s resource)
+		mgmtInfo := controller.NewManagementInfo(r.vnet, "VirtualNetwork")
+		if conflict := controller.GetConflictingManager(existing.Comment, mgmtInfo); conflict != nil {
+			err := fmt.Errorf("VirtualNetwork %s is already managed by %s/%s", existing.Name, conflict.Kind, conflict.Name)
+			r.log.Error(err, "adoption conflict detected")
+			r.Recorder.Event(r.vnet, corev1.EventTypeWarning, controller.EventReasonAdoptionConflict, err.Error())
+			r.setCondition(metav1.ConditionFalse, controller.EventReasonAdoptionConflict, err.Error())
+			return err
+		}
+		// Found existing - adopt it and update with management marker
 		r.log.Info("Found existing VirtualNetwork, adopting", "id", existing.ID, "name", existing.Name)
-		return r.updateStatus(existing)
+		r.Recorder.Event(r.vnet, corev1.EventTypeNormal, controller.EventReasonAdopted, fmt.Sprintf("Adopted existing VirtualNetwork: %s", existing.ID))
+		return r.updateVirtualNetwork(vnetName)
 	}
 
 	// Create new VirtualNetwork
@@ -183,9 +216,13 @@ func (r *Reconciler) createVirtualNetwork(name string) error {
 	r.log.Info("Creating VirtualNetwork", "name", name)
 	r.Recorder.Event(r.vnet, corev1.EventTypeNormal, "Creating", fmt.Sprintf("Creating VirtualNetwork: %s", name))
 
+	// Build comment with management marker to prevent adoption conflicts
+	mgmtInfo := controller.NewManagementInfo(r.vnet, "VirtualNetwork")
+	comment := controller.BuildManagedComment(mgmtInfo, r.vnet.Spec.Comment)
+
 	result, err := r.cfAPI.CreateVirtualNetwork(cf.VirtualNetworkParams{
 		Name:             name,
-		Comment:          r.vnet.Spec.Comment,
+		Comment:          comment,
 		IsDefaultNetwork: r.vnet.Spec.IsDefaultNetwork,
 	})
 	if err != nil {
@@ -203,9 +240,13 @@ func (r *Reconciler) createVirtualNetwork(name string) error {
 func (r *Reconciler) updateVirtualNetwork(name string) error {
 	r.log.Info("Updating VirtualNetwork", "id", r.vnet.Status.VirtualNetworkId, "name", name)
 
+	// Build comment with management marker to prevent adoption conflicts
+	mgmtInfo := controller.NewManagementInfo(r.vnet, "VirtualNetwork")
+	comment := controller.BuildManagedComment(mgmtInfo, r.vnet.Spec.Comment)
+
 	result, err := r.cfAPI.UpdateVirtualNetwork(r.vnet.Status.VirtualNetworkId, cf.VirtualNetworkParams{
 		Name:             name,
-		Comment:          r.vnet.Spec.Comment,
+		Comment:          comment,
 		IsDefaultNetwork: r.vnet.Spec.IsDefaultNetwork,
 	})
 	if err != nil {
@@ -221,20 +262,23 @@ func (r *Reconciler) updateVirtualNetwork(name string) error {
 
 // updateStatus updates the VirtualNetwork status with the Cloudflare state.
 func (r *Reconciler) updateStatus(result *cf.VirtualNetworkResult) error {
-	r.vnet.Status.VirtualNetworkId = result.ID
-	r.vnet.Status.AccountId = r.cfAPI.ValidAccountId
-	r.vnet.Status.IsDefault = result.IsDefaultNetwork
-	r.vnet.Status.ObservedGeneration = r.vnet.Generation
+	// Use retry logic for status updates to handle conflicts
+	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.vnet, func() {
+		r.vnet.Status.VirtualNetworkId = result.ID
+		r.vnet.Status.AccountId = r.cfAPI.ValidAccountId
+		r.vnet.Status.IsDefault = result.IsDefaultNetwork
+		r.vnet.Status.ObservedGeneration = r.vnet.Generation
 
-	if result.DeletedAt != nil {
-		r.vnet.Status.State = "deleted"
-	} else {
-		r.vnet.Status.State = "active"
-	}
+		if result.DeletedAt != nil {
+			r.vnet.Status.State = "deleted"
+		} else {
+			r.vnet.Status.State = "active"
+		}
 
-	r.setCondition(metav1.ConditionTrue, controller.EventReasonReconciled, "VirtualNetwork reconciled successfully")
+		r.setCondition(metav1.ConditionTrue, controller.EventReasonReconciled, "VirtualNetwork reconciled successfully")
+	})
 
-	if err := r.Status().Update(r.ctx, r.vnet); err != nil {
+	if err != nil {
 		r.log.Error(err, "failed to update VirtualNetwork status")
 		return err
 	}
@@ -243,29 +287,16 @@ func (r *Reconciler) updateStatus(result *cf.VirtualNetworkResult) error {
 	return nil
 }
 
-// setCondition sets a condition on the VirtualNetwork status.
+// setCondition sets a condition on the VirtualNetwork status using meta.SetStatusCondition.
 func (r *Reconciler) setCondition(status metav1.ConditionStatus, reason, message string) {
-	condition := metav1.Condition{
+	meta.SetStatusCondition(&r.vnet.Status.Conditions, metav1.Condition{
 		Type:               "Ready",
 		Status:             status,
 		ObservedGeneration: r.vnet.Generation,
 		LastTransitionTime: metav1.Now(),
 		Reason:             reason,
 		Message:            message,
-	}
-
-	// Update or append condition
-	found := false
-	for i, c := range r.vnet.Status.Conditions {
-		if c.Type == condition.Type {
-			r.vnet.Status.Conditions[i] = condition
-			found = true
-			break
-		}
-	}
-	if !found {
-		r.vnet.Status.Conditions = append(r.vnet.Status.Conditions, condition)
-	}
+	})
 }
 
 // SetupWithManager sets up the controller with the Manager.

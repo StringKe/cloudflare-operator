@@ -481,6 +481,43 @@ type AccessServiceTokenResult struct {
 	ExpiresAt    string
 }
 
+// GetAccessServiceTokenByName retrieves an Access Service Token by name.
+// Returns nil if no token with the given name is found.
+func (c *API) GetAccessServiceTokenByName(name string) (*AccessServiceTokenResult, error) {
+	if _, err := c.GetAccountId(); err != nil {
+		c.Log.Error(err, "error getting account ID")
+		return nil, err
+	}
+
+	ctx := context.Background()
+	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
+
+	tokens, _, err := c.CloudflareClient.ListAccessServiceTokens(ctx, rc, cloudflare.ListAccessServiceTokensParams{})
+	if err != nil {
+		c.Log.Error(err, "error listing access service tokens")
+		return nil, err
+	}
+
+	for _, token := range tokens {
+		if token.Name == name {
+			expiresAt := ""
+			if token.ExpiresAt != nil {
+				expiresAt = token.ExpiresAt.String()
+			}
+			return &AccessServiceTokenResult{
+				ID:        token.ID,
+				TokenID:   token.ID,
+				Name:      token.Name,
+				ClientID:  token.ClientID,
+				AccountID: c.ValidAccountId,
+				ExpiresAt: expiresAt,
+			}, nil
+		}
+	}
+
+	return nil, nil
+}
+
 // CreateAccessServiceToken creates a new Access Service Token.
 func (c *API) CreateAccessServiceToken(name string, duration string) (*AccessServiceTokenResult, error) {
 	if _, err := c.GetAccountId(); err != nil {
@@ -778,6 +815,96 @@ func (c *API) DeleteDevicePostureRule(ruleID string) error {
 
 	c.Log.Info("Device Posture Rule deleted", "id", ruleID)
 	return nil
+}
+
+// ListAccessGroupsByName finds an Access Group by name.
+// Returns nil if no group with the given name is found.
+func (c *API) ListAccessGroupsByName(name string) (*AccessGroupResult, error) {
+	if _, err := c.GetAccountId(); err != nil {
+		c.Log.Error(err, "error getting account ID")
+		return nil, err
+	}
+
+	ctx := context.Background()
+	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
+
+	groups, _, err := c.CloudflareClient.ListAccessGroups(ctx, rc, cloudflare.ListAccessGroupsParams{})
+	if err != nil {
+		c.Log.Error(err, "error listing access groups")
+		return nil, err
+	}
+
+	for _, group := range groups {
+		if group.Name == name {
+			return &AccessGroupResult{
+				ID:   group.ID,
+				Name: group.Name,
+			}, nil
+		}
+	}
+
+	return nil, nil // Not found, return nil without error
+}
+
+// ListAccessIdentityProvidersByName finds an Access Identity Provider by name.
+// Returns nil if no provider with the given name is found.
+func (c *API) ListAccessIdentityProvidersByName(name string) (*AccessIdentityProviderResult, error) {
+	if _, err := c.GetAccountId(); err != nil {
+		c.Log.Error(err, "error getting account ID")
+		return nil, err
+	}
+
+	ctx := context.Background()
+	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
+
+	providers, _, err := c.CloudflareClient.ListAccessIdentityProviders(ctx, rc, cloudflare.ListAccessIdentityProvidersParams{})
+	if err != nil {
+		c.Log.Error(err, "error listing access identity providers")
+		return nil, err
+	}
+
+	for _, provider := range providers {
+		if provider.Name == name {
+			return &AccessIdentityProviderResult{
+				ID:   provider.ID,
+				Name: provider.Name,
+				Type: provider.Type,
+			}, nil
+		}
+	}
+
+	return nil, nil // Not found, return nil without error
+}
+
+// ListDevicePostureRulesByName finds a Device Posture Rule by name.
+// Returns nil if no rule with the given name is found.
+func (c *API) ListDevicePostureRulesByName(name string) (*DevicePostureRuleResult, error) {
+	if _, err := c.GetAccountId(); err != nil {
+		c.Log.Error(err, "error getting account ID")
+		return nil, err
+	}
+
+	ctx := context.Background()
+
+	rules, _, err := c.CloudflareClient.DevicePostureRules(ctx, c.ValidAccountId)
+	if err != nil {
+		c.Log.Error(err, "error listing device posture rules")
+		return nil, err
+	}
+
+	for _, rule := range rules {
+		if rule.Name == name {
+			return &DevicePostureRuleResult{
+				ID:          rule.ID,
+				Name:        rule.Name,
+				Type:        rule.Type,
+				Description: rule.Description,
+				AccountID:   c.ValidAccountId,
+			}, nil
+		}
+	}
+
+	return nil, nil // Not found, return nil without error
 }
 
 // ListAccessApplicationsByName finds an Access Application by name.

@@ -448,6 +448,21 @@ func (mr *MockCloudflareClientMockRecorder) GetAccessIdentityProvider(idpID any)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAccessIdentityProvider", reflect.TypeOf((*MockCloudflareClient)(nil).GetAccessIdentityProvider), idpID)
 }
 
+// GetAccessServiceTokenByName mocks base method.
+func (m *MockCloudflareClient) GetAccessServiceTokenByName(name string) (*cf.AccessServiceTokenResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetAccessServiceTokenByName", name)
+	ret0, _ := ret[0].(*cf.AccessServiceTokenResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetAccessServiceTokenByName indicates an expected call of GetAccessServiceTokenByName.
+func (mr *MockCloudflareClientMockRecorder) GetAccessServiceTokenByName(name any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAccessServiceTokenByName", reflect.TypeOf((*MockCloudflareClient)(nil).GetAccessServiceTokenByName), name)
+}
+
 // GetAccountId mocks base method.
 func (m *MockCloudflareClient) GetAccountId() (string, error) {
 	m.ctrl.T.Helper()
@@ -747,6 +762,51 @@ func (m *MockCloudflareClient) ListAccessApplicationsByName(name string) (*cf.Ac
 func (mr *MockCloudflareClientMockRecorder) ListAccessApplicationsByName(name any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAccessApplicationsByName", reflect.TypeOf((*MockCloudflareClient)(nil).ListAccessApplicationsByName), name)
+}
+
+// ListAccessGroupsByName mocks base method.
+func (m *MockCloudflareClient) ListAccessGroupsByName(name string) (*cf.AccessGroupResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListAccessGroupsByName", name)
+	ret0, _ := ret[0].(*cf.AccessGroupResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListAccessGroupsByName indicates an expected call of ListAccessGroupsByName.
+func (mr *MockCloudflareClientMockRecorder) ListAccessGroupsByName(name any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAccessGroupsByName", reflect.TypeOf((*MockCloudflareClient)(nil).ListAccessGroupsByName), name)
+}
+
+// ListAccessIdentityProvidersByName mocks base method.
+func (m *MockCloudflareClient) ListAccessIdentityProvidersByName(name string) (*cf.AccessIdentityProviderResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListAccessIdentityProvidersByName", name)
+	ret0, _ := ret[0].(*cf.AccessIdentityProviderResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListAccessIdentityProvidersByName indicates an expected call of ListAccessIdentityProvidersByName.
+func (mr *MockCloudflareClientMockRecorder) ListAccessIdentityProvidersByName(name any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAccessIdentityProvidersByName", reflect.TypeOf((*MockCloudflareClient)(nil).ListAccessIdentityProvidersByName), name)
+}
+
+// ListDevicePostureRulesByName mocks base method.
+func (m *MockCloudflareClient) ListDevicePostureRulesByName(name string) (*cf.DevicePostureRuleResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListDevicePostureRulesByName", name)
+	ret0, _ := ret[0].(*cf.DevicePostureRuleResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListDevicePostureRulesByName indicates an expected call of ListDevicePostureRulesByName.
+func (mr *MockCloudflareClientMockRecorder) ListDevicePostureRulesByName(name any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListDevicePostureRulesByName", reflect.TypeOf((*MockCloudflareClient)(nil).ListDevicePostureRulesByName), name)
 }
 
 // ListGatewayListsByName mocks base method.

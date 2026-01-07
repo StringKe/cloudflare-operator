@@ -28,13 +28,17 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
+	"github.com/StringKe/cloudflare-operator/internal/controller"
 )
 
 const (
@@ -44,7 +48,8 @@ const (
 // GatewayListReconciler reconciles a GatewayList object
 type GatewayListReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=gatewaylists,verbs=get;list;watch;create;update;patch;delete
@@ -95,7 +100,16 @@ func (r *GatewayListReconciler) handleDeletion(ctx context.Context, list *networ
 		if list.Status.ListID != "" {
 			logger.Info("Deleting Gateway List from Cloudflare", "listId", list.Status.ListID)
 			if err := apiClient.DeleteGatewayList(list.Status.ListID); err != nil {
-				logger.Error(err, "Failed to delete Gateway List from Cloudflare")
+				// Check if resource already deleted
+				if !cf.IsNotFoundError(err) {
+					logger.Error(err, "Failed to delete Gateway List from Cloudflare")
+					r.Recorder.Event(list, corev1.EventTypeWarning, "DeleteFailed",
+						fmt.Sprintf("Failed to delete from Cloudflare: %v", err))
+					return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+				}
+				logger.Info("Gateway List already deleted from Cloudflare")
+			} else {
+				r.Recorder.Event(list, corev1.EventTypeNormal, "Deleted", "Deleted from Cloudflare")
 			}
 		}
 
@@ -115,6 +129,8 @@ func (r *GatewayListReconciler) reconcileGatewayList(ctx context.Context, list *
 	// Collect items from spec and ConfigMap
 	items, err := r.collectItems(ctx, list)
 	if err != nil {
+		r.Recorder.Event(list, corev1.EventTypeWarning, "CollectItemsFailed",
+			fmt.Sprintf("Failed to collect items: %v", err))
 		return r.updateStatusError(ctx, list, err)
 	}
 
@@ -131,15 +147,29 @@ func (r *GatewayListReconciler) reconcileGatewayList(ctx context.Context, list *
 	if list.Status.ListID == "" {
 		// Create new gateway list
 		logger.Info("Creating Gateway List", "name", params.Name, "type", params.Type)
+		r.Recorder.Event(list, corev1.EventTypeNormal, "Creating",
+			fmt.Sprintf("Creating Gateway List '%s' (type: %s, items: %d) in Cloudflare", params.Name, params.Type, len(items)))
 		result, err = apiClient.CreateGatewayList(params)
+		if err != nil {
+			r.Recorder.Event(list, corev1.EventTypeWarning, "CreateFailed",
+				fmt.Sprintf("Failed to create Gateway List: %v", err))
+			return r.updateStatusError(ctx, list, err)
+		}
+		r.Recorder.Event(list, corev1.EventTypeNormal, "Created",
+			fmt.Sprintf("Created Gateway List with ID '%s'", result.ID))
 	} else {
 		// Update existing gateway list
 		logger.Info("Updating Gateway List", "listId", list.Status.ListID)
+		r.Recorder.Event(list, corev1.EventTypeNormal, "Updating",
+			fmt.Sprintf("Updating Gateway List '%s' (items: %d) in Cloudflare", list.Status.ListID, len(items)))
 		result, err = apiClient.UpdateGatewayList(list.Status.ListID, params)
-	}
-
-	if err != nil {
-		return r.updateStatusError(ctx, list, err)
+		if err != nil {
+			r.Recorder.Event(list, corev1.EventTypeWarning, "UpdateFailed",
+				fmt.Sprintf("Failed to update Gateway List: %v", err))
+			return r.updateStatusError(ctx, list, err)
+		}
+		r.Recorder.Event(list, corev1.EventTypeNormal, "Updated",
+			fmt.Sprintf("Updated Gateway List '%s'", result.ID))
 	}
 
 	// Update status
@@ -198,17 +228,20 @@ func (r *GatewayListReconciler) getItemsFromConfigMap(ctx context.Context, list 
 }
 
 func (r *GatewayListReconciler) updateStatusError(ctx context.Context, list *networkingv1alpha2.GatewayList, err error) (ctrl.Result, error) {
-	list.Status.State = "Error"
-	meta.SetStatusCondition(&list.Status.Conditions, metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionFalse,
-		Reason:             "ReconcileError",
-		Message:            err.Error(),
-		LastTransitionTime: metav1.Now(),
+	// Use retry logic for status updates to handle conflicts
+	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, list, func() {
+		list.Status.State = "Error"
+		meta.SetStatusCondition(&list.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			Reason:             "ReconcileError",
+			Message:            cf.SanitizeErrorMessage(err),
+			LastTransitionTime: metav1.Now(),
+		})
+		list.Status.ObservedGeneration = list.Generation
 	})
-	list.Status.ObservedGeneration = list.Generation
 
-	if updateErr := r.Status().Update(ctx, list); updateErr != nil {
+	if updateErr != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
 	}
 
@@ -216,28 +249,75 @@ func (r *GatewayListReconciler) updateStatusError(ctx context.Context, list *net
 }
 
 func (r *GatewayListReconciler) updateStatusSuccess(ctx context.Context, list *networkingv1alpha2.GatewayList, result *cf.GatewayListResult, itemCount int) (ctrl.Result, error) {
-	list.Status.ListID = result.ID
-	list.Status.AccountID = result.AccountID
-	list.Status.ItemCount = itemCount
-	list.Status.State = "Ready"
-	meta.SetStatusCondition(&list.Status.Conditions, metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionTrue,
-		Reason:             "Reconciled",
-		Message:            "Gateway List successfully reconciled",
-		LastTransitionTime: metav1.Now(),
+	// Use retry logic for status updates to handle conflicts
+	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, list, func() {
+		list.Status.ListID = result.ID
+		list.Status.AccountID = result.AccountID
+		list.Status.ItemCount = itemCount
+		list.Status.State = "Ready"
+		meta.SetStatusCondition(&list.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionTrue,
+			Reason:             "Reconciled",
+			Message:            "Gateway List successfully reconciled",
+			LastTransitionTime: metav1.Now(),
+		})
+		list.Status.ObservedGeneration = list.Generation
 	})
-	list.Status.ObservedGeneration = list.Generation
 
-	if err := r.Status().Update(ctx, list); err != nil {
+	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
 	}
 
 	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 }
 
+// findGatewayListsForConfigMap returns a list of reconcile requests for GatewayLists
+// that reference the given ConfigMap.
+func (r *GatewayListReconciler) findGatewayListsForConfigMap(ctx context.Context, obj client.Object) []reconcile.Request {
+	configMap := obj.(*corev1.ConfigMap)
+	logger := log.FromContext(ctx)
+
+	// List all GatewayLists
+	gatewayLists := &networkingv1alpha2.GatewayListList{}
+	if err := r.List(ctx, gatewayLists); err != nil {
+		logger.Error(err, "Failed to list GatewayLists for ConfigMap watch")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, gl := range gatewayLists.Items {
+		// Check if this GatewayList references this ConfigMap
+		if gl.Spec.ItemsFromConfigMap != nil {
+			refNamespace := gl.Spec.ItemsFromConfigMap.Namespace
+			if refNamespace == "" {
+				refNamespace = "default"
+			}
+			if gl.Spec.ItemsFromConfigMap.Name == configMap.Name && refNamespace == configMap.Namespace {
+				logger.Info("ConfigMap changed, triggering GatewayList reconcile",
+					"configmap", configMap.Name,
+					"configmapNamespace", configMap.Namespace,
+					"gatewaylist", gl.Name)
+				requests = append(requests, reconcile.Request{
+					NamespacedName: types.NamespacedName{
+						Name: gl.Name,
+					},
+				})
+			}
+		}
+	}
+
+	return requests
+}
+
 func (r *GatewayListReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.Recorder = mgr.GetEventRecorderFor("gatewaylist-controller")
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.GatewayList{}).
+		// P2 FIX: Watch ConfigMap changes to trigger GatewayList reconcile
+		Watches(
+			&corev1.ConfigMap{},
+			handler.EnqueueRequestsFromMapFunc(r.findGatewayListsForConfigMap),
+		).
 		Complete(r)
 }
