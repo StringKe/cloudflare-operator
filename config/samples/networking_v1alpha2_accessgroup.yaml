@@ -1,0 +1,18 @@
+apiVersion: networking.cfargotunnel.com/v1alpha2
+kind: AccessGroup
+metadata:
+  name: accessgroup-sample
+  namespace: default
+spec:
+  name: Engineering Team
+  include:
+    - email:
+        email: user@example.com
+    - emailDomain:
+        domain: example.com
+  exclude:
+    - email:
+        email: blocked@example.com
+  cloudflare:
+    accountId: "<Cloudflare account ID>"
+    secret: cloudflare-secrets

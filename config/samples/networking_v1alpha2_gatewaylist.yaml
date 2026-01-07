@@ -1,0 +1,17 @@
+apiVersion: networking.cfargotunnel.com/v1alpha2
+kind: GatewayList
+metadata:
+  name: gatewaylist-sample
+  namespace: default
+spec:
+  name: Blocked Domains
+  description: List of domains to block
+  type: DOMAIN
+  items:
+    - value: malware.example.com
+      description: Known malware domain
+    - value: phishing.example.com
+      description: Known phishing domain
+  cloudflare:
+    accountId: "<Cloudflare account ID>"
+    secret: cloudflare-secrets

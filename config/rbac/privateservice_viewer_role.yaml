@@ -1,0 +1,20 @@
+# permissions for end users to view privateservices.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: privateservice-viewer-role
+rules:
+- apiGroups:
+  - networking.cfargotunnel.com
+  resources:
+  - privateservices
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - networking.cfargotunnel.com
+  resources:
+  - privateservices/status
+  verbs:
+  - get

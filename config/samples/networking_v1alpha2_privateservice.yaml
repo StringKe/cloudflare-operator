@@ -1,0 +1,19 @@
+apiVersion: networking.cfargotunnel.com/v1alpha2
+kind: PrivateService
+metadata:
+  name: privateservice-sample
+  namespace: default
+spec:
+  serviceRef:
+    name: my-internal-service
+    port: 8080
+  tunnelRef:
+    kind: ClusterTunnel
+    name: clustertunnel-sample
+  virtualNetworkRef:
+    name: virtualnetwork-sample
+  protocol: tcp
+  comment: Private access to internal service
+  cloudflare:
+    accountId: "<Cloudflare account ID>"
+    secret: cloudflare-secrets

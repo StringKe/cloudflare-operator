@@ -1,0 +1,16 @@
+apiVersion: networking.cfargotunnel.com/v1alpha2
+kind: AccessIdentityProvider
+metadata:
+  name: accessidentityprovider-sample
+  namespace: default
+spec:
+  name: GitHub OAuth
+  type: github
+  config:
+    clientId: "<GitHub OAuth Client ID>"
+    clientSecretRef:
+      name: github-oauth-secret
+      key: client-secret
+  cloudflare:
+    accountId: "<Cloudflare account ID>"
+    secret: cloudflare-secrets

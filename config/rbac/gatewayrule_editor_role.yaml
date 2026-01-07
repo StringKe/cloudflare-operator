@@ -1,0 +1,24 @@
+# permissions for end users to edit gatewayrules.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: gatewayrule-editor-role
+rules:
+- apiGroups:
+  - networking.cfargotunnel.com
+  resources:
+  - gatewayrules
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - networking.cfargotunnel.com
+  resources:
+  - gatewayrules/status
+  verbs:
+  - get

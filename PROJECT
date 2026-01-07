@@ -46,6 +46,7 @@ resources:
 - api:
     crdVersion: v1
     namespaced: true
+  controller: true
   domain: cfargotunnel.com
   group: networking
   kind: ClusterTunnel
@@ -53,12 +54,11 @@ resources:
   version: v1alpha2
   webhooks:
     conversion: true
-    spoke:
-    - v1alpha1
     webhookVersion: v1
 - api:
     crdVersion: v1
     namespaced: true
+  controller: true
   domain: cfargotunnel.com
   group: networking
   kind: Tunnel
@@ -66,7 +66,128 @@ resources:
   version: v1alpha2
   webhooks:
     conversion: true
-    spoke:
-    - v1alpha1
     webhookVersion: v1
+# New v1alpha2 CRDs
+- api:
+    crdVersion: v1
+  controller: true
+  domain: cfargotunnel.com
+  group: networking
+  kind: VirtualNetwork
+  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  version: v1alpha2
+- api:
+    crdVersion: v1
+  controller: true
+  domain: cfargotunnel.com
+  group: networking
+  kind: NetworkRoute
+  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  version: v1alpha2
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: cfargotunnel.com
+  group: networking
+  kind: PrivateService
+  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  version: v1alpha2
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: cfargotunnel.com
+  group: networking
+  kind: AccessApplication
+  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  version: v1alpha2
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: cfargotunnel.com
+  group: networking
+  kind: AccessGroup
+  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  version: v1alpha2
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: cfargotunnel.com
+  group: networking
+  kind: AccessIdentityProvider
+  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  version: v1alpha2
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: cfargotunnel.com
+  group: networking
+  kind: AccessServiceToken
+  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  version: v1alpha2
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: cfargotunnel.com
+  group: networking
+  kind: GatewayRule
+  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  version: v1alpha2
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: cfargotunnel.com
+  group: networking
+  kind: GatewayList
+  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  version: v1alpha2
+- api:
+    crdVersion: v1
+  controller: true
+  domain: cfargotunnel.com
+  group: networking
+  kind: GatewayConfiguration
+  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  version: v1alpha2
+- api:
+    crdVersion: v1
+  controller: true
+  domain: cfargotunnel.com
+  group: networking
+  kind: DeviceSettingsPolicy
+  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  version: v1alpha2
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: cfargotunnel.com
+  group: networking
+  kind: DevicePostureRule
+  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  version: v1alpha2
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: cfargotunnel.com
+  group: networking
+  kind: DNSRecord
+  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  version: v1alpha2
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: cfargotunnel.com
+  group: networking
+  kind: WARPConnector
+  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  version: v1alpha2
 version: "3"

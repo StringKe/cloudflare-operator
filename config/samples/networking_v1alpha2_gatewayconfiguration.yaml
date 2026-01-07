@@ -1,0 +1,13 @@
+apiVersion: networking.cfargotunnel.com/v1alpha2
+kind: GatewayConfiguration
+metadata:
+  name: gatewayconfiguration-sample
+spec:
+  settings:
+    activityLogEnabled: true
+    tlsDecryptEnabled: false
+    blockPageEnabled: true
+    blockPageReason: "This site has been blocked by your organization."
+  cloudflare:
+    accountId: "<Cloudflare account ID>"
+    secret: cloudflare-secrets

@@ -1,0 +1,13 @@
+apiVersion: networking.cfargotunnel.com/v1alpha2
+kind: WARPConnector
+metadata:
+  name: warpconnector-sample
+  namespace: default
+spec:
+  name: my-warp-connector
+  tunnelRef:
+    kind: ClusterTunnel
+    name: clustertunnel-sample
+  cloudflare:
+    accountId: "<Cloudflare account ID>"
+    secret: cloudflare-secrets

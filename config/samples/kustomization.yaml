@@ -1,14 +1,36 @@
 ## Append samples you want in your CSV to this file as resources ##
 resources:
+# Common resources
 - v1_namespace.yaml
 - v1_secret.yaml
-- networking_v1alpha1_tunnel.yaml
 - apps_v1_deployment.yaml
 - v1_service.yaml
+# v1alpha1 CRDs (legacy)
+- networking_v1alpha1_tunnel.yaml
 - networking_v1alpha1_clustertunnel.yaml
 - networking_v1alpha1_tunnelbinding.yaml
 - networking_v1alpha1_access.yaml
 - networking_v1alpha1_accesstunnel.yaml
+# v1alpha2 Tunnel CRDs
 - networking_v1alpha2_tunnel.yaml
 - networking_v1alpha2_clustertunnel.yaml
+# v1alpha2 Network CRDs
+- networking_v1alpha2_virtualnetwork.yaml
+- networking_v1alpha2_networkroute.yaml
+- networking_v1alpha2_privateservice.yaml
+- networking_v1alpha2_warpconnector.yaml
+# v1alpha2 Access Control CRDs
+- networking_v1alpha2_accessapplication.yaml
+- networking_v1alpha2_accessgroup.yaml
+- networking_v1alpha2_accessidentityprovider.yaml
+- networking_v1alpha2_accessservicetoken.yaml
+# v1alpha2 Gateway CRDs
+- networking_v1alpha2_gatewayrule.yaml
+- networking_v1alpha2_gatewaylist.yaml
+- networking_v1alpha2_gatewayconfiguration.yaml
+# v1alpha2 Device CRDs
+- networking_v1alpha2_devicesettingspolicy.yaml
+- networking_v1alpha2_deviceposturerule.yaml
+# v1alpha2 DNS CRD
+- networking_v1alpha2_dnsrecord.yaml
 #+kubebuilder:scaffold:manifestskustomizesamples

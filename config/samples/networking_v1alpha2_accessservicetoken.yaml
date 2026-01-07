@@ -1,0 +1,11 @@
+apiVersion: networking.cfargotunnel.com/v1alpha2
+kind: AccessServiceToken
+metadata:
+  name: accessservicetoken-sample
+  namespace: default
+spec:
+  name: CI/CD Service Token
+  duration: "8760h"
+  cloudflare:
+    accountId: "<Cloudflare account ID>"
+    secret: cloudflare-secrets

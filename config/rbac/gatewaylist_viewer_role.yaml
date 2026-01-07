@@ -1,0 +1,20 @@
+# permissions for end users to view gatewaylists.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: gatewaylist-viewer-role
+rules:
+- apiGroups:
+  - networking.cfargotunnel.com
+  resources:
+  - gatewaylists
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - networking.cfargotunnel.com
+  resources:
+  - gatewaylists/status
+  verbs:
+  - get

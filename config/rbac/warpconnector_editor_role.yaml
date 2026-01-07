@@ -1,0 +1,24 @@
+# permissions for end users to edit warpconnectors.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: warpconnector-editor-role
+rules:
+- apiGroups:
+  - networking.cfargotunnel.com
+  resources:
+  - warpconnectors
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - networking.cfargotunnel.com
+  resources:
+  - warpconnectors/status
+  verbs:
+  - get

@@ -1,0 +1,21 @@
+apiVersion: networking.cfargotunnel.com/v1alpha2
+kind: DevicePostureRule
+metadata:
+  name: deviceposturerule-sample
+  namespace: default
+spec:
+  name: Require Disk Encryption
+  description: Ensure device has disk encryption enabled
+  type: disk_encryption
+  schedule: "1h"
+  expiration: "24h"
+  match:
+    - platform: windows
+    - platform: mac
+  input:
+    requireAll: true
+    checkDisks:
+      - "C:"
+  cloudflare:
+    accountId: "<Cloudflare account ID>"
+    secret: cloudflare-secrets

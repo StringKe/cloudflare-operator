@@ -1,0 +1,24 @@
+# permissions for end users to edit devicesettingspolicies.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: devicesettingspolicy-editor-role
+rules:
+- apiGroups:
+  - networking.cfargotunnel.com
+  resources:
+  - devicesettingspolicies
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - networking.cfargotunnel.com
+  resources:
+  - devicesettingspolicies/status
+  verbs:
+  - get

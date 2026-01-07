@@ -1,0 +1,26 @@
+apiVersion: networking.cfargotunnel.com/v1alpha2
+kind: DeviceSettingsPolicy
+metadata:
+  name: devicesettingspolicy-sample
+spec:
+  name: Default Device Policy
+  description: Default WARP client settings
+  default: true
+  enabled: true
+  precedence: 100
+  match: 'identity.email ends_with "@example.com"'
+  splitTunnel:
+    mode: exclude
+    entries:
+      - address: "10.0.0.0/8"
+        description: Internal network
+      - host: internal.example.com
+        description: Internal hostname
+  fallbackDomains:
+    - suffix: corp.example.com
+      description: Corporate domain
+      dnsServers:
+        - "10.0.0.53"
+  cloudflare:
+    accountId: "<Cloudflare account ID>"
+    secret: cloudflare-secrets

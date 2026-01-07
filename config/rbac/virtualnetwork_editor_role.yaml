@@ -1,0 +1,24 @@
+# permissions for end users to edit virtualnetworks.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: virtualnetwork-editor-role
+rules:
+- apiGroups:
+  - networking.cfargotunnel.com
+  resources:
+  - virtualnetworks
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - networking.cfargotunnel.com
+  resources:
+  - virtualnetworks/status
+  verbs:
+  - get

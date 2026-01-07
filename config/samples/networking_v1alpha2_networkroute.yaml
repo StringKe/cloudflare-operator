@@ -1,0 +1,15 @@
+apiVersion: networking.cfargotunnel.com/v1alpha2
+kind: NetworkRoute
+metadata:
+  name: networkroute-sample
+spec:
+  network: "10.0.0.0/8"
+  tunnelRef:
+    kind: ClusterTunnel
+    name: clustertunnel-sample
+  virtualNetworkRef:
+    name: virtualnetwork-sample
+  comment: Route for internal network
+  cloudflare:
+    accountId: "<Cloudflare account ID>"
+    secret: cloudflare-secrets

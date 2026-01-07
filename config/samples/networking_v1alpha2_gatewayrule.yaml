@@ -1,0 +1,17 @@
+apiVersion: networking.cfargotunnel.com/v1alpha2
+kind: GatewayRule
+metadata:
+  name: gatewayrule-sample
+  namespace: default
+spec:
+  name: Block Malware Sites
+  description: Block access to known malware domains
+  action: block
+  traffic: dns
+  filters:
+    - any(dns.domains[*] in $malware_domains)
+  enabled: true
+  precedence: 100
+  cloudflare:
+    accountId: "<Cloudflare account ID>"
+    secret: cloudflare-secrets

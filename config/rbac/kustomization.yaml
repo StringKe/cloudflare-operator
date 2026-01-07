@@ -23,15 +23,53 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the Project itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
-- accesstunnel_editor_role.yaml
-- accesstunnel_viewer_role.yaml
-# For each CRD, "Admin", "Editor" and "Viewer" roles are scaffolded by
-# default, aiding admins in cluster management. Those roles are
-# not used by the {{ .ProjectName }} itself. You can comment the following lines
-# if you do not want those helpers be installed with your Project.
-- clustertunnel_admin_role.yaml
-- clustertunnel_editor_role.yaml
-- clustertunnel_viewer_role.yaml
+
+# Core Tunnel CRDs
 - tunnel_admin_role.yaml
 - tunnel_editor_role.yaml
 - tunnel_viewer_role.yaml
+- clustertunnel_admin_role.yaml
+- clustertunnel_editor_role.yaml
+- clustertunnel_viewer_role.yaml
+- accesstunnel_editor_role.yaml
+- accesstunnel_viewer_role.yaml
+- tunnelbinding_editor_role.yaml
+- tunnelbinding_viewer_role.yaml
+
+# Network CRDs
+- virtualnetwork_editor_role.yaml
+- virtualnetwork_viewer_role.yaml
+- networkroute_editor_role.yaml
+- networkroute_viewer_role.yaml
+- privateservice_editor_role.yaml
+- privateservice_viewer_role.yaml
+- warpconnector_editor_role.yaml
+- warpconnector_viewer_role.yaml
+
+# Access Control CRDs
+- accessapplication_editor_role.yaml
+- accessapplication_viewer_role.yaml
+- accessgroup_editor_role.yaml
+- accessgroup_viewer_role.yaml
+- accessidentityprovider_editor_role.yaml
+- accessidentityprovider_viewer_role.yaml
+- accessservicetoken_editor_role.yaml
+- accessservicetoken_viewer_role.yaml
+
+# Gateway CRDs
+- gatewayrule_editor_role.yaml
+- gatewayrule_viewer_role.yaml
+- gatewaylist_editor_role.yaml
+- gatewaylist_viewer_role.yaml
+- gatewayconfiguration_editor_role.yaml
+- gatewayconfiguration_viewer_role.yaml
+
+# Device CRDs
+- devicesettingspolicy_editor_role.yaml
+- devicesettingspolicy_viewer_role.yaml
+- deviceposturerule_editor_role.yaml
+- deviceposturerule_viewer_role.yaml
+
+# DNS CRD
+- dnsrecord_editor_role.yaml
+- dnsrecord_viewer_role.yaml

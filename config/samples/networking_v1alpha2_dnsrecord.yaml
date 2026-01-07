@@ -1,0 +1,16 @@
+apiVersion: networking.cfargotunnel.com/v1alpha2
+kind: DNSRecord
+metadata:
+  name: dnsrecord-sample
+  namespace: default
+spec:
+  name: app.example.com
+  type: CNAME
+  content: tunnel-id.cfargotunnel.com
+  proxied: true
+  ttl: 1
+  comment: Managed by cloudflare-operator
+  cloudflare:
+    accountId: "<Cloudflare account ID>"
+    domain: example.com
+    secret: cloudflare-secrets

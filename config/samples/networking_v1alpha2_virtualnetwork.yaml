@@ -1,0 +1,11 @@
+apiVersion: networking.cfargotunnel.com/v1alpha2
+kind: VirtualNetwork
+metadata:
+  name: virtualnetwork-sample
+spec:
+  name: my-virtual-network
+  comment: Virtual network for private services
+  isDefaultNetwork: false
+  cloudflare:
+    accountId: "<Cloudflare account ID>"
+    secret: cloudflare-secrets

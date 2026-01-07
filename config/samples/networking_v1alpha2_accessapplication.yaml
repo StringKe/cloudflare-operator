@@ -1,0 +1,19 @@
+apiVersion: networking.cfargotunnel.com/v1alpha2
+kind: AccessApplication
+metadata:
+  name: accessapplication-sample
+spec:
+  name: My Protected App
+  domain: app.example.com
+  type: self_hosted
+  sessionDuration: "24h"
+  autoRedirectToIdentity: false
+  appLauncherVisible: true
+  policies:
+    - name: accessgroup-sample
+      decision: allow
+      precedence: 1
+  cloudflare:
+    accountId: "<Cloudflare account ID>"
+    domain: example.com
+    secret: cloudflare-secrets
