@@ -190,7 +190,7 @@ func (l *Loader) extractCredentialsFromSecret(secret *corev1.Secret, secretRef n
 }
 
 // extractAPIToken extracts API token from secret
-func (l *Loader) extractAPIToken(secret *corev1.Secret, secretRef networkingv1alpha2.SecretReference, result *Credentials) (*Credentials, error) {
+func (*Loader) extractAPIToken(secret *corev1.Secret, secretRef networkingv1alpha2.SecretReference, result *Credentials) (*Credentials, error) {
 	tokenKey := secretRef.APITokenKey
 	if tokenKey == "" {
 		tokenKey = "CLOUDFLARE_API_TOKEN"
@@ -203,7 +203,7 @@ func (l *Loader) extractAPIToken(secret *corev1.Secret, secretRef networkingv1al
 }
 
 // extractGlobalAPIKey extracts Global API Key and email from secret
-func (l *Loader) extractGlobalAPIKey(secret *corev1.Secret, secretRef networkingv1alpha2.SecretReference, result *Credentials) (*Credentials, error) {
+func (*Loader) extractGlobalAPIKey(secret *corev1.Secret, secretRef networkingv1alpha2.SecretReference, result *Credentials) (*Credentials, error) {
 	keyKey := secretRef.APIKeyKey
 	if keyKey == "" {
 		keyKey = "CLOUDFLARE_API_KEY"
@@ -254,7 +254,7 @@ func (l *Loader) loadFromInlineSecret(ctx context.Context, details *networkingv1
 }
 
 // tryAPIToken attempts to load API token from secret
-func (l *Loader) tryAPIToken(secret *corev1.Secret, details *networkingv1alpha2.CloudflareDetails, result *Credentials) *Credentials {
+func (*Loader) tryAPIToken(secret *corev1.Secret, details *networkingv1alpha2.CloudflareDetails, result *Credentials) *Credentials {
 	tokenKey := details.CLOUDFLARE_API_TOKEN
 	if tokenKey == "" {
 		tokenKey = "CLOUDFLARE_API_TOKEN"
@@ -269,7 +269,7 @@ func (l *Loader) tryAPIToken(secret *corev1.Secret, details *networkingv1alpha2.
 }
 
 // tryGlobalAPIKey attempts to load Global API Key from secret
-func (l *Loader) tryGlobalAPIKey(secret *corev1.Secret, details *networkingv1alpha2.CloudflareDetails, result *Credentials) *Credentials {
+func (*Loader) tryGlobalAPIKey(secret *corev1.Secret, details *networkingv1alpha2.CloudflareDetails, result *Credentials) *Credentials {
 	keyKey := details.CLOUDFLARE_API_KEY
 	if keyKey == "" {
 		keyKey = "CLOUDFLARE_API_KEY"
