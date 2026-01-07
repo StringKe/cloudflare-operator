@@ -17,7 +17,8 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  # Force lowercase for Docker image name
+  IMAGE_NAME: stringke/cloudflare-operator
 
 jobs:
   # Build installer manifest (fast, ~30s)
