@@ -28,6 +28,7 @@ import (
 	"github.com/StringKe/cloudflare-operator/internal/controller/accessidentityprovider"
 	"github.com/StringKe/cloudflare-operator/internal/controller/accessservicetoken"
 	"github.com/StringKe/cloudflare-operator/internal/controller/accesstunnel"
+	"github.com/StringKe/cloudflare-operator/internal/controller/cloudflarecredentials"
 	"github.com/StringKe/cloudflare-operator/internal/controller/deviceposturerule"
 	"github.com/StringKe/cloudflare-operator/internal/controller/devicesettingspolicy"
 	"github.com/StringKe/cloudflare-operator/internal/controller/dnsrecord"
@@ -364,6 +365,14 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WARPConnector")
+		os.Exit(1)
+	}
+	if err = (&cloudflarecredentials.Reconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("cloudflarecredentials-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "CloudflareCredentials")
 		os.Exit(1)
 	}
 	// nolint:goconst

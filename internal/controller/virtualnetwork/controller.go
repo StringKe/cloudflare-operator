@@ -26,14 +26,11 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	apitypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
-
-	"github.com/cloudflare/cloudflare-go"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
@@ -106,57 +103,25 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	return ctrl.Result{}, nil
 }
 
-// initAPIClient initializes the Cloudflare API client from the referenced Secret.
+// initAPIClient initializes the Cloudflare API client.
+// Uses the new CloudflareCredentials reference or falls back to legacy inline secrets.
 func (r *Reconciler) initAPIClient() error {
-	// Get the secret containing API credentials
-	secret := &corev1.Secret{}
-	secretName := r.vnet.Spec.Cloudflare.Secret
-	// VirtualNetwork is cluster-scoped, so we need to determine the namespace for the secret
-	// Use the namespace from the secret reference if provided in the spec
-	// For now, we'll require the secret to be in a well-known namespace or use a ConfigMap to specify it
-	// We'll use the default namespace for cluster-scoped resources based on the controller config
-
-	// Try to get secret from the cloudflare spec - for cluster-scoped resources,
-	// we need to determine namespace. Let's check if there's an accountId or use default namespace.
-	namespace := "cloudflare-operator-system" // default namespace for cluster resources
-
-	if err := r.Get(r.ctx, apitypes.NamespacedName{Name: secretName, Namespace: namespace}, secret); err != nil {
-		r.log.Error(err, "failed to get secret", "secret", secretName, "namespace", namespace)
-		r.Recorder.Event(r.vnet, corev1.EventTypeWarning, controller.EventReasonAPIError, "Failed to get API secret")
-		return err
-	}
-
-	// Extract API token or key
-	apiToken := string(secret.Data[r.vnet.Spec.Cloudflare.CLOUDFLARE_API_TOKEN])
-	apiKey := string(secret.Data[r.vnet.Spec.Cloudflare.CLOUDFLARE_API_KEY])
-
-	if apiToken == "" && apiKey == "" {
-		err := fmt.Errorf("neither API token nor API key found in secret")
-		r.log.Error(err, "missing credentials in secret")
-		return err
-	}
-
-	// Create cloudflare client
-	var cloudflareClient *cloudflare.API
-	var err error
-	if apiToken != "" {
-		cloudflareClient, err = cloudflare.NewWithAPIToken(apiToken)
-	} else {
-		cloudflareClient, err = cloudflare.New(apiKey, r.vnet.Spec.Cloudflare.Email)
-	}
+	// VirtualNetwork is cluster-scoped, use empty namespace (will default to cloudflare-operator-system)
+	api, err := cf.NewAPIClientFromDetails(r.ctx, r.Client, "", r.vnet.Spec.Cloudflare)
 	if err != nil {
-		r.log.Error(err, "failed to create cloudflare client")
+		r.log.Error(err, "failed to initialize API client")
+		r.Recorder.Event(r.vnet, corev1.EventTypeWarning, controller.EventReasonAPIError, "Failed to initialize API client: "+err.Error())
 		return err
 	}
 
-	r.cfAPI = &cf.API{
-		Log:              r.log,
-		AccountName:      r.vnet.Spec.Cloudflare.AccountName,
-		AccountId:        r.vnet.Spec.Cloudflare.AccountId,
-		ValidAccountId:   r.vnet.Status.AccountId,
-		CloudflareClient: cloudflareClient,
+	// Set additional fields from spec
+	api.AccountName = r.vnet.Spec.Cloudflare.AccountName
+	if r.vnet.Spec.Cloudflare.AccountId != "" {
+		api.AccountId = r.vnet.Spec.Cloudflare.AccountId
 	}
+	api.ValidAccountId = r.vnet.Status.AccountId
 
+	r.cfAPI = api
 	return nil
 }
 

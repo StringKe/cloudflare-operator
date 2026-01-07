@@ -85,7 +85,18 @@ func (src TunnelSpec) ConvertTo(dst *v1alpha2.TunnelSpec) error {
 	if (src.ExistingTunnel != ExistingTunnel{}) {
 		dst.ExistingTunnel = (*v1alpha2.ExistingTunnel)(&src.ExistingTunnel)
 	}
-	dst.Cloudflare = v1alpha2.CloudflareDetails(src.Cloudflare)
+	// Manually convert CloudflareDetails (v1alpha2 has additional CredentialsRef field)
+	dst.Cloudflare = v1alpha2.CloudflareDetails{
+		Domain:                              src.Cloudflare.Domain,
+		Secret:                              src.Cloudflare.Secret,
+		AccountName:                         src.Cloudflare.AccountName,
+		AccountId:                           src.Cloudflare.AccountId,
+		Email:                               src.Cloudflare.Email,
+		CLOUDFLARE_API_KEY:                  src.Cloudflare.CLOUDFLARE_API_KEY,
+		CLOUDFLARE_API_TOKEN:                src.Cloudflare.CLOUDFLARE_API_TOKEN,
+		CLOUDFLARE_TUNNEL_CREDENTIAL_FILE:   src.Cloudflare.CLOUDFLARE_TUNNEL_CREDENTIAL_FILE,
+		CLOUDFLARE_TUNNEL_CREDENTIAL_SECRET: src.Cloudflare.CLOUDFLARE_TUNNEL_CREDENTIAL_SECRET,
+	}
 	dst.FallbackTarget = src.FallbackTarget
 	dst.Protocol = src.Protocol
 	dst.OriginCaPool = src.OriginCaPool
@@ -171,7 +182,18 @@ func (dst *TunnelSpec) ConvertFrom(src v1alpha2.TunnelSpec) error {
 	if src.ExistingTunnel != nil {
 		dst.ExistingTunnel = ExistingTunnel(*src.ExistingTunnel)
 	}
-	dst.Cloudflare = CloudflareDetails(src.Cloudflare)
+	// Manually convert CloudflareDetails (v1alpha2 has additional CredentialsRef field which is not in v1alpha1)
+	dst.Cloudflare = CloudflareDetails{
+		Domain:                              src.Cloudflare.Domain,
+		Secret:                              src.Cloudflare.Secret,
+		AccountName:                         src.Cloudflare.AccountName,
+		AccountId:                           src.Cloudflare.AccountId,
+		Email:                               src.Cloudflare.Email,
+		CLOUDFLARE_API_KEY:                  src.Cloudflare.CLOUDFLARE_API_KEY,
+		CLOUDFLARE_API_TOKEN:                src.Cloudflare.CLOUDFLARE_API_TOKEN,
+		CLOUDFLARE_TUNNEL_CREDENTIAL_FILE:   src.Cloudflare.CLOUDFLARE_TUNNEL_CREDENTIAL_FILE,
+		CLOUDFLARE_TUNNEL_CREDENTIAL_SECRET: src.Cloudflare.CLOUDFLARE_TUNNEL_CREDENTIAL_SECRET,
+	}
 	dst.FallbackTarget = src.FallbackTarget
 	dst.Protocol = src.Protocol
 	dst.OriginCaPool = src.OriginCaPool

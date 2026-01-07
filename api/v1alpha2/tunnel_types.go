@@ -38,14 +38,30 @@ type NewTunnel struct {
 	Name string `json:"name,omitempty"`
 }
 
-// CloudflareDetails spec contains all the necessary parameters needed to connect to the Cloudflare API.
-type CloudflareDetails struct {
+// CloudflareCredentialsRef references a CloudflareCredentials resource
+type CloudflareCredentialsRef struct {
+	// Name of the CloudflareCredentials resource to use
 	// +kubebuilder:validation:Required
-	// Cloudflare Domain to which this tunnel belongs to
+	Name string `json:"name"`
+}
+
+// CloudflareDetails spec contains all the necessary parameters needed to connect to the Cloudflare API.
+// You can either use credentialsRef to reference a global CloudflareCredentials resource,
+// or specify inline credentials using the legacy fields (secret, accountId, etc.)
+type CloudflareDetails struct {
+	// +kubebuilder:validation:Optional
+	// CredentialsRef references a CloudflareCredentials resource for API authentication.
+	// When specified, this takes precedence over inline credential fields.
+	// This is the recommended way to configure credentials.
+	CredentialsRef *CloudflareCredentialsRef `json:"credentialsRef,omitempty"`
+
+	// +kubebuilder:validation:Optional
+	// Cloudflare Domain to which this tunnel belongs to.
+	// Required if not using credentialsRef with a defaultDomain.
 	Domain string `json:"domain,omitempty"`
 
-	// +kubebuilder:validation:Required
-	// Secret containing Cloudflare API key/token
+	// +kubebuilder:validation:Optional
+	// Secret containing Cloudflare API key/token (legacy, use credentialsRef instead)
 	Secret string `json:"secret,omitempty"`
 
 	// +kubebuilder:validation:Optional

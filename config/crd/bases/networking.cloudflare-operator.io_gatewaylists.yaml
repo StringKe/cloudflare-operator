@@ -91,19 +91,32 @@ spec:
                       cannot be both empty. If both are provided, Account ID is used
                       if valid, else falls back to Account Name.
                     type: string
+                  credentialsRef:
+                    description: |-
+                      CredentialsRef references a CloudflareCredentials resource for API authentication.
+                      When specified, this takes precedence over inline credential fields.
+                      This is the recommended way to configure credentials.
+                    properties:
+                      name:
+                        description: Name of the CloudflareCredentials resource to
+                          use
+                        type: string
+                    required:
+                    - name
+                    type: object
                   domain:
-                    description: Cloudflare Domain to which this tunnel belongs to
+                    description: |-
+                      Cloudflare Domain to which this tunnel belongs to.
+                      Required if not using credentialsRef with a defaultDomain.
                     type: string
                   email:
                     description: Email to use along with API Key for Delete operations
                       for new tunnels only, or as an alternate to API Token
                     type: string
                   secret:
-                    description: Secret containing Cloudflare API key/token
+                    description: Secret containing Cloudflare API key/token (legacy,
+                      use credentialsRef instead)
                     type: string
-                required:
-                - domain
-                - secret
                 type: object
               description:
                 description: Description is a human-readable description.

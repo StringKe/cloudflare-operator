@@ -55,6 +55,7 @@ rules:
   - accessidentityproviders
   - accessservicetokens
   - accesstunnels
+  - cloudflarecredentials
   - clustertunnels
   - deviceposturerules
   - devicesettingspolicies
@@ -83,6 +84,7 @@ rules:
   - accessgroups/finalizers
   - accessidentityproviders/finalizers
   - accessservicetokens/finalizers
+  - cloudflarecredentials/finalizers
   - clustertunnels/finalizers
   - deviceposturerules/finalizers
   - devicesettingspolicies/finalizers
@@ -106,6 +108,7 @@ rules:
   - accessidentityproviders/status
   - accessservicetokens/status
   - accesstunnels/status
+  - cloudflarecredentials/status
   - clustertunnels/status
   - deviceposturerules/status
   - devicesettingspolicies/status
