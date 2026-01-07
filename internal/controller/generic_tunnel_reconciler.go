@@ -133,15 +133,57 @@ func setupNewTunnel(r GenericTunnelReconciler) error {
 	if r.GetTunnel().GetStatus().TunnelId == "" {
 		r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal, "Creating", "Tunnel is being created")
 		r.GetCfAPI().TunnelName = r.GetTunnel().GetSpec().NewTunnel.Name
-		_, creds, err := r.GetCfAPI().CreateTunnel()
-		if err != nil {
-			r.GetLog().Error(err, "unable to create Tunnel")
-			r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning, "FailedCreate", "Unable to create Tunnel on Cloudflare")
-			return err
+
+		// Check if we already have a secret with credentials (from a previous partial reconcile)
+		secret := &corev1.Secret{}
+		secretExists := false
+		if err := r.GetClient().Get(r.GetContext(), TunnelNamespacedName(r), secret); err == nil {
+			if creds, ok := secret.Data[CredentialsJsonFilename]; ok && len(creds) > 0 {
+				secretExists = true
+				r.SetTunnelCreds(string(creds))
+				r.GetLog().Info("Found existing credentials secret, will try to adopt tunnel")
+			}
 		}
-		r.GetLog().Info("Tunnel created on Cloudflare")
-		r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal, "Created", "Tunnel created successfully on Cloudflare")
-		r.SetTunnelCreds(creds)
+
+		// Try to find existing tunnel with this name first (adoption logic)
+		existingTunnelID, err := r.GetCfAPI().GetTunnelId()
+		if err == nil && existingTunnelID != "" {
+			// Found existing tunnel, adopt it
+			r.GetLog().Info("Found existing tunnel with same name, adopting",
+				"tunnelId", existingTunnelID, "tunnelName", r.GetCfAPI().ValidTunnelName)
+			r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal,
+				"Adopted", "Adopted existing tunnel from Cloudflare")
+
+			if !secretExists {
+				// We found a tunnel but don't have credentials - this is a problem
+				// The tunnel might have been created by this operator but the secret was deleted
+				// We cannot recover without deleting and recreating the tunnel
+				err := fmt.Errorf("found existing tunnel %s but no credentials secret", existingTunnelID)
+				r.GetLog().Error(err, "Cannot adopt tunnel without credentials")
+				r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning,
+					"AdoptionFailed", "Found tunnel but missing credentials secret")
+				return err
+			}
+		} else {
+			// Create new tunnel
+			_, creds, err := r.GetCfAPI().CreateTunnel()
+			if err != nil {
+				r.GetLog().Error(err, "unable to create Tunnel")
+				r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning, "FailedCreate", "Unable to create Tunnel on Cloudflare")
+				return err
+			}
+			r.GetLog().Info("Tunnel created on Cloudflare")
+			r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal, "Created", "Tunnel created successfully on Cloudflare")
+			r.SetTunnelCreds(creds)
+		}
+
+		// CRITICAL: Update status immediately after tunnel creation/adoption
+		// This prevents duplicate creation attempts on subsequent reconciles
+		if err := updateTunnelStatusMinimal(r); err != nil {
+			r.GetLog().Error(err, "Failed to update tunnel status after creation")
+			// Don't return error - the tunnel was created, we should continue
+			// The status will be updated on the next reconcile
+		}
 	} else {
 		// Read existing secret into tunnelCreds
 		secret := &corev1.Secret{}
@@ -160,6 +202,24 @@ func setupNewTunnel(r GenericTunnelReconciler) error {
 		}
 		r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal, "FinalizerSet", "Tunnel Finalizer added")
 	}
+	return nil
+}
+
+// updateTunnelStatusMinimal updates only the essential tunnel status fields (TunnelId, TunnelName, AccountId)
+// This is called immediately after tunnel creation to prevent duplicate creation on re-reconcile
+func updateTunnelStatusMinimal(r GenericTunnelReconciler) error {
+	status := r.GetTunnel().GetStatus()
+	status.AccountId = r.GetCfAPI().ValidAccountId
+	status.TunnelId = r.GetCfAPI().ValidTunnelId
+	status.TunnelName = r.GetCfAPI().ValidTunnelName
+	r.GetTunnel().SetStatus(status)
+
+	if err := r.GetClient().Status().Update(r.GetContext(), r.GetTunnel().GetObject()); err != nil {
+		r.GetLog().Error(err, "Failed to update Tunnel status",
+			"namespace", r.GetTunnel().GetNamespace(), "name", r.GetTunnel().GetName())
+		return err
+	}
+	r.GetLog().Info("Tunnel status updated with tunnel ID", "tunnelId", status.TunnelId)
 	return nil
 }
 
@@ -291,11 +351,30 @@ func updateTunnelStatus(r GenericTunnelReconciler) error {
 		return err
 	}
 
-	if err := r.GetCfAPI().ValidateAll(); err != nil {
-		r.GetLog().Error(err, "Failed to validate API credentials")
-		r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning, "ErrSpecApi", "Error validating Cloudflare API credentials")
+	// Validate Account and Tunnel (required)
+	if _, err := r.GetCfAPI().GetAccountId(); err != nil {
+		r.GetLog().Error(err, "Failed to validate Account ID")
+		r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning,
+			"ErrSpecApi", "Error validating Cloudflare Account ID")
 		return err
 	}
+	if _, err := r.GetCfAPI().GetTunnelId(); err != nil {
+		r.GetLog().Error(err, "Failed to validate Tunnel ID")
+		r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning,
+			"ErrSpecApi", "Error validating Cloudflare Tunnel ID")
+		return err
+	}
+
+	// Validate Zone (optional - only if domain is specified)
+	// Zone is only needed for DNS record management, not for tunnel operation
+	if r.GetCfAPI().Domain != "" {
+		if _, err := r.GetCfAPI().GetZoneId(); err != nil {
+			r.GetLog().Info("Zone validation failed, DNS features may not work",
+				"domain", r.GetCfAPI().Domain, "error", err.Error())
+			// Don't return error - tunnel can still work without zone
+		}
+	}
+
 	status := r.GetTunnel().GetStatus()
 	status.AccountId = r.GetCfAPI().ValidAccountId
 	status.TunnelId = r.GetCfAPI().ValidTunnelId
@@ -303,8 +382,10 @@ func updateTunnelStatus(r GenericTunnelReconciler) error {
 	status.ZoneId = r.GetCfAPI().ValidZoneId
 	r.GetTunnel().SetStatus(status)
 	if err := r.GetClient().Status().Update(r.GetContext(), r.GetTunnel().GetObject()); err != nil {
-		r.GetLog().Error(err, "Failed to update Tunnel status", "Tunnel.Namespace", r.GetTunnel().GetNamespace(), "Tunnel.Name", r.GetTunnel().GetName())
-		r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning, "FailedStatusSet", "Failed to set Tunnel status required for operation")
+		r.GetLog().Error(err, "Failed to update Tunnel status",
+			"namespace", r.GetTunnel().GetNamespace(), "name", r.GetTunnel().GetName())
+		r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning,
+			"FailedStatusSet", "Failed to set Tunnel status required for operation")
 		return err
 	}
 	r.GetLog().Info("Tunnel status is set", "status", r.GetTunnel().GetStatus())
