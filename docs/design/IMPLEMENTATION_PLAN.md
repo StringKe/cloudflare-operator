@@ -83,7 +83,7 @@ Operator 在过渡期间同时支持两个 API Group：
 ```go
 // cmd/main.go additions
 import (
-    cfv1alpha1 "github.com/adyanth/cloudflare-operator/api/cloudflare/v1alpha1"
+    cfv1alpha1 "github.com/StringKe/cloudflare-operator/api/cloudflare/v1alpha1"
 )
 
 func init() {

@@ -32,8 +32,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	networkingv1alpha2 "github.com/adyanth/cloudflare-operator/api/v1alpha2"
-	"github.com/adyanth/cloudflare-operator/internal/clients/cf"
+	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
+	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 )
 
 const (

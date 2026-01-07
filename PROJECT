@@ -9,7 +9,7 @@ plugins:
   manifests.sdk.operatorframework.io/v2: {}
   scorecard.sdk.operatorframework.io/v2: {}
 projectName: cloudflare-operator
-repo: github.com/adyanth/cloudflare-operator
+repo: github.com/StringKe/cloudflare-operator
 resources:
 - controller: true
   domain: k8s.io
@@ -24,7 +24,7 @@ resources:
   domain: cfargotunnel.com
   group: networking
   kind: Tunnel
-  path: github.com/adyanth/cloudflare-operator/api/v1alpha1
+  path: github.com/StringKe/cloudflare-operator/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
@@ -32,7 +32,7 @@ resources:
   domain: cfargotunnel.com
   group: networking
   kind: ClusterTunnel
-  path: github.com/adyanth/cloudflare-operator/api/v1alpha1
+  path: github.com/StringKe/cloudflare-operator/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
@@ -41,7 +41,7 @@ resources:
   domain: cfargotunnel.com
   group: networking
   kind: AccessTunnel
-  path: github.com/adyanth/cloudflare-operator/api/v1alpha1
+  path: github.com/StringKe/cloudflare-operator/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
@@ -50,7 +50,7 @@ resources:
   domain: cfargotunnel.com
   group: networking
   kind: ClusterTunnel
-  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  path: github.com/StringKe/cloudflare-operator/api/v1alpha2
   version: v1alpha2
   webhooks:
     conversion: true
@@ -62,7 +62,7 @@ resources:
   domain: cfargotunnel.com
   group: networking
   kind: Tunnel
-  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  path: github.com/StringKe/cloudflare-operator/api/v1alpha2
   version: v1alpha2
   webhooks:
     conversion: true
@@ -74,7 +74,7 @@ resources:
   domain: cfargotunnel.com
   group: networking
   kind: VirtualNetwork
-  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  path: github.com/StringKe/cloudflare-operator/api/v1alpha2
   version: v1alpha2
 - api:
     crdVersion: v1
@@ -82,7 +82,7 @@ resources:
   domain: cfargotunnel.com
   group: networking
   kind: NetworkRoute
-  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  path: github.com/StringKe/cloudflare-operator/api/v1alpha2
   version: v1alpha2
 - api:
     crdVersion: v1
@@ -91,7 +91,7 @@ resources:
   domain: cfargotunnel.com
   group: networking
   kind: PrivateService
-  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  path: github.com/StringKe/cloudflare-operator/api/v1alpha2
   version: v1alpha2
 - api:
     crdVersion: v1
@@ -100,7 +100,7 @@ resources:
   domain: cfargotunnel.com
   group: networking
   kind: AccessApplication
-  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  path: github.com/StringKe/cloudflare-operator/api/v1alpha2
   version: v1alpha2
 - api:
     crdVersion: v1
@@ -109,7 +109,7 @@ resources:
   domain: cfargotunnel.com
   group: networking
   kind: AccessGroup
-  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  path: github.com/StringKe/cloudflare-operator/api/v1alpha2
   version: v1alpha2
 - api:
     crdVersion: v1
@@ -118,7 +118,7 @@ resources:
   domain: cfargotunnel.com
   group: networking
   kind: AccessIdentityProvider
-  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  path: github.com/StringKe/cloudflare-operator/api/v1alpha2
   version: v1alpha2
 - api:
     crdVersion: v1
@@ -127,7 +127,7 @@ resources:
   domain: cfargotunnel.com
   group: networking
   kind: AccessServiceToken
-  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  path: github.com/StringKe/cloudflare-operator/api/v1alpha2
   version: v1alpha2
 - api:
     crdVersion: v1
@@ -136,7 +136,7 @@ resources:
   domain: cfargotunnel.com
   group: networking
   kind: GatewayRule
-  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  path: github.com/StringKe/cloudflare-operator/api/v1alpha2
   version: v1alpha2
 - api:
     crdVersion: v1
@@ -145,7 +145,7 @@ resources:
   domain: cfargotunnel.com
   group: networking
   kind: GatewayList
-  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  path: github.com/StringKe/cloudflare-operator/api/v1alpha2
   version: v1alpha2
 - api:
     crdVersion: v1
@@ -153,7 +153,7 @@ resources:
   domain: cfargotunnel.com
   group: networking
   kind: GatewayConfiguration
-  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  path: github.com/StringKe/cloudflare-operator/api/v1alpha2
   version: v1alpha2
 - api:
     crdVersion: v1
@@ -161,7 +161,7 @@ resources:
   domain: cfargotunnel.com
   group: networking
   kind: DeviceSettingsPolicy
-  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  path: github.com/StringKe/cloudflare-operator/api/v1alpha2
   version: v1alpha2
 - api:
     crdVersion: v1
@@ -170,7 +170,7 @@ resources:
   domain: cfargotunnel.com
   group: networking
   kind: DevicePostureRule
-  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  path: github.com/StringKe/cloudflare-operator/api/v1alpha2
   version: v1alpha2
 - api:
     crdVersion: v1
@@ -179,7 +179,7 @@ resources:
   domain: cfargotunnel.com
   group: networking
   kind: DNSRecord
-  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  path: github.com/StringKe/cloudflare-operator/api/v1alpha2
   version: v1alpha2
 - api:
     crdVersion: v1
@@ -188,6 +188,6 @@ resources:
   domain: cfargotunnel.com
   group: networking
   kind: WARPConnector
-  path: github.com/adyanth/cloudflare-operator/api/v1alpha2
+  path: github.com/StringKe/cloudflare-operator/api/v1alpha2
   version: v1alpha2
 version: "3"

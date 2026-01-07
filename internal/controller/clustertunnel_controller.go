@@ -19,7 +19,7 @@ package controller
 import (
 	"context"
 
-	"github.com/adyanth/cloudflare-operator/internal/clients/cf"
+	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -30,7 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
-	networkingv1alpha2 "github.com/adyanth/cloudflare-operator/api/v1alpha2"
+	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/go-logr/logr"
 )
 

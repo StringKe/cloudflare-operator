@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/adyanth/cloudflare-operator/internal/clients/cf"
-	"github.com/adyanth/cloudflare-operator/internal/clients/k8s"
+	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
+	"github.com/StringKe/cloudflare-operator/internal/clients/k8s"
 
 	"gopkg.in/yaml.v3"
 	appsv1 "k8s.io/api/apps/v1"

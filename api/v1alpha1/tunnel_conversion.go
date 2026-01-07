@@ -27,7 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/conversion"
 	"sigs.k8s.io/yaml"
 
-	"github.com/adyanth/cloudflare-operator/api/v1alpha2"
+	"github.com/StringKe/cloudflare-operator/api/v1alpha2"
 )
 
 // Patch conversion type

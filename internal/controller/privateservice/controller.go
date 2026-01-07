@@ -35,9 +35,9 @@ import (
 
 	"github.com/cloudflare/cloudflare-go"
 
-	networkingv1alpha2 "github.com/adyanth/cloudflare-operator/api/v1alpha2"
-	"github.com/adyanth/cloudflare-operator/internal/clients/cf"
-	"github.com/adyanth/cloudflare-operator/internal/controller"
+	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
+	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
+	"github.com/StringKe/cloudflare-operator/internal/controller"
 )
 
 // Reconciler reconciles a PrivateService object

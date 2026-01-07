@@ -55,4 +55,4 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/adyanth/cloudflare-operator
+        - github.com/StringKe/cloudflare-operator

@@ -23,21 +23,21 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/adyanth/cloudflare-operator/internal/controller/accessapplication"
-	"github.com/adyanth/cloudflare-operator/internal/controller/accessgroup"
-	"github.com/adyanth/cloudflare-operator/internal/controller/accessidentityprovider"
-	"github.com/adyanth/cloudflare-operator/internal/controller/accessservicetoken"
-	"github.com/adyanth/cloudflare-operator/internal/controller/accesstunnel"
-	"github.com/adyanth/cloudflare-operator/internal/controller/deviceposturerule"
-	"github.com/adyanth/cloudflare-operator/internal/controller/devicesettingspolicy"
-	"github.com/adyanth/cloudflare-operator/internal/controller/dnsrecord"
-	"github.com/adyanth/cloudflare-operator/internal/controller/gatewayconfiguration"
-	"github.com/adyanth/cloudflare-operator/internal/controller/gatewaylist"
-	"github.com/adyanth/cloudflare-operator/internal/controller/gatewayrule"
-	"github.com/adyanth/cloudflare-operator/internal/controller/networkroute"
-	"github.com/adyanth/cloudflare-operator/internal/controller/privateservice"
-	"github.com/adyanth/cloudflare-operator/internal/controller/virtualnetwork"
-	"github.com/adyanth/cloudflare-operator/internal/controller/warpconnector"
+	"github.com/StringKe/cloudflare-operator/internal/controller/accessapplication"
+	"github.com/StringKe/cloudflare-operator/internal/controller/accessgroup"
+	"github.com/StringKe/cloudflare-operator/internal/controller/accessidentityprovider"
+	"github.com/StringKe/cloudflare-operator/internal/controller/accessservicetoken"
+	"github.com/StringKe/cloudflare-operator/internal/controller/accesstunnel"
+	"github.com/StringKe/cloudflare-operator/internal/controller/deviceposturerule"
+	"github.com/StringKe/cloudflare-operator/internal/controller/devicesettingspolicy"
+	"github.com/StringKe/cloudflare-operator/internal/controller/dnsrecord"
+	"github.com/StringKe/cloudflare-operator/internal/controller/gatewayconfiguration"
+	"github.com/StringKe/cloudflare-operator/internal/controller/gatewaylist"
+	"github.com/StringKe/cloudflare-operator/internal/controller/gatewayrule"
+	"github.com/StringKe/cloudflare-operator/internal/controller/networkroute"
+	"github.com/StringKe/cloudflare-operator/internal/controller/privateservice"
+	"github.com/StringKe/cloudflare-operator/internal/controller/virtualnetwork"
+	"github.com/StringKe/cloudflare-operator/internal/controller/warpconnector"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -55,10 +55,10 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	networkingv1alpha1 "github.com/adyanth/cloudflare-operator/api/v1alpha1"
-	networkingv1alpha2 "github.com/adyanth/cloudflare-operator/api/v1alpha2"
-	"github.com/adyanth/cloudflare-operator/internal/controller"
-	webhooknetworkingv1alpha2 "github.com/adyanth/cloudflare-operator/internal/webhook/v1alpha2"
+	networkingv1alpha1 "github.com/StringKe/cloudflare-operator/api/v1alpha1"
+	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
+	"github.com/StringKe/cloudflare-operator/internal/controller"
+	webhooknetworkingv1alpha2 "github.com/StringKe/cloudflare-operator/internal/webhook/v1alpha2"
 	// +kubebuilder:scaffold:imports
 )
 

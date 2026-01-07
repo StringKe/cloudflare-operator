@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Cloudflare Operator** - Kubernetes Operator for managing Cloudflare Tunnels and DNS records.
 
-**Fork 说明**: 本项目 fork 自 [adyanth/cloudflare-operator](https://github.com/adyanth/cloudflare-operator)，目标是扩展为完整的 **Cloudflare Zero Trust Kubernetes Operator**。
+**Fork 说明**: 本项目 fork 自 [adyanth/cloudflare-operator](https://github.com/StringKe/cloudflare-operator)，目标是扩展为完整的 **Cloudflare Zero Trust Kubernetes Operator**。
 
 **技术栈**：
 - Go 1.24
@@ -258,4 +258,4 @@ make test
 - [Cloudflare Zero Trust Docs](https://developers.cloudflare.com/cloudflare-one/)
 - [Cloudflare API Reference](https://developers.cloudflare.com/api/)
 - [cloudflare-go SDK](https://github.com/cloudflare/cloudflare-go)
-- [原始仓库](https://github.com/adyanth/cloudflare-operator)
+- [原始仓库](https://github.com/StringKe/cloudflare-operator)

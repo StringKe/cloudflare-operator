@@ -1,7 +1,7 @@
 package controller
 
 import (
-	networkingv1alpha2 "github.com/adyanth/cloudflare-operator/api/v1alpha2"
+	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 

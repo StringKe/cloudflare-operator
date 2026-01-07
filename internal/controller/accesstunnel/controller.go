@@ -21,7 +21,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/adyanth/cloudflare-operator/internal/clients/k8s"
+	"github.com/StringKe/cloudflare-operator/internal/clients/k8s"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -37,7 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
-	networkingv1alpha1 "github.com/adyanth/cloudflare-operator/api/v1alpha1"
+	networkingv1alpha1 "github.com/StringKe/cloudflare-operator/api/v1alpha1"
 	"github.com/go-logr/logr"
 )
 

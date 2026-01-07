@@ -27,7 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	networkingv1alpha2 "github.com/adyanth/cloudflare-operator/api/v1alpha2"
+	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 )
 
 // NewAPIClientFromDetails creates a new API client from CloudflareDetails.

@@ -143,7 +143,9 @@ spec:
   - name: Cloudflare Zero Trust Documentation
     url: https://developers.cloudflare.com/cloudflare-one/
   maintainers:
-  - email: peterke@qq.com
+  - email: me@adyanth.dev
+    name: adyanth
+  - email: stringke.me@gmail.com
     name: StringKe
   maturity: alpha
   provider:

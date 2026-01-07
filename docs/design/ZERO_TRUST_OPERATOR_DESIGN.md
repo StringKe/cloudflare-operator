@@ -1365,14 +1365,14 @@ cloudflare-operator/
 
 ### 10.2 社区项目参考
 
-- [adyanth/cloudflare-operator](https://github.com/adyanth/cloudflare-operator) - Tunnel 实现参考
+- [adyanth/cloudflare-operator](https://github.com/StringKe/cloudflare-operator) - Tunnel 实现参考
 - [BojanZelic/cloudflare-zero-trust-operator](https://github.com/BojanZelic/cloudflare-zero-trust-operator) - Access 实现参考
 - [STRRL/cloudflare-tunnel-ingress-controller](https://github.com/STRRL/cloudflare-tunnel-ingress-controller) - Ingress 实现参考
 
 ### 10.3 相关 PR
 
-- [PR #115](https://github.com/adyanth/cloudflare-operator/pull/115) - Access Config 支持
-- [PR #166](https://github.com/adyanth/cloudflare-operator/pull/166) - DNS FQDN 变更清理
-- [PR #158](https://github.com/adyanth/cloudflare-operator/pull/158) - Tunnel Secret Finalizer
-- [PR #140](https://github.com/adyanth/cloudflare-operator/pull/140) - Dummy TunnelBinding
-- [PR #178](https://github.com/adyanth/cloudflare-operator/pull/178) - Leader Election 修复
+- [PR #115](https://github.com/StringKe/cloudflare-operator/pull/115) - Access Config 支持
+- [PR #166](https://github.com/StringKe/cloudflare-operator/pull/166) - DNS FQDN 变更清理
+- [PR #158](https://github.com/StringKe/cloudflare-operator/pull/158) - Tunnel Secret Finalizer
+- [PR #140](https://github.com/StringKe/cloudflare-operator/pull/140) - Dummy TunnelBinding
+- [PR #178](https://github.com/StringKe/cloudflare-operator/pull/178) - Leader Election 修复

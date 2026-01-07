@@ -20,7 +20,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	networkingv1alpha2 "github.com/adyanth/cloudflare-operator/api/v1alpha2"
+	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	// TODO (user): Add any additional imports if needed
 )
 

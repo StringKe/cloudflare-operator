@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/adyanth/cloudflare-operator/internal/clients/cf"
+	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 
 	"github.com/cloudflare/cloudflare-go"
 	"github.com/go-logr/logr"
@@ -12,7 +12,7 @@ import (
 	apitypes "k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	networkingv1alpha2 "github.com/adyanth/cloudflare-operator/api/v1alpha2"
+	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 )
 
 const (

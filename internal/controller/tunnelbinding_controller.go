@@ -26,10 +26,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/adyanth/cloudflare-operator/internal/clients/cf"
+	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 
-	networkingv1alpha1 "github.com/adyanth/cloudflare-operator/api/v1alpha1"
-	networkingv1alpha2 "github.com/adyanth/cloudflare-operator/api/v1alpha2"
+	networkingv1alpha1 "github.com/StringKe/cloudflare-operator/api/v1alpha1"
+	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/go-logr/logr"
 	yaml "gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"

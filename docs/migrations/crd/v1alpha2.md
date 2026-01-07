@@ -1,6 +1,6 @@
 # Migration guidance for CRD
 
-[PR #145](https://github.com/adyanth/cloudflare-operator/pull/145) (operator release 0.13.0) introduced `v1alpha2` for Tunnel and ClusterTunnel resources.
+[PR #145](https://github.com/StringKe/cloudflare-operator/pull/145) (operator release 0.13.0) introduced `v1alpha2` for Tunnel and ClusterTunnel resources.
 
 This change removes the following fields in the `Cluster/Tunnel.Spec`:
 * `image`

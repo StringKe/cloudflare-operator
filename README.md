@@ -24,7 +24,7 @@
 [![GitHub forks](https://img.shields.io/github/forks/StringKe/cloudflare-operator)](https://github.com/StringKe/cloudflare-operator/network)
 [![GitHub stars](https://img.shields.io/github/stars/StringKe/cloudflare-operator)](https://github.com/StringKe/cloudflare-operator/stargazers)
 [![GitHub issues](https://img.shields.io/github/issues/StringKe/cloudflare-operator)](https://github.com/StringKe/cloudflare-operator/issues)
-[![Go Report Card](https://goreportcard.com/badge/github.com/adyanth/cloudflare-operator)](https://goreportcard.com/report/github.com/adyanth/cloudflare-operator)
+[![Go Report Card](https://goreportcard.com/badge/github.com/StringKe/cloudflare-operator)](https://goreportcard.com/report/github.com/StringKe/cloudflare-operator)
 
 > **_NOTE_**: This project is currently in Alpha
 
