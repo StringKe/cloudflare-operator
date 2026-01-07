@@ -16,10 +16,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Setup Go 1.24
+      - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.24
+          go-version: "1.24"
+          cache: true
       - name: Lint
         uses: golangci/golangci-lint-action@v7
         with:
