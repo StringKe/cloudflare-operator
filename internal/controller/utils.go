@@ -37,6 +37,12 @@ const (
 	tunnelDomainLabel    = "cfargotunnel.com/domain"
 	tunnelFinalizer      = "cfargotunnel.com/finalizer"
 	configmapKey         = "config.yaml"
+
+	// Annotation for tracking previous hostnames (PR #166 fix)
+	tunnelPreviousHostnamesAnnotation = "cfargotunnel.com/previous-hostnames"
+
+	// Secret finalizer prefix - append tunnel name for multi-tunnel support (PR #158 fix)
+	secretFinalizerPrefix = "cfargotunnel.com/secret-finalizer-"
 )
 
 var tunnelValidProtoMap = map[string]bool{

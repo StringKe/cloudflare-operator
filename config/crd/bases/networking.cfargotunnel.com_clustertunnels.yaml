@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.16.1
+    controller-gen.kubebuilder.io/version: v0.17.2
   name: clustertunnels.networking.cfargotunnel.com
 spec:
   group: networking.cfargotunnel.com
@@ -312,6 +312,13 @@ spec:
                   Deployment patch for the cloudflared deployment.
                   Follows https://kubernetes.io/docs/reference/kubectl/generated/kubectl_patch/
                 type: string
+              enableWarpRouting:
+                default: false
+                description: |-
+                  EnableWarpRouting enables WARP routing for this tunnel, allowing private network
+                  access via WARP clients. When enabled, the tunnel can route traffic to private
+                  IP ranges defined in NetworkRoute resources.
+                type: boolean
               existingTunnel:
                 description: |-
                   Existing tunnel object.

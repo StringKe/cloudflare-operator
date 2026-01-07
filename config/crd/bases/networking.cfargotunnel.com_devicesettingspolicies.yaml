@@ -1,0 +1,362 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  name: devicesettingspolicies.networking.cfargotunnel.com
+spec:
+  group: networking.cfargotunnel.com
+  names:
+    kind: DeviceSettingsPolicy
+    listKind: DeviceSettingsPolicyList
+    plural: devicesettingspolicies
+    shortNames:
+    - dsp
+    singular: devicesettingspolicy
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.splitTunnelMode
+      name: Mode
+      type: string
+    - jsonPath: .status.splitTunnelExcludeCount
+      name: Exclude
+      type: integer
+    - jsonPath: .status.splitTunnelIncludeCount
+      name: Include
+      type: integer
+    - jsonPath: .status.fallbackDomainsCount
+      name: Fallback
+      type: integer
+    - jsonPath: .status.state
+      name: State
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          DeviceSettingsPolicy is the Schema for the devicesettingspolicies API.
+          A DeviceSettingsPolicy configures WARP client device settings including
+          split tunnel rules and fallback domains for an account.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: DeviceSettingsPolicySpec defines the desired state of DeviceSettingsPolicy
+            properties:
+              autoPopulateFromRoutes:
+                description: |-
+                  AutoPopulateFromRoutes automatically populates split tunnel entries
+                  from NetworkRoute resources in the cluster.
+                properties:
+                  descriptionPrefix:
+                    default: 'Auto-populated from NetworkRoute: '
+                    description: DescriptionPrefix is prepended to auto-generated
+                      descriptions.
+                    type: string
+                  enabled:
+                    default: false
+                    description: Enabled enables automatic population from NetworkRoute
+                      resources.
+                    type: boolean
+                  labelSelector:
+                    description: |-
+                      LabelSelector selects which NetworkRoute resources to include.
+                      If empty, all NetworkRoute resources are included.
+                    properties:
+                      matchExpressions:
+                        description: matchExpressions is a list of label selector
+                          requirements. The requirements are ANDed.
+                        items:
+                          description: |-
+                            A label selector requirement is a selector that contains values, a key, and an operator that
+                            relates the key and values.
+                          properties:
+                            key:
+                              description: key is the label key that the selector
+                                applies to.
+                              type: string
+                            operator:
+                              description: |-
+                                operator represents a key's relationship to a set of values.
+                                Valid operators are In, NotIn, Exists and DoesNotExist.
+                              type: string
+                            values:
+                              description: |-
+                                values is an array of string values. If the operator is In or NotIn,
+                                the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                the values array must be empty. This array is replaced during a strategic
+                                merge patch.
+                              items:
+                                type: string
+                              type: array
+                              x-kubernetes-list-type: atomic
+                          required:
+                          - key
+                          - operator
+                          type: object
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      matchLabels:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                          map is equivalent to an element of matchExpressions, whose key field is "key", the
+                          operator is "In", and the values array contains only "value". The requirements are ANDed.
+                        type: object
+                    type: object
+                    x-kubernetes-map-type: atomic
+                type: object
+              cloudflare:
+                description: Cloudflare contains the Cloudflare API credentials and
+                  account information.
+                properties:
+                  CLOUDFLARE_API_KEY:
+                    default: CLOUDFLARE_API_KEY
+                    description: |-
+                      Key in the secret to use for Cloudflare API Key, defaults to CLOUDFLARE_API_KEY. Needs Email also to be provided.
+                      For Delete operations for new tunnels only, or as an alternate to API Token
+                    type: string
+                  CLOUDFLARE_API_TOKEN:
+                    default: CLOUDFLARE_API_TOKEN
+                    description: Key in the secret to use for Cloudflare API token,
+                      defaults to CLOUDFLARE_API_TOKEN
+                    type: string
+                  CLOUDFLARE_TUNNEL_CREDENTIAL_FILE:
+                    default: CLOUDFLARE_TUNNEL_CREDENTIAL_FILE
+                    description: Key in the secret to use as credentials.json for
+                      an existing tunnel, defaults to CLOUDFLARE_TUNNEL_CREDENTIAL_FILE
+                    type: string
+                  CLOUDFLARE_TUNNEL_CREDENTIAL_SECRET:
+                    default: CLOUDFLARE_TUNNEL_CREDENTIAL_SECRET
+                    description: Key in the secret to use as tunnel secret for an
+                      existing tunnel, defaults to CLOUDFLARE_TUNNEL_CREDENTIAL_SECRET
+                    type: string
+                  accountId:
+                    description: Account ID in Cloudflare. AccountId and AccountName
+                      cannot be both empty. If both are provided, Account ID is used
+                      if valid, else falls back to Account Name.
+                    type: string
+                  accountName:
+                    description: Account Name in Cloudflare. AccountName and AccountId
+                      cannot be both empty. If both are provided, Account ID is used
+                      if valid, else falls back to Account Name.
+                    type: string
+                  domain:
+                    description: Cloudflare Domain to which this tunnel belongs to
+                    type: string
+                  email:
+                    description: Email to use along with API Key for Delete operations
+                      for new tunnels only, or as an alternate to API Token
+                    type: string
+                  secret:
+                    description: Secret containing Cloudflare API key/token
+                    type: string
+                required:
+                - domain
+                - secret
+                type: object
+              fallbackDomains:
+                description: |-
+                  FallbackDomains lists domains that should use the specified DNS servers
+                  instead of Gateway DNS.
+                items:
+                  description: FallbackDomainEntry represents a fallback domain configuration.
+                  properties:
+                    description:
+                      description: Description is an optional description for this
+                        entry.
+                      maxLength: 200
+                      type: string
+                    dnsServer:
+                      description: DNSServer is a list of DNS server IPs to use for
+                        this domain.
+                      items:
+                        type: string
+                      type: array
+                    suffix:
+                      description: Suffix is the domain suffix to match (e.g., "internal.company.com").
+                      type: string
+                  required:
+                  - suffix
+                  type: object
+                type: array
+              splitTunnelExclude:
+                description: |-
+                  SplitTunnelExclude lists addresses/hosts to exclude from the tunnel.
+                  Only used when SplitTunnelMode is "exclude".
+                items:
+                  description: SplitTunnelEntry represents a single split tunnel entry.
+                  properties:
+                    address:
+                      description: |-
+                        Address is a CIDR notation for IP addresses to match.
+                        Either Address or Host must be specified.
+                      type: string
+                    description:
+                      description: Description is an optional description for this
+                        entry.
+                      maxLength: 200
+                      type: string
+                    host:
+                      description: |-
+                        Host is a domain name to match.
+                        Either Address or Host must be specified.
+                      type: string
+                  type: object
+                type: array
+              splitTunnelInclude:
+                description: |-
+                  SplitTunnelInclude lists addresses/hosts to include in the tunnel.
+                  Only used when SplitTunnelMode is "include".
+                items:
+                  description: SplitTunnelEntry represents a single split tunnel entry.
+                  properties:
+                    address:
+                      description: |-
+                        Address is a CIDR notation for IP addresses to match.
+                        Either Address or Host must be specified.
+                      type: string
+                    description:
+                      description: Description is an optional description for this
+                        entry.
+                      maxLength: 200
+                      type: string
+                    host:
+                      description: |-
+                        Host is a domain name to match.
+                        Either Address or Host must be specified.
+                      type: string
+                  type: object
+                type: array
+              splitTunnelMode:
+                default: exclude
+                description: |-
+                  SplitTunnelMode determines how split tunneling is configured.
+                  "exclude" means traffic to listed addresses bypasses the tunnel (default WARP behavior).
+                  "include" means only traffic to listed addresses goes through the tunnel.
+                enum:
+                - exclude
+                - include
+                type: string
+            required:
+            - cloudflare
+            type: object
+          status:
+            description: DeviceSettingsPolicyStatus defines the observed state of
+              DeviceSettingsPolicy
+            properties:
+              accountId:
+                description: AccountID is the Cloudflare Account ID.
+                type: string
+              autoPopulatedRoutesCount:
+                description: AutoPopulatedRoutesCount is the number of routes auto-populated
+                  from NetworkRoutes.
+                type: integer
+              conditions:
+                description: Conditions represent the latest available observations
+                  of the DeviceSettingsPolicy's state.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              fallbackDomainsCount:
+                description: FallbackDomainsCount is the number of fallback domain
+                  entries configured.
+                type: integer
+              observedGeneration:
+                description: ObservedGeneration is the most recent generation observed
+                  by the controller.
+                format: int64
+                type: integer
+              splitTunnelExcludeCount:
+                description: SplitTunnelExcludeCount is the number of exclude entries
+                  configured.
+                type: integer
+              splitTunnelIncludeCount:
+                description: SplitTunnelIncludeCount is the number of include entries
+                  configured.
+                type: integer
+              state:
+                description: State indicates the current state of the policy.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

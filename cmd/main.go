@@ -23,7 +23,21 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/adyanth/cloudflare-operator/internal/controller/accessapplication"
+	"github.com/adyanth/cloudflare-operator/internal/controller/accessgroup"
+	"github.com/adyanth/cloudflare-operator/internal/controller/accessidentityprovider"
+	"github.com/adyanth/cloudflare-operator/internal/controller/accessservicetoken"
 	"github.com/adyanth/cloudflare-operator/internal/controller/accesstunnel"
+	"github.com/adyanth/cloudflare-operator/internal/controller/deviceposturerule"
+	"github.com/adyanth/cloudflare-operator/internal/controller/devicesettingspolicy"
+	"github.com/adyanth/cloudflare-operator/internal/controller/dnsrecord"
+	"github.com/adyanth/cloudflare-operator/internal/controller/gatewayconfiguration"
+	"github.com/adyanth/cloudflare-operator/internal/controller/gatewaylist"
+	"github.com/adyanth/cloudflare-operator/internal/controller/gatewayrule"
+	"github.com/adyanth/cloudflare-operator/internal/controller/networkroute"
+	"github.com/adyanth/cloudflare-operator/internal/controller/privateservice"
+	"github.com/adyanth/cloudflare-operator/internal/controller/virtualnetwork"
+	"github.com/adyanth/cloudflare-operator/internal/controller/warpconnector"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -76,7 +90,7 @@ func main() {
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
-	flag.StringVar(&clusterResourceNamespace, "cluster-resource-namespace", "cloudflare-operator-system", "The default namespace for cluster scoped resources.")
+	flag.StringVar(&clusterResourceNamespace, "cluster-resource-namespace", "", "The default namespace for cluster scoped resources. Defaults to POD_NAMESPACE if empty.")
 	flag.BoolVar(&overwriteUnmanaged, "overwrite-unmanaged-dns", false, "Overwrite DNS records that do not have a corresponding managed TXT record, defaults to false.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", true,
 		"Enable leader election for controller manager. "+
@@ -100,6 +114,14 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	// Use POD_NAMESPACE env var if cluster-resource-namespace is not explicitly set
+	if clusterResourceNamespace == "" {
+		clusterResourceNamespace = os.Getenv("POD_NAMESPACE")
+		if clusterResourceNamespace == "" {
+			clusterResourceNamespace = "cloudflare-operator-system" // fallback default
+		}
+	}
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -244,6 +266,104 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AccessTunnel")
+		os.Exit(1)
+	}
+	if err = (&virtualnetwork.Reconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "VirtualNetwork")
+		os.Exit(1)
+	}
+	if err = (&networkroute.Reconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "NetworkRoute")
+		os.Exit(1)
+	}
+	if err = (&privateservice.Reconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "PrivateService")
+		os.Exit(1)
+	}
+	if err = (&devicesettingspolicy.Reconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "DeviceSettingsPolicy")
+		os.Exit(1)
+	}
+	if err = (&accessapplication.Reconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "AccessApplication")
+		os.Exit(1)
+	}
+	if err = (&accessgroup.AccessGroupReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "AccessGroup")
+		os.Exit(1)
+	}
+	if err = (&accessidentityprovider.AccessIdentityProviderReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "AccessIdentityProvider")
+		os.Exit(1)
+	}
+	if err = (&accessservicetoken.AccessServiceTokenReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "AccessServiceToken")
+		os.Exit(1)
+	}
+	if err = (&deviceposturerule.DevicePostureRuleReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "DevicePostureRule")
+		os.Exit(1)
+	}
+	if err = (&gatewayrule.GatewayRuleReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "GatewayRule")
+		os.Exit(1)
+	}
+	if err = (&gatewaylist.GatewayListReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "GatewayList")
+		os.Exit(1)
+	}
+	if err = (&dnsrecord.DNSRecordReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "DNSRecord")
+		os.Exit(1)
+	}
+	if err = (&gatewayconfiguration.GatewayConfigurationReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "GatewayConfiguration")
+		os.Exit(1)
+	}
+	if err = (&warpconnector.WARPConnectorReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "WARPConnector")
 		os.Exit(1)
 	}
 	// nolint:goconst

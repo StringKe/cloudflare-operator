@@ -13,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	apitypes "k8s.io/apimachinery/pkg/types"
@@ -41,6 +42,12 @@ type GenericTunnelReconciler interface {
 
 func TunnelNamespacedName(r GenericTunnelReconciler) apitypes.NamespacedName {
 	return apitypes.NamespacedName{Name: r.GetTunnel().GetName(), Namespace: r.GetTunnel().GetNamespace()}
+}
+
+// getSecretFinalizerName returns a unique finalizer name for the Secret tied to this Tunnel.
+// This supports multiple Tunnels sharing a Secret (PR #158 fix).
+func getSecretFinalizerName(tunnelName string) string {
+	return secretFinalizerPrefix + tunnelName
 }
 
 // labelsForTunnel returns the labels for selecting the resources
@@ -191,6 +198,13 @@ func cleanupTunnel(r GenericTunnelReconciler) (ctrl.Result, bool, error) {
 			r.GetLog().Info("Tunnel deleted", "tunnelID", r.GetTunnel().GetStatus().TunnelId)
 			r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal, "Deleted", "Tunnel deletion successful")
 
+			// PR #158 fix: Remove Secret finalizer BEFORE tunnel finalizer
+			// This ensures the Secret can be cleaned up properly
+			if err := removeSecretFinalizer(r); err != nil {
+				// Log but don't block - Secret might have been force-deleted
+				r.GetLog().Error(err, "Failed to remove Secret finalizer, continuing with tunnel cleanup")
+			}
+
 			// Remove tunnelFinalizer. Once all finalizers have been
 			// removed, the object will be deleted.
 			controllerutil.RemoveFinalizer(r.GetTunnel().GetObject(), tunnelFinalizer)
@@ -205,6 +219,63 @@ func cleanupTunnel(r GenericTunnelReconciler) (ctrl.Result, bool, error) {
 		}
 	}
 	return ctrl.Result{}, true, nil
+}
+
+// removeSecretFinalizer removes the tunnel-specific finalizer from the managed Secret.
+// Handles NotFound gracefully (Secret might have been force-deleted).
+// This implements PR #158 fix.
+func removeSecretFinalizer(r GenericTunnelReconciler) error {
+	// Only NewTunnel creates managed Secrets with finalizers
+	if r.GetTunnel().GetSpec().NewTunnel == nil {
+		return nil
+	}
+
+	secret := &corev1.Secret{}
+	if err := r.GetClient().Get(r.GetContext(), TunnelNamespacedName(r), secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			// Secret already deleted, nothing to do
+			r.GetLog().Info("Secret already deleted, skipping finalizer removal")
+			return nil
+		}
+		return err
+	}
+
+	finalizerName := getSecretFinalizerName(r.GetTunnel().GetName())
+	if controllerutil.ContainsFinalizer(secret, finalizerName) {
+		controllerutil.RemoveFinalizer(secret, finalizerName)
+		if err := r.GetClient().Update(r.GetContext(), secret); err != nil {
+			if apierrors.IsNotFound(err) {
+				// Secret deleted between Get and Update, that's fine
+				return nil
+			}
+			return err
+		}
+		r.GetLog().Info("Removed finalizer from Secret", "finalizer", finalizerName)
+		r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal, "SecretFinalizerRemoved", "Removed finalizer from managed Secret")
+	}
+	return nil
+}
+
+// ensureSecretFinalizer adds a tunnel-specific finalizer to the managed Secret.
+// This prevents the Secret from being deleted while the Tunnel still needs it.
+// This implements PR #158 fix.
+func ensureSecretFinalizer(r GenericTunnelReconciler) error {
+	secret := &corev1.Secret{}
+	if err := r.GetClient().Get(r.GetContext(), TunnelNamespacedName(r), secret); err != nil {
+		return err
+	}
+
+	finalizerName := getSecretFinalizerName(r.GetTunnel().GetName())
+	if !controllerutil.ContainsFinalizer(secret, finalizerName) {
+		controllerutil.AddFinalizer(secret, finalizerName)
+		if err := r.GetClient().Update(r.GetContext(), secret); err != nil {
+			r.GetLog().Error(err, "Failed to add finalizer to Secret")
+			return err
+		}
+		r.GetLog().Info("Added finalizer to Secret", "finalizer", finalizerName)
+		r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal, "SecretFinalizerSet", "Added finalizer to managed Secret")
+	}
+	return nil
 }
 
 func updateTunnelStatus(r GenericTunnelReconciler) error {
@@ -246,6 +317,13 @@ func createManagedResources(r GenericTunnelReconciler) (ctrl.Result, error) {
 	if r.GetTunnelCreds() != "" {
 		if err := k8s.Apply(r, secretForTunnel(r)); err != nil {
 			return ctrl.Result{}, err
+		}
+		// PR #158 fix: Add finalizer to Secret to prevent deletion while Tunnel needs it
+		// Only for NewTunnel (managed Secrets), not ExistingTunnel (user-provided Secrets)
+		if r.GetTunnel().GetSpec().NewTunnel != nil {
+			if err := ensureSecretFinalizer(r); err != nil {
+				return ctrl.Result{}, err
+			}
 		}
 	} else {
 		r.GetLog().Error(errors.New("empty tunnel creds"), "skipping updating the tunnel secret")
@@ -289,6 +367,9 @@ func configMapForTunnel(r GenericTunnelReconciler) *corev1.ConfigMap {
 		Metrics:       "0.0.0.0:2000",
 		NoAutoUpdate:  true,
 		OriginRequest: originRequest,
+		WarpRouting: cf.WarpRoutingConfig{
+			Enabled: r.GetTunnel().GetSpec().EnableWarpRouting,
+		},
 		Ingress: []cf.UnvalidatedIngressRule{{
 			Service: r.GetTunnel().GetSpec().FallbackTarget,
 		}},

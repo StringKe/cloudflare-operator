@@ -7,25 +7,6 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - events
-  verbs:
-  - create
-  - patch
-- apiGroups:
-  - apps
-  resources:
-  - deployments
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - ""
-  resources:
   - configmaps
   - secrets
   verbs:
@@ -39,6 +20,13 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
   - services
   verbs:
   - create
@@ -48,12 +36,9 @@ rules:
   - update
   - watch
 - apiGroups:
-  - networking.cfargotunnel.com
+  - apps
   resources:
-  - accesstunnels
-  - clustertunnels
-  - tunnelbindings
-  - tunnels
+  - deployments
   verbs:
   - create
   - delete
@@ -65,19 +50,76 @@ rules:
 - apiGroups:
   - networking.cfargotunnel.com
   resources:
-  - accesstunnels/status
-  - clustertunnels/status
-  - tunnelbindings/status
-  - tunnels/status
+  - accessapplications
+  - accessgroups
+  - accessidentityproviders
+  - accessservicetokens
+  - accesstunnels
+  - clustertunnels
+  - deviceposturerules
+  - devicesettingspolicies
+  - dnsrecords
+  - gatewayconfigurations
+  - gatewaylists
+  - gatewayrules
+  - networkroutes
+  - privateservices
+  - tunnelbindings
+  - tunnels
+  - virtualnetworks
+  - warpconnectors
   verbs:
+  - create
+  - delete
   - get
+  - list
   - patch
+  - update
+  - watch
+- apiGroups:
+  - networking.cfargotunnel.com
+  resources:
+  - accessapplications/finalizers
+  - accessgroups/finalizers
+  - accessidentityproviders/finalizers
+  - accessservicetokens/finalizers
+  - clustertunnels/finalizers
+  - deviceposturerules/finalizers
+  - devicesettingspolicies/finalizers
+  - dnsrecords/finalizers
+  - gatewayconfigurations/finalizers
+  - gatewaylists/finalizers
+  - gatewayrules/finalizers
+  - networkroutes/finalizers
+  - privateservices/finalizers
+  - tunnelbindings/finalizers
+  - tunnels/finalizers
+  - virtualnetworks/finalizers
+  - warpconnectors/finalizers
+  verbs:
   - update
 - apiGroups:
   - networking.cfargotunnel.com
   resources:
-  - clustertunnels/finalizers
-  - tunnelbindings/finalizers
-  - tunnels/finalizers
+  - accessapplications/status
+  - accessgroups/status
+  - accessidentityproviders/status
+  - accessservicetokens/status
+  - accesstunnels/status
+  - clustertunnels/status
+  - deviceposturerules/status
+  - devicesettingspolicies/status
+  - dnsrecords/status
+  - gatewayconfigurations/status
+  - gatewaylists/status
+  - gatewayrules/status
+  - networkroutes/status
+  - privateservices/status
+  - tunnelbindings/status
+  - tunnels/status
+  - virtualnetworks/status
+  - warpconnectors/status
   verbs:
+  - get
+  - patch
   - update

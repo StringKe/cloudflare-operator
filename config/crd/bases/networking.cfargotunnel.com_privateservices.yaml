@@ -1,0 +1,278 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  name: privateservices.networking.cfargotunnel.com
+spec:
+  group: networking.cfargotunnel.com
+  names:
+    kind: PrivateService
+    listKind: PrivateServiceList
+    plural: privateservices
+    shortNames:
+    - psvc
+    singular: privateservice
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.serviceRef.name
+      name: Service
+      type: string
+    - jsonPath: .spec.serviceRef.port
+      name: Port
+      type: integer
+    - jsonPath: .status.network
+      name: Network
+      type: string
+    - jsonPath: .status.state
+      name: State
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          PrivateService is the Schema for the privateservices API.
+          A PrivateService exposes a Kubernetes Service privately through a Cloudflare Tunnel,
+          making it accessible only to authenticated WARP clients.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: PrivateServiceSpec defines the desired state of PrivateService
+            properties:
+              cloudflare:
+                description: Cloudflare contains the Cloudflare API credentials and
+                  account information.
+                properties:
+                  CLOUDFLARE_API_KEY:
+                    default: CLOUDFLARE_API_KEY
+                    description: |-
+                      Key in the secret to use for Cloudflare API Key, defaults to CLOUDFLARE_API_KEY. Needs Email also to be provided.
+                      For Delete operations for new tunnels only, or as an alternate to API Token
+                    type: string
+                  CLOUDFLARE_API_TOKEN:
+                    default: CLOUDFLARE_API_TOKEN
+                    description: Key in the secret to use for Cloudflare API token,
+                      defaults to CLOUDFLARE_API_TOKEN
+                    type: string
+                  CLOUDFLARE_TUNNEL_CREDENTIAL_FILE:
+                    default: CLOUDFLARE_TUNNEL_CREDENTIAL_FILE
+                    description: Key in the secret to use as credentials.json for
+                      an existing tunnel, defaults to CLOUDFLARE_TUNNEL_CREDENTIAL_FILE
+                    type: string
+                  CLOUDFLARE_TUNNEL_CREDENTIAL_SECRET:
+                    default: CLOUDFLARE_TUNNEL_CREDENTIAL_SECRET
+                    description: Key in the secret to use as tunnel secret for an
+                      existing tunnel, defaults to CLOUDFLARE_TUNNEL_CREDENTIAL_SECRET
+                    type: string
+                  accountId:
+                    description: Account ID in Cloudflare. AccountId and AccountName
+                      cannot be both empty. If both are provided, Account ID is used
+                      if valid, else falls back to Account Name.
+                    type: string
+                  accountName:
+                    description: Account Name in Cloudflare. AccountName and AccountId
+                      cannot be both empty. If both are provided, Account ID is used
+                      if valid, else falls back to Account Name.
+                    type: string
+                  domain:
+                    description: Cloudflare Domain to which this tunnel belongs to
+                    type: string
+                  email:
+                    description: Email to use along with API Key for Delete operations
+                      for new tunnels only, or as an alternate to API Token
+                    type: string
+                  secret:
+                    description: Secret containing Cloudflare API key/token
+                    type: string
+                required:
+                - domain
+                - secret
+                type: object
+              comment:
+                description: Comment is an optional description for the private service.
+                maxLength: 500
+                type: string
+              protocol:
+                default: tcp
+                description: Protocol specifies the protocol to use for the private
+                  service.
+                enum:
+                - tcp
+                - udp
+                type: string
+              serviceRef:
+                description: |-
+                  ServiceRef references the Kubernetes Service to expose privately.
+                  The Service must be in the same namespace as the PrivateService.
+                properties:
+                  name:
+                    description: Name is the name of the Service.
+                    type: string
+                  port:
+                    description: Port is the port of the Service to expose.
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                required:
+                - name
+                - port
+                type: object
+              tunnelRef:
+                description: TunnelRef references the Tunnel or ClusterTunnel that
+                  will handle this private service.
+                properties:
+                  kind:
+                    default: ClusterTunnel
+                    description: Kind is the type of tunnel resource (Tunnel or ClusterTunnel).
+                    enum:
+                    - Tunnel
+                    - ClusterTunnel
+                    type: string
+                  name:
+                    description: Name is the name of the Tunnel or ClusterTunnel resource.
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace is the namespace of the Tunnel resource.
+                      Only applicable when Kind is Tunnel. Ignored for ClusterTunnel.
+                    type: string
+                required:
+                - kind
+                - name
+                type: object
+              virtualNetworkRef:
+                description: |-
+                  VirtualNetworkRef references the VirtualNetwork for this private service.
+                  If not specified, the default Virtual Network will be used.
+                properties:
+                  name:
+                    description: Name is the name of the VirtualNetwork resource.
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - cloudflare
+            - serviceRef
+            - tunnelRef
+            type: object
+          status:
+            description: PrivateServiceStatus defines the observed state of PrivateService
+            properties:
+              accountId:
+                description: AccountID is the Cloudflare Account ID.
+                type: string
+              conditions:
+                description: Conditions represent the latest available observations
+                  of the PrivateService's state.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              network:
+                description: Network is the CIDR that was created for this private
+                  service.
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the most recent generation observed
+                  by the controller.
+                format: int64
+                type: integer
+              serviceIP:
+                description: ServiceIP is the ClusterIP of the referenced Service.
+                type: string
+              state:
+                description: State indicates the current state of the private service.
+                type: string
+              tunnelId:
+                description: TunnelID is the Cloudflare Tunnel ID this service routes
+                  through.
+                type: string
+              tunnelName:
+                description: TunnelName is the name of the Tunnel in Cloudflare.
+                type: string
+              virtualNetworkId:
+                description: VirtualNetworkID is the Cloudflare Virtual Network ID.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

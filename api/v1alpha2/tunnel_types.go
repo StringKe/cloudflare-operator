@@ -123,6 +123,13 @@ type TunnelSpec struct {
 	// New tunnel object.
 	// NewTunnel and ExistingTunnel cannot be both empty and are mutually exclusive.
 	NewTunnel *NewTunnel `json:"newTunnel,omitempty"`
+
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default:=false
+	// EnableWarpRouting enables WARP routing for this tunnel, allowing private network
+	// access via WARP clients. When enabled, the tunnel can route traffic to private
+	// IP ranges defined in NetworkRoute resources.
+	EnableWarpRouting bool `json:"enableWarpRouting,omitempty"`
 }
 
 // TunnelStatus defines the observed state of Tunnel

@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -179,8 +180,18 @@ func (r *TunnelBindingReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{RequeueAfter: time.Second}, r.deletionLogic()
 	}
 
-	if err := r.setStatus(); err != nil {
+	removedHostnames, err := r.setStatus()
+	if err != nil {
 		return ctrl.Result{}, err
+	}
+
+	// Clean up DNS for removed hostnames (PR #166 fix)
+	if len(removedHostnames) > 0 && !r.binding.TunnelRef.DisableDNSUpdates {
+		if err := r.cleanupRemovedDNS(removedHostnames); err != nil {
+			r.log.Error(err, "Failed to cleanup some removed DNS entries")
+			r.Recorder.Event(tunnelBinding, corev1.EventTypeWarning, "PartialDNSCleanup", "Some removed DNS entries failed to clean up")
+			// Don't return error - continue with configuration
+		}
 	}
 
 	// Configure ConfigMap
@@ -198,9 +209,13 @@ func (r *TunnelBindingReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	return ctrl.Result{}, nil
 }
 
-func (r *TunnelBindingReconciler) setStatus() error {
+// setStatus updates the TunnelBinding status and returns removed hostnames for DNS cleanup.
+// This implements the PR #166 fix using annotations instead of struct fields for concurrency safety.
+func (r *TunnelBindingReconciler) setStatus() ([]string, error) {
 	status := make([]networkingv1alpha1.ServiceInfo, 0, len(r.binding.Subjects))
-	var hostnames string
+	currentHostnames := make(map[string]struct{})
+	var hostnamesStr string
+
 	for _, sub := range r.binding.Subjects {
 		hostname, target, err := r.getConfigForSubject(sub)
 		if err != nil {
@@ -209,19 +224,50 @@ func (r *TunnelBindingReconciler) setStatus() error {
 				fmt.Sprintf("Error building TunnelBinding configuration, svc: %s", sub.Name))
 		}
 		status = append(status, networkingv1alpha1.ServiceInfo{Hostname: hostname, Target: target})
-		hostnames += hostname + ","
+		currentHostnames[hostname] = struct{}{}
+		hostnamesStr += hostname + ","
+	}
+
+	// Get previous hostnames from annotation (concurrency-safe approach from PR #166 fix)
+	var previousHostnames []string
+	if r.binding.Annotations != nil {
+		if prev, ok := r.binding.Annotations[tunnelPreviousHostnamesAnnotation]; ok && prev != "" {
+			previousHostnames = strings.Split(prev, ",")
+		}
+	}
+
+	// Compute removed hostnames (previous - current)
+	var removedHostnames []string
+	for _, prev := range previousHostnames {
+		if prev == "" {
+			continue
+		}
+		if _, exists := currentHostnames[prev]; !exists {
+			removedHostnames = append(removedHostnames, prev)
+		}
 	}
 
 	r.binding.Status.Services = status
-	r.binding.Status.Hostnames = strings.TrimSuffix(hostnames, ",")
+	r.binding.Status.Hostnames = strings.TrimSuffix(hostnamesStr, ",")
 
 	if err := r.Client.Status().Update(r.ctx, r.binding); err != nil {
 		r.log.Error(err, "Failed to update TunnelBinding status", "TunnelBinding.Namespace", r.binding.Namespace, "TunnelBinding.Name", r.binding.Name)
 		r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedStatusSet", "Failed to set Tunnel status required for operation")
-		return err
+		return nil, err
 	}
-	r.log.Info("Tunnel status is set", "status", r.binding.Status)
-	return nil
+
+	// Update annotation with current hostnames for next reconcile
+	if r.binding.Annotations == nil {
+		r.binding.Annotations = make(map[string]string)
+	}
+	r.binding.Annotations[tunnelPreviousHostnamesAnnotation] = strings.TrimSuffix(hostnamesStr, ",")
+	if err := r.Update(r.ctx, r.binding); err != nil {
+		r.log.Error(err, "Failed to update previous hostnames annotation")
+		// Don't return error here - status was updated successfully, annotation update failure is not critical
+	}
+
+	r.log.Info("Tunnel status is set", "status", r.binding.Status, "removedHostnames", removedHostnames)
+	return removedHostnames, nil
 }
 
 func (r *TunnelBindingReconciler) deletionLogic() error {
@@ -395,6 +441,20 @@ func (r *TunnelBindingReconciler) deleteDNSLogic(hostname string) error {
 		}
 	}
 	return nil
+}
+
+// cleanupRemovedDNS cleans up DNS entries for hostnames that were removed from the TunnelBinding.
+// This implements PR #166 fix with proper error aggregation using errors.Join.
+func (r *TunnelBindingReconciler) cleanupRemovedDNS(hostnames []string) error {
+	var errs []error
+	for _, hostname := range hostnames {
+		r.log.Info("Cleaning up removed DNS entry", "hostname", hostname)
+		r.Recorder.Event(r.binding, corev1.EventTypeNormal, "CleaningUpDNS", fmt.Sprintf("Cleaning up DNS for removed hostname: %s", hostname))
+		if err := r.deleteDNSLogic(hostname); err != nil {
+			errs = append(errs, fmt.Errorf("cleanup %s: %w", hostname, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (r *TunnelBindingReconciler) getRelevantTunnelBindings() ([]networkingv1alpha1.TunnelBinding, error) {
