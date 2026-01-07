@@ -170,17 +170,19 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 
 		if err := r.cfAPI.DeleteTunnelRoute(network, virtualNetworkID); err != nil {
 			// P0 FIX: Check if route is already deleted (NotFound error)
-			if cf.IsNotFoundError(err) {
-				r.log.Info("Tunnel route already deleted from Cloudflare", "network", network)
-				r.Recorder.Event(r.privateService, corev1.EventTypeNormal, "AlreadyDeleted", "Tunnel route was already deleted from Cloudflare")
-			} else {
+			if !cf.IsNotFoundError(err) {
 				r.log.Error(err, "failed to delete tunnel route from Cloudflare")
-				r.Recorder.Event(r.privateService, corev1.EventTypeWarning, controller.EventReasonDeleteFailed, cf.SanitizeErrorMessage(err))
+				r.Recorder.Event(r.privateService, corev1.EventTypeWarning,
+					controller.EventReasonDeleteFailed, cf.SanitizeErrorMessage(err))
 				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 			}
+			r.log.Info("Tunnel route already deleted from Cloudflare", "network", network)
+			r.Recorder.Event(r.privateService, corev1.EventTypeNormal,
+				"AlreadyDeleted", "Tunnel route was already deleted from Cloudflare")
 		} else {
 			r.log.Info("Tunnel route deleted from Cloudflare", "network", network)
-			r.Recorder.Event(r.privateService, corev1.EventTypeNormal, controller.EventReasonDeleted, "Deleted from Cloudflare")
+			r.Recorder.Event(r.privateService, corev1.EventTypeNormal,
+				controller.EventReasonDeleted, "Deleted from Cloudflare")
 		}
 	}
 
@@ -261,7 +263,8 @@ func (r *Reconciler) reconcilePrivateService() error {
 		}
 		// Found existing - adopt it
 		r.log.Info("Found existing tunnel route, adopting", "network", existing.Network)
-		r.Recorder.Event(r.privateService, corev1.EventTypeNormal, controller.EventReasonAdopted, fmt.Sprintf("Adopted existing tunnel route: %s", existing.Network))
+		r.Recorder.Event(r.privateService, corev1.EventTypeNormal,
+			controller.EventReasonAdopted, fmt.Sprintf("Adopted route: %s", existing.Network))
 		// Update with management marker
 		return r.createPrivateService(network, tunnelID, tunnelName, virtualNetworkID, svc.Spec.ClusterIP)
 	}

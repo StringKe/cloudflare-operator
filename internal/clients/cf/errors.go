@@ -195,43 +195,30 @@ func DefaultRetryConfig() RetryConfig {
 	}
 }
 
+// calculateExponentialDelay computes exponential backoff delay capped at maxDelay
+func calculateExponentialDelay(baseDelay, maxDelay time.Duration, retryCount, maxShift int) time.Duration {
+	delay := baseDelay * time.Duration(1<<min(retryCount, maxShift))
+	if delay > maxDelay {
+		return maxDelay
+	}
+	return delay
+}
+
 // GetRequeueDelay calculates the appropriate requeue delay based on error type
 // Uses exponential backoff for temporary errors
 func GetRequeueDelay(err error, cfg RetryConfig) time.Duration {
-	if err == nil {
-		return cfg.MaxDelay // Success - use longer interval for periodic reconcile
-	}
-
-	// Auth errors should not be retried aggressively
-	if IsAuthError(err) {
+	switch {
+	case err == nil, IsAuthError(err):
 		return cfg.MaxDelay
-	}
-
-	// Rate limit errors - use longer delay
-	if IsRateLimitError(err) {
-		delay := cfg.BaseDelay * time.Duration(1<<min(cfg.RetryCount, 6)) // max 64x base delay
-		if delay > cfg.MaxDelay {
-			return cfg.MaxDelay
-		}
-		return delay
-	}
-
-	// Temporary errors - use exponential backoff
-	if IsTemporaryError(err) {
-		delay := cfg.BaseDelay * time.Duration(1<<min(cfg.RetryCount, 4)) // max 16x base delay
-		if delay > cfg.MaxDelay {
-			return cfg.MaxDelay
-		}
-		return delay
-	}
-
-	// NotFound errors during deletion should not requeue
-	if IsNotFoundError(err) {
+	case IsRateLimitError(err):
+		return calculateExponentialDelay(cfg.BaseDelay, cfg.MaxDelay, cfg.RetryCount, 6)
+	case IsTemporaryError(err):
+		return calculateExponentialDelay(cfg.BaseDelay, cfg.MaxDelay, cfg.RetryCount, 4)
+	case IsNotFoundError(err):
 		return 0
+	default:
+		return cfg.BaseDelay
 	}
-
-	// Default - use base delay
-	return cfg.BaseDelay
 }
 
 // ShouldRetry determines if an operation should be retried based on error type and retry count
@@ -253,12 +240,33 @@ func ShouldRetry(err error, retryCount int, maxRetries int) bool {
 	return true // Default to retry
 }
 
-// min returns the minimum of two integers
-func min(a, b int) int {
-	if a < b {
-		return a
+// containsSensitivePattern checks if the message contains any sensitive patterns
+func containsSensitivePattern(msg string) bool {
+	sensitivePatterns := []string{
+		"token", "secret", "password", "credential", "api_key", "apikey",
+		"bearer", "authorization",
 	}
-	return b
+	lowerMsg := strings.ToLower(msg)
+	for _, pattern := range sensitivePatterns {
+		if strings.Contains(lowerMsg, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// getGenericErrorMessage returns a generic error message based on error type
+func getGenericErrorMessage(err error) string {
+	switch {
+	case IsAuthError(err):
+		return "authentication failed - check credentials"
+	case IsRateLimitError(err):
+		return "API rate limit exceeded"
+	case IsNotFoundError(err):
+		return "resource not found"
+	default:
+		return "operation failed - check operator logs for details"
+	}
 }
 
 // SanitizeErrorMessage removes potentially sensitive information from error messages
@@ -269,33 +277,15 @@ func SanitizeErrorMessage(err error) string {
 	}
 	msg := err.Error()
 
-	// 截断过长的错误消息
+	// Truncate long error messages
 	const maxLen = 512
 	if len(msg) > maxLen {
 		msg = msg[:maxLen-3] + "..."
 	}
 
-	// 检查并移除可能的敏感信息模式
-	sensitivePatterns := []string{
-		"token", "secret", "password", "credential", "api_key", "apikey",
-		"bearer", "authorization",
-	}
-
-	lowerMsg := strings.ToLower(msg)
-	for _, pattern := range sensitivePatterns {
-		if strings.Contains(lowerMsg, pattern) {
-			// 如果消息包含敏感模式，返回通用错误
-			if IsAuthError(err) {
-				return "authentication failed - check credentials"
-			}
-			if IsRateLimitError(err) {
-				return "API rate limit exceeded"
-			}
-			if IsNotFoundError(err) {
-				return "resource not found"
-			}
-			return "operation failed - check operator logs for details"
-		}
+	// Check for sensitive patterns and return generic message if found
+	if containsSensitivePattern(msg) {
+		return getGenericErrorMessage(err)
 	}
 
 	return msg

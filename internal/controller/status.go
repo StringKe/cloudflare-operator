@@ -51,68 +51,52 @@ func NewStatusUpdater(c client.Client) *StatusUpdater {
 	}
 }
 
-// UpdateStatusWithRetry updates the status of an object with retry on conflict
-// The updateFn should modify the status fields of the object
-func (u *StatusUpdater) UpdateStatusWithRetry(ctx context.Context, obj client.Object, updateFn func()) error {
-	var lastErr error
+// refetchObject re-fetches the object to get the latest ResourceVersion
+func (u *StatusUpdater) refetchObject(ctx context.Context, obj client.Object) error {
+	if err := u.Client.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
+		return fmt.Errorf("failed to get latest object version: %w", err)
+	}
+	time.Sleep(u.RetryDelay)
+	return nil
+}
 
+// retryLoop executes fn with retry on conflict, refetching obj between attempts
+//
+//nolint:revive // retry loop complexity is inherent to the logic
+func (u *StatusUpdater) retryLoop(ctx context.Context, obj client.Object, fn func() error) error {
+	var lastErr error
 	for i := 0; i < u.MaxRetries; i++ {
 		if i > 0 {
-			// Re-fetch the object to get the latest version
-			if err := u.Client.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
-				return fmt.Errorf("failed to get latest object version: %w", err)
+			if err := u.refetchObject(ctx, obj); err != nil {
+				return err
 			}
-			time.Sleep(u.RetryDelay)
 		}
-
-		// Apply the status updates
-		updateFn()
-
-		// Try to update the status
-		if err := u.Client.Status().Update(ctx, obj); err != nil {
-			if apierrors.IsConflict(err) {
-				lastErr = err
-				continue
-			}
-			return fmt.Errorf("failed to update status: %w", err)
+		err := fn()
+		if err == nil {
+			return nil
 		}
-
-		return nil
+		if !apierrors.IsConflict(err) {
+			return err
+		}
+		lastErr = err
 	}
+	return fmt.Errorf("operation failed after %d retries: %w", u.MaxRetries, lastErr)
+}
 
-	return fmt.Errorf("failed to update status after %d retries: %w", u.MaxRetries, lastErr)
+// UpdateStatusWithRetry updates the status of an object with retry on conflict
+func (u *StatusUpdater) UpdateStatusWithRetry(ctx context.Context, obj client.Object, updateFn func()) error {
+	return u.retryLoop(ctx, obj, func() error {
+		updateFn()
+		return u.Client.Status().Update(ctx, obj)
+	})
 }
 
 // UpdateWithRetry updates an object with retry on conflict
-// The updateFn should modify the object
 func (u *StatusUpdater) UpdateWithRetry(ctx context.Context, obj client.Object, updateFn func()) error {
-	var lastErr error
-
-	for i := 0; i < u.MaxRetries; i++ {
-		if i > 0 {
-			// Re-fetch the object to get the latest version
-			if err := u.Client.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
-				return fmt.Errorf("failed to get latest object version: %w", err)
-			}
-			time.Sleep(u.RetryDelay)
-		}
-
-		// Apply the updates
+	return u.retryLoop(ctx, obj, func() error {
 		updateFn()
-
-		// Try to update
-		if err := u.Client.Update(ctx, obj); err != nil {
-			if apierrors.IsConflict(err) {
-				lastErr = err
-				continue
-			}
-			return fmt.Errorf("failed to update object: %w", err)
-		}
-
-		return nil
-	}
-
-	return fmt.Errorf("failed to update object after %d retries: %w", u.MaxRetries, lastErr)
+		return u.Client.Update(ctx, obj)
+	})
 }
 
 // SetCondition is a helper to set a condition on a resource
@@ -169,29 +153,8 @@ func IsTerminalState(state string) bool {
 // RetryOnConflict retries a function that may return a conflict error
 // This is useful for status updates where optimistic locking may fail
 func RetryOnConflict(ctx context.Context, c client.Client, obj client.Object, fn func() error) error {
-	var lastErr error
-
-	for i := 0; i < DefaultMaxRetries; i++ {
-		if i > 0 {
-			// Re-fetch the object to get the latest version
-			if err := c.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
-				return fmt.Errorf("failed to get latest object version: %w", err)
-			}
-			time.Sleep(DefaultRetryDelay)
-		}
-
-		if err := fn(); err != nil {
-			if apierrors.IsConflict(err) {
-				lastErr = err
-				continue
-			}
-			return err
-		}
-
-		return nil
-	}
-
-	return fmt.Errorf("operation failed after %d retries: %w", DefaultMaxRetries, lastErr)
+	updater := &StatusUpdater{Client: c, MaxRetries: DefaultMaxRetries, RetryDelay: DefaultRetryDelay}
+	return updater.retryLoop(ctx, obj, fn)
 }
 
 // UpdateStatusWithConflictRetry is a convenience function that updates status with retry on conflict

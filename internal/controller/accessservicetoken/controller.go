@@ -98,15 +98,14 @@ func (r *AccessServiceTokenReconciler) handleDeletion(ctx context.Context, token
 			logger.Info("Deleting Access Service Token from Cloudflare", "tokenId", token.Status.TokenID)
 			if err := apiClient.DeleteAccessServiceToken(token.Status.TokenID); err != nil {
 				// P0 FIX: Check if resource is already deleted (NotFound error)
-				if cf.IsNotFoundError(err) {
-					logger.Info("Access Service Token already deleted from Cloudflare", "tokenId", token.Status.TokenID)
-					r.Recorder.Event(token, corev1.EventTypeNormal, "AlreadyDeleted", "Token was already deleted from Cloudflare")
-				} else {
+				if !cf.IsNotFoundError(err) {
 					logger.Error(err, "Failed to delete Access Service Token from Cloudflare")
 					r.Recorder.Event(token, corev1.EventTypeWarning, "DeleteFailed",
 						fmt.Sprintf("Failed to delete from Cloudflare: %v", cf.SanitizeErrorMessage(err)))
 					return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 				}
+				logger.Info("Access Service Token already deleted from Cloudflare", "tokenId", token.Status.TokenID)
+				r.Recorder.Event(token, corev1.EventTypeNormal, "AlreadyDeleted", "Token was already deleted from Cloudflare")
 			} else {
 				r.Recorder.Event(token, corev1.EventTypeNormal, "Deleted", "Deleted from Cloudflare")
 			}
@@ -152,7 +151,8 @@ func (r *AccessServiceTokenReconciler) reconcileServiceToken(ctx context.Context
 				secretExists, hasCredentials := r.checkSecretExists(ctx, token)
 				if !secretExists || !hasCredentials {
 					// Secret doesn't exist or is missing credentials - warn user
-					warnMsg := "Adopting existing token but secret is missing or incomplete. ClientSecret cannot be recovered from Cloudflare API. Please create the secret manually or delete the Cloudflare token to recreate."
+					warnMsg := "Adopting existing token but secret is missing. " +
+						"ClientSecret cannot be recovered. Create the secret manually or delete the token."
 					logger.Info(warnMsg)
 					r.Recorder.Event(token, corev1.EventTypeWarning, "SecretMissing", warnMsg)
 					// Continue with adoption but set a warning condition
@@ -213,7 +213,9 @@ func (r *AccessServiceTokenReconciler) reconcileServiceToken(ctx context.Context
 }
 
 // checkSecretExists checks if the secret exists and has the required credentials
-func (r *AccessServiceTokenReconciler) checkSecretExists(ctx context.Context, token *networkingv1alpha2.AccessServiceToken) (exists bool, hasCredentials bool) {
+func (r *AccessServiceTokenReconciler) checkSecretExists(
+	ctx context.Context, token *networkingv1alpha2.AccessServiceToken,
+) (exists bool, hasCredentials bool) {
 	secretName := token.Spec.SecretRef.Name
 	secretNamespace := token.Spec.SecretRef.Namespace
 	if secretNamespace == "" {
@@ -283,7 +285,9 @@ func (r *AccessServiceTokenReconciler) removeSecretFinalizer(ctx context.Context
 	return nil
 }
 
-func (r *AccessServiceTokenReconciler) updateStatusWithWarning(ctx context.Context, token *networkingv1alpha2.AccessServiceToken, warning string) (ctrl.Result, error) {
+func (r *AccessServiceTokenReconciler) updateStatusWithWarning(
+	ctx context.Context, token *networkingv1alpha2.AccessServiceToken, warning string,
+) (ctrl.Result, error) {
 	// Use retry logic for status updates to handle conflicts
 	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, token, func() {
 		token.Status.State = "Warning"

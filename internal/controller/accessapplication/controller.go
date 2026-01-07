@@ -118,14 +118,13 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 	if r.app.Status.ApplicationID != "" {
 		if err := r.cfAPI.DeleteAccessApplication(r.app.Status.ApplicationID); err != nil {
 			// P0 FIX: Check if resource is already deleted (NotFound error)
-			if cf.IsNotFoundError(err) {
-				r.log.Info("AccessApplication already deleted from Cloudflare", "id", r.app.Status.ApplicationID)
-				r.Recorder.Event(r.app, corev1.EventTypeNormal, "AlreadyDeleted", "AccessApplication was already deleted from Cloudflare")
-			} else {
+			if !cf.IsNotFoundError(err) {
 				r.log.Error(err, "failed to delete AccessApplication from Cloudflare")
 				r.Recorder.Event(r.app, corev1.EventTypeWarning, controller.EventReasonDeleteFailed, cf.SanitizeErrorMessage(err))
 				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 			}
+			r.log.Info("AccessApplication already deleted from Cloudflare", "id", r.app.Status.ApplicationID)
+			r.Recorder.Event(r.app, corev1.EventTypeNormal, "AlreadyDeleted", "AccessApplication was already deleted from Cloudflare")
 		} else {
 			r.Recorder.Event(r.app, corev1.EventTypeNormal, controller.EventReasonDeleted, "Deleted from Cloudflare")
 		}

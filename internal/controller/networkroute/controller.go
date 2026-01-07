@@ -162,17 +162,19 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 
 		if err := r.cfAPI.DeleteTunnelRoute(network, virtualNetworkID); err != nil {
 			// P0 FIX: Check if route is already deleted (NotFound error)
-			if cf.IsNotFoundError(err) {
-				r.log.Info("NetworkRoute already deleted from Cloudflare", "network", network)
-				r.Recorder.Event(r.networkRoute, corev1.EventTypeNormal, "AlreadyDeleted", "NetworkRoute was already deleted from Cloudflare")
-			} else {
+			if !cf.IsNotFoundError(err) {
 				r.log.Error(err, "failed to delete NetworkRoute from Cloudflare")
-				r.Recorder.Event(r.networkRoute, corev1.EventTypeWarning, controller.EventReasonDeleteFailed, cf.SanitizeErrorMessage(err))
+				r.Recorder.Event(r.networkRoute, corev1.EventTypeWarning,
+					controller.EventReasonDeleteFailed, cf.SanitizeErrorMessage(err))
 				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 			}
+			r.log.Info("NetworkRoute already deleted from Cloudflare", "network", network)
+			r.Recorder.Event(r.networkRoute, corev1.EventTypeNormal,
+				"AlreadyDeleted", "NetworkRoute was already deleted from Cloudflare")
 		} else {
 			r.log.Info("NetworkRoute deleted from Cloudflare", "network", network)
-			r.Recorder.Event(r.networkRoute, corev1.EventTypeNormal, controller.EventReasonDeleted, "Deleted from Cloudflare")
+			r.Recorder.Event(r.networkRoute, corev1.EventTypeNormal,
+				controller.EventReasonDeleted, "Deleted from Cloudflare")
 		}
 	} else {
 		r.log.Info("No network specified, assuming route was never created or already deleted")
@@ -232,7 +234,8 @@ func (r *Reconciler) reconcileNetworkRoute() error {
 		}
 		// Found existing - adopt it and update with management marker
 		r.log.Info("Found existing NetworkRoute, adopting", "network", existing.Network, "tunnelId", existing.TunnelID)
-		r.Recorder.Event(r.networkRoute, corev1.EventTypeNormal, controller.EventReasonAdopted, fmt.Sprintf("Adopted existing NetworkRoute: %s", existing.Network))
+		r.Recorder.Event(r.networkRoute, corev1.EventTypeNormal,
+			controller.EventReasonAdopted, fmt.Sprintf("Adopted route: %s", existing.Network))
 		return r.updateNetworkRoute(network, tunnelID, tunnelName, virtualNetworkID)
 	}
 
@@ -381,7 +384,10 @@ func (r *Reconciler) setCondition(status metav1.ConditionStatus, reason, message
 // findNetworkRoutesForVirtualNetwork returns reconcile requests for NetworkRoutes
 // that reference the given VirtualNetwork
 func (r *Reconciler) findNetworkRoutesForVirtualNetwork(ctx context.Context, obj client.Object) []reconcile.Request {
-	vnet := obj.(*networkingv1alpha2.VirtualNetwork)
+	vnet, ok := obj.(*networkingv1alpha2.VirtualNetwork)
+	if !ok {
+		return nil
+	}
 	log := ctrllog.FromContext(ctx)
 
 	// List all NetworkRoutes

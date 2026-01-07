@@ -272,13 +272,27 @@ func (r *GatewayListReconciler) updateStatusSuccess(ctx context.Context, list *n
 	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 }
 
+// gatewayListReferencesConfigMap checks if a GatewayList references the given ConfigMap
+func gatewayListReferencesConfigMap(gl *networkingv1alpha2.GatewayList, cmName, cmNamespace string) bool {
+	if gl.Spec.ItemsFromConfigMap == nil {
+		return false
+	}
+	refNamespace := gl.Spec.ItemsFromConfigMap.Namespace
+	if refNamespace == "" {
+		refNamespace = "default"
+	}
+	return gl.Spec.ItemsFromConfigMap.Name == cmName && refNamespace == cmNamespace
+}
+
 // findGatewayListsForConfigMap returns a list of reconcile requests for GatewayLists
 // that reference the given ConfigMap.
 func (r *GatewayListReconciler) findGatewayListsForConfigMap(ctx context.Context, obj client.Object) []reconcile.Request {
-	configMap := obj.(*corev1.ConfigMap)
+	configMap, ok := obj.(*corev1.ConfigMap)
+	if !ok {
+		return nil
+	}
 	logger := log.FromContext(ctx)
 
-	// List all GatewayLists
 	gatewayLists := &networkingv1alpha2.GatewayListList{}
 	if err := r.List(ctx, gatewayLists); err != nil {
 		logger.Error(err, "Failed to list GatewayLists for ConfigMap watch")
@@ -286,24 +300,16 @@ func (r *GatewayListReconciler) findGatewayListsForConfigMap(ctx context.Context
 	}
 
 	var requests []reconcile.Request
-	for _, gl := range gatewayLists.Items {
-		// Check if this GatewayList references this ConfigMap
-		if gl.Spec.ItemsFromConfigMap != nil {
-			refNamespace := gl.Spec.ItemsFromConfigMap.Namespace
-			if refNamespace == "" {
-				refNamespace = "default"
-			}
-			if gl.Spec.ItemsFromConfigMap.Name == configMap.Name && refNamespace == configMap.Namespace {
-				logger.Info("ConfigMap changed, triggering GatewayList reconcile",
-					"configmap", configMap.Name,
-					"configmapNamespace", configMap.Namespace,
-					"gatewaylist", gl.Name)
-				requests = append(requests, reconcile.Request{
-					NamespacedName: types.NamespacedName{
-						Name: gl.Name,
-					},
-				})
-			}
+	for i := range gatewayLists.Items {
+		gl := &gatewayLists.Items[i]
+		if gatewayListReferencesConfigMap(gl, configMap.Name, configMap.Namespace) {
+			logger.Info("ConfigMap changed, triggering GatewayList reconcile",
+				"configmap", configMap.Name,
+				"configmapNamespace", configMap.Namespace,
+				"gatewaylist", gl.Name)
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: gl.Name},
+			})
 		}
 	}
 

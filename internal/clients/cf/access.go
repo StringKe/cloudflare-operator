@@ -481,6 +481,22 @@ type AccessServiceTokenResult struct {
 	ExpiresAt    string
 }
 
+// convertServiceToken converts a Cloudflare service token to our result type
+func (c *API) convertServiceToken(token cloudflare.AccessServiceToken) *AccessServiceTokenResult {
+	expiresAt := ""
+	if token.ExpiresAt != nil {
+		expiresAt = token.ExpiresAt.String()
+	}
+	return &AccessServiceTokenResult{
+		ID:        token.ID,
+		TokenID:   token.ID,
+		Name:      token.Name,
+		ClientID:  token.ClientID,
+		AccountID: c.ValidAccountId,
+		ExpiresAt: expiresAt,
+	}
+}
+
 // GetAccessServiceTokenByName retrieves an Access Service Token by name.
 // Returns nil if no token with the given name is found.
 func (c *API) GetAccessServiceTokenByName(name string) (*AccessServiceTokenResult, error) {
@@ -500,18 +516,7 @@ func (c *API) GetAccessServiceTokenByName(name string) (*AccessServiceTokenResul
 
 	for _, token := range tokens {
 		if token.Name == name {
-			expiresAt := ""
-			if token.ExpiresAt != nil {
-				expiresAt = token.ExpiresAt.String()
-			}
-			return &AccessServiceTokenResult{
-				ID:        token.ID,
-				TokenID:   token.ID,
-				Name:      token.Name,
-				ClientID:  token.ClientID,
-				AccountID: c.ValidAccountId,
-				ExpiresAt: expiresAt,
-			}, nil
+			return c.convertServiceToken(token), nil
 		}
 	}
 

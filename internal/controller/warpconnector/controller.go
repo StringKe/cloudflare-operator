@@ -134,12 +134,12 @@ func (r *WARPConnectorReconciler) handleDeletion(ctx context.Context, connector 
 			logger.Info("Deleting WARP Connector from Cloudflare", "connectorId", connector.Status.ConnectorID)
 			if err := apiClient.DeleteWARPConnector(connector.Status.ConnectorID); err != nil {
 				// P0 FIX: Check if connector is already deleted (NotFound error)
-				if cf.IsNotFoundError(err) {
-					logger.Info("WARP Connector already deleted from Cloudflare", "connectorId", connector.Status.ConnectorID)
-				} else {
+				if !cf.IsNotFoundError(err) {
 					logger.Error(err, "Failed to delete WARP Connector from Cloudflare")
 					return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 				}
+				logger.Info("WARP Connector already deleted from Cloudflare",
+					"connectorId", connector.Status.ConnectorID)
 			}
 		}
 
@@ -198,7 +198,9 @@ func (r *WARPConnectorReconciler) reconcileWARPConnector(ctx context.Context, co
 		}
 		if vnet.Status.VirtualNetworkId == "" {
 			logger.Info("VirtualNetwork not yet ready", "name", connector.Spec.VirtualNetworkRef.Name)
-			return r.updateStatusError(ctx, connector, fmt.Errorf("VirtualNetwork '%s' is not ready (no Cloudflare ID)", connector.Spec.VirtualNetworkRef.Name))
+			errMsg := fmt.Errorf("VirtualNetwork '%s' is not ready (no Cloudflare ID)",
+				connector.Spec.VirtualNetworkRef.Name)
+			return r.updateStatusError(ctx, connector, errMsg)
 		}
 		vnetID = vnet.Status.VirtualNetworkId
 		logger.Info("Resolved VirtualNetwork", "name", connector.Spec.VirtualNetworkRef.Name, "id", vnetID)
@@ -418,7 +420,10 @@ func (r *WARPConnectorReconciler) updateStatusSuccess(ctx context.Context, conne
 // findWARPConnectorsForVirtualNetwork returns reconcile requests for WARPConnectors
 // that reference the given VirtualNetwork
 func (r *WARPConnectorReconciler) findWARPConnectorsForVirtualNetwork(ctx context.Context, obj client.Object) []reconcile.Request {
-	vnet := obj.(*networkingv1alpha2.VirtualNetwork)
+	vnet, ok := obj.(*networkingv1alpha2.VirtualNetwork)
+	if !ok {
+		return nil
+	}
 	logger := log.FromContext(ctx)
 
 	// List all WARPConnectors

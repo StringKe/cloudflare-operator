@@ -110,7 +110,7 @@ func (c *AdoptionChecker) CheckByName(name string, lookupFn func(name string) (i
 }
 
 // ConflictError returns an error for adoption conflict
-func (c *AdoptionChecker) ConflictError(resourceType, name, existingManager string) error {
+func (*AdoptionChecker) ConflictError(resourceType, name, existingManager string) error {
 	return fmt.Errorf("%w: %s '%s' is already managed by '%s'",
 		cf.ErrResourceConflict, resourceType, name, existingManager)
 }

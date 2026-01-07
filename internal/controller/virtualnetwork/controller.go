@@ -154,17 +154,19 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 	if vnetID != "" {
 		if err := r.cfAPI.DeleteVirtualNetwork(vnetID); err != nil {
 			// P0 FIX: Check if resource is already deleted (NotFound error)
-			if cf.IsNotFoundError(err) {
-				r.log.Info("VirtualNetwork already deleted from Cloudflare", "id", vnetID)
-				r.Recorder.Event(r.vnet, corev1.EventTypeNormal, "AlreadyDeleted", "VirtualNetwork was already deleted from Cloudflare")
-			} else {
+			if !cf.IsNotFoundError(err) {
 				r.log.Error(err, "failed to delete VirtualNetwork from Cloudflare")
-				r.Recorder.Event(r.vnet, corev1.EventTypeWarning, controller.EventReasonDeleteFailed, cf.SanitizeErrorMessage(err))
+				r.Recorder.Event(r.vnet, corev1.EventTypeWarning,
+					controller.EventReasonDeleteFailed, cf.SanitizeErrorMessage(err))
 				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 			}
+			r.log.Info("VirtualNetwork already deleted from Cloudflare", "id", vnetID)
+			r.Recorder.Event(r.vnet, corev1.EventTypeNormal,
+				"AlreadyDeleted", "VirtualNetwork was already deleted from Cloudflare")
 		} else {
 			r.log.Info("VirtualNetwork deleted from Cloudflare", "id", vnetID)
-			r.Recorder.Event(r.vnet, corev1.EventTypeNormal, controller.EventReasonDeleted, "Deleted from Cloudflare")
+			r.Recorder.Event(r.vnet, corev1.EventTypeNormal,
+				controller.EventReasonDeleted, "Deleted from Cloudflare")
 		}
 	}
 
@@ -203,7 +205,8 @@ func (r *Reconciler) reconcileVirtualNetwork() error {
 		}
 		// Found existing - adopt it and update with management marker
 		r.log.Info("Found existing VirtualNetwork, adopting", "id", existing.ID, "name", existing.Name)
-		r.Recorder.Event(r.vnet, corev1.EventTypeNormal, controller.EventReasonAdopted, fmt.Sprintf("Adopted existing VirtualNetwork: %s", existing.ID))
+		r.Recorder.Event(r.vnet, corev1.EventTypeNormal,
+			controller.EventReasonAdopted, fmt.Sprintf("Adopted VirtualNetwork: %s", existing.ID))
 		return r.updateVirtualNetwork(vnetName)
 	}
 
