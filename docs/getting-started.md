@@ -14,7 +14,7 @@ To install this operator, you need the following:
 
 ### Declarative installation (recommended)
 
-1. Find the [latest tag for cloudflare-operator.](https://github.com/adyanth/cloudflare-operator/tags)
+1. Find the [latest tag for cloudflare-operator.](https://github.com/StringKe/cloudflare-operator/tags)
 1. Create a kustomization.yaml in your repository that looks like
    ```yaml
    apiVersion: kustomize.config.k8s.io/v1beta1
@@ -22,7 +22,7 @@ To install this operator, you need the following:
    namespace: cloudflare-operator-system
    resources:
      # ensure you update the ref in this line to the latest version
-     - https://github.com/adyanth/cloudflare-operator.git/config/default?ref=v0.13.1
+     - https://github.com/StringKe/cloudflare-operator.git/config/default?ref=v0.13.1
    ```
 
 1. deploy the application from the directory you placed the kustomization.yaml in
@@ -41,10 +41,10 @@ For a one-off installation, you can use any of the following methods
 #### Install a specific tag
 
 In general, one should pick a specific tag.
-[You can find the latest tag here](https://github.com/adyanth/cloudflare-operator/tags)
+[You can find the latest tag here](https://github.com/StringKe/cloudflare-operator/tags)
 
 ```bash
-kubectl apply -k 'https://github.com/adyanth/cloudflare-operator.git//config/default?ref=v0.13.1'
+kubectl apply -k 'https://github.com/StringKe/cloudflare-operator.git//config/default?ref=v0.13.1'
 ```
 
 #### Install the latest version
@@ -53,8 +53,8 @@ To install the latest version without checking tags, you can use either of the f
 This will deploy a point in time version of the operator.
 
 ```bash
-kubectl apply -k 'https://github.com/adyanth/cloudflare-operator.git/config/default?ref=main'
-kubectl apply -k 'https://github.com/adyanth/cloudflare-operator/config/default'
+kubectl apply -k 'https://github.com/StringKe/cloudflare-operator.git/config/default?ref=main'
+kubectl apply -k 'https://github.com/StringKe/cloudflare-operator/config/default'
 ```
 
 

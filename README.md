@@ -1,7 +1,7 @@
 <h1 align=center>Cloudflare Operator</h1>
 
 <div align="center">
-  <a href="https://github.com/adyanth/cloudflare-operator">
+  <a href="https://github.com/StringKe/cloudflare-operator">
     <img src="docs/images/CloudflareOperatorLogo.png" alt="Logo" height="250">
   </a>
   <br />
@@ -10,20 +10,20 @@
     A Kubernetes Operator for Cloudflare Zero Trust: Tunnels, Access, Gateway, and Device Management
     <br />
     <br />
-    <a href="https://github.com/adyanth/cloudflare-operator/blob/main/docs/getting-started.md"><strong>Getting Started Guide »</strong></a>
+    <a href="https://github.com/StringKe/cloudflare-operator/blob/main/docs/getting-started.md"><strong>Getting Started Guide »</strong></a>
     <br />
     <br />
-    <a href="https://github.com/adyanth/cloudflare-operator/issues">Report Bug</a>
+    <a href="https://github.com/StringKe/cloudflare-operator/issues">Report Bug</a>
     ·
-    <a href="https://github.com/adyanth/cloudflare-operator/issues">Request Feature</a>
+    <a href="https://github.com/StringKe/cloudflare-operator/issues">Request Feature</a>
     <br />
   </p>
 </div>
 
-[![GitHub license](https://img.shields.io/github/license/adyanth/cloudflare-operator?color=brightgreen)](https://github.com/adyanth/cloudflare-operator/blob/main/LICENSE)
-[![GitHub forks](https://img.shields.io/github/forks/adyanth/cloudflare-operator)](https://github.com/adyanth/cloudflare-operator/network)
-[![GitHub stars](https://img.shields.io/github/stars/adyanth/cloudflare-operator)](https://github.com/adyanth/cloudflare-operator/stargazers)
-[![GitHub issues](https://img.shields.io/github/issues/adyanth/cloudflare-operator)](https://github.com/adyanth/cloudflare-operator/issues)
+[![GitHub license](https://img.shields.io/github/license/StringKe/cloudflare-operator?color=brightgreen)](https://github.com/StringKe/cloudflare-operator/blob/main/LICENSE)
+[![GitHub forks](https://img.shields.io/github/forks/StringKe/cloudflare-operator)](https://github.com/StringKe/cloudflare-operator/network)
+[![GitHub stars](https://img.shields.io/github/stars/StringKe/cloudflare-operator)](https://github.com/StringKe/cloudflare-operator/stargazers)
+[![GitHub issues](https://img.shields.io/github/issues/StringKe/cloudflare-operator)](https://github.com/StringKe/cloudflare-operator/issues)
 [![Go Report Card](https://goreportcard.com/badge/github.com/adyanth/cloudflare-operator)](https://goreportcard.com/report/github.com/adyanth/cloudflare-operator)
 
 > **_NOTE_**: This project is currently in Alpha
@@ -142,10 +142,10 @@ flowchart TB
 
 ```bash
 # Install CRDs
-kubectl apply -f https://github.com/adyanth/cloudflare-operator/releases/latest/download/cloudflare-operator.crds.yaml
+kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator.crds.yaml
 
 # Install operator
-kubectl apply -f https://github.com/adyanth/cloudflare-operator/releases/latest/download/cloudflare-operator.yaml
+kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator.yaml
 ```
 
 ### Create a Tunnel
