@@ -28,10 +28,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
-	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/client-go/tools/record"
+
+	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 )
 
 // TunnelReconciler reconciles a Tunnel object

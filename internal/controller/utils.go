@@ -80,7 +80,7 @@ func getAPIDetails(
 	// Read secret for API Key
 	cfAPIKeyB64, okApiKey := cfSecret.Data[tunnelSpec.Cloudflare.CLOUDFLARE_API_KEY]
 
-	if !(okApiKey || okApiToken) {
+	if !okApiKey && !okApiToken {
 		err := fmt.Errorf("neither %s not %s found in secret %s, cannot construct client", tunnelSpec.Cloudflare.CLOUDFLARE_API_TOKEN, tunnelSpec.Cloudflare.CLOUDFLARE_API_KEY, tunnelSpec.Cloudflare.Secret)
 		log.Error(err, "key not found in secret")
 		return nil, nil, err

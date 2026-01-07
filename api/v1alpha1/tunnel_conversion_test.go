@@ -4,12 +4,13 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/StringKe/cloudflare-operator/api/v1alpha1"
-	"github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/StringKe/cloudflare-operator/api/v1alpha1"
+	"github.com/StringKe/cloudflare-operator/api/v1alpha2"
 )
 
 var sampleFilledOldTunnel = v1alpha1.Tunnel{
