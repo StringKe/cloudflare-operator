@@ -2,34 +2,27 @@
 # This file is used to track the info used to scaffold your project
 # and allow the plugins properly work.
 # More info: https://book.kubebuilder.io/reference/project-config.html
-domain: cfargotunnel.com
+domain: cloudflare-operator.io
 layout:
 - go.kubebuilder.io/v4
 plugins:
   manifests.sdk.operatorframework.io/v2: {}
   scorecard.sdk.operatorframework.io/v2: {}
-projectName: cloudflare-operator
+projectName: cf-operator-new
 repo: github.com/StringKe/cloudflare-operator
 resources:
-- controller: true
-  domain: k8s.io
-  group: networking
-  kind: Service
-  path: k8s.io/api/core/v1
-  version: v1
 - api:
     crdVersion: v1
     namespaced: true
-  controller: true
-  domain: cfargotunnel.com
+  domain: cloudflare-operator.io
   group: networking
   kind: Tunnel
   path: github.com/StringKe/cloudflare-operator/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
-  controller: true
-  domain: cfargotunnel.com
+    namespaced: true
+  domain: cloudflare-operator.io
   group: networking
   kind: ClusterTunnel
   path: github.com/StringKe/cloudflare-operator/api/v1alpha1
@@ -37,8 +30,7 @@ resources:
 - api:
     crdVersion: v1
     namespaced: true
-  controller: true
-  domain: cfargotunnel.com
+  domain: cloudflare-operator.io
   group: networking
   kind: AccessTunnel
   path: github.com/StringKe/cloudflare-operator/api/v1alpha1
@@ -47,39 +39,34 @@ resources:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: cfargotunnel.com
-  group: networking
-  kind: ClusterTunnel
-  path: github.com/StringKe/cloudflare-operator/api/v1alpha2
-  version: v1alpha2
-  webhooks:
-    conversion: true
-    webhookVersion: v1
-- api:
-    crdVersion: v1
-    namespaced: true
-  controller: true
-  domain: cfargotunnel.com
+  domain: cloudflare-operator.io
   group: networking
   kind: Tunnel
   path: github.com/StringKe/cloudflare-operator/api/v1alpha2
   version: v1alpha2
-  webhooks:
-    conversion: true
-    webhookVersion: v1
-# New v1alpha2 CRDs
 - api:
     crdVersion: v1
+    namespaced: true
   controller: true
-  domain: cfargotunnel.com
+  domain: cloudflare-operator.io
+  group: networking
+  kind: ClusterTunnel
+  path: github.com/StringKe/cloudflare-operator/api/v1alpha2
+  version: v1alpha2
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: cloudflare-operator.io
   group: networking
   kind: VirtualNetwork
   path: github.com/StringKe/cloudflare-operator/api/v1alpha2
   version: v1alpha2
 - api:
     crdVersion: v1
+    namespaced: true
   controller: true
-  domain: cfargotunnel.com
+  domain: cloudflare-operator.io
   group: networking
   kind: NetworkRoute
   path: github.com/StringKe/cloudflare-operator/api/v1alpha2
@@ -88,7 +75,7 @@ resources:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: cfargotunnel.com
+  domain: cloudflare-operator.io
   group: networking
   kind: PrivateService
   path: github.com/StringKe/cloudflare-operator/api/v1alpha2
@@ -97,7 +84,16 @@ resources:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: cfargotunnel.com
+  domain: cloudflare-operator.io
+  group: networking
+  kind: WARPConnector
+  path: github.com/StringKe/cloudflare-operator/api/v1alpha2
+  version: v1alpha2
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: cloudflare-operator.io
   group: networking
   kind: AccessApplication
   path: github.com/StringKe/cloudflare-operator/api/v1alpha2
@@ -106,7 +102,7 @@ resources:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: cfargotunnel.com
+  domain: cloudflare-operator.io
   group: networking
   kind: AccessGroup
   path: github.com/StringKe/cloudflare-operator/api/v1alpha2
@@ -115,7 +111,7 @@ resources:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: cfargotunnel.com
+  domain: cloudflare-operator.io
   group: networking
   kind: AccessIdentityProvider
   path: github.com/StringKe/cloudflare-operator/api/v1alpha2
@@ -124,7 +120,7 @@ resources:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: cfargotunnel.com
+  domain: cloudflare-operator.io
   group: networking
   kind: AccessServiceToken
   path: github.com/StringKe/cloudflare-operator/api/v1alpha2
@@ -133,7 +129,7 @@ resources:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: cfargotunnel.com
+  domain: cloudflare-operator.io
   group: networking
   kind: GatewayRule
   path: github.com/StringKe/cloudflare-operator/api/v1alpha2
@@ -142,23 +138,25 @@ resources:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: cfargotunnel.com
+  domain: cloudflare-operator.io
   group: networking
   kind: GatewayList
   path: github.com/StringKe/cloudflare-operator/api/v1alpha2
   version: v1alpha2
 - api:
     crdVersion: v1
+    namespaced: true
   controller: true
-  domain: cfargotunnel.com
+  domain: cloudflare-operator.io
   group: networking
   kind: GatewayConfiguration
   path: github.com/StringKe/cloudflare-operator/api/v1alpha2
   version: v1alpha2
 - api:
     crdVersion: v1
+    namespaced: true
   controller: true
-  domain: cfargotunnel.com
+  domain: cloudflare-operator.io
   group: networking
   kind: DeviceSettingsPolicy
   path: github.com/StringKe/cloudflare-operator/api/v1alpha2
@@ -167,7 +165,7 @@ resources:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: cfargotunnel.com
+  domain: cloudflare-operator.io
   group: networking
   kind: DevicePostureRule
   path: github.com/StringKe/cloudflare-operator/api/v1alpha2
@@ -176,18 +174,9 @@ resources:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: cfargotunnel.com
+  domain: cloudflare-operator.io
   group: networking
   kind: DNSRecord
-  path: github.com/StringKe/cloudflare-operator/api/v1alpha2
-  version: v1alpha2
-- api:
-    crdVersion: v1
-    namespaced: true
-  controller: true
-  domain: cfargotunnel.com
-  group: networking
-  kind: WARPConnector
   path: github.com/StringKe/cloudflare-operator/api/v1alpha2
   version: v1alpha2
 version: "3"
