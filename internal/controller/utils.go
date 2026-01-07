@@ -2,9 +2,10 @@ package controller
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
+	"github.com/StringKe/cloudflare-operator/internal/credentials"
 
 	"github.com/cloudflare/cloudflare-go"
 	"github.com/go-logr/logr"
@@ -55,6 +56,9 @@ var tunnelValidProtoMap = map[string]bool{
 	tunnelProtoUDP:   true,
 }
 
+// getAPIDetails loads Cloudflare API credentials and returns an API client.
+// It supports both new CloudflareCredentials references and legacy inline secrets.
+// For tunnel controllers, it also returns the secret for tunnel credential file access.
 func getAPIDetails(
 	ctx context.Context,
 	c client.Client,
@@ -67,40 +71,29 @@ func getAPIDetails(
 	*corev1.Secret,
 	error,
 ) {
-	// Get secret containing API token
-	cfSecret := &corev1.Secret{}
-	if err := c.Get(ctx, apitypes.NamespacedName{Name: tunnelSpec.Cloudflare.Secret, Namespace: namespace}, cfSecret); err != nil {
-		log.Error(err, "secret not found", "secret", tunnelSpec.Cloudflare.Secret)
-		return &cf.API{}, &corev1.Secret{}, err
-	}
+	// Create credentials loader
+	loader := credentials.NewLoader(c, log)
 
-	// Read secret for API Token
-	cfAPITokenB64, okApiToken := cfSecret.Data[tunnelSpec.Cloudflare.CLOUDFLARE_API_TOKEN]
-
-	// Read secret for API Key
-	cfAPIKeyB64, okApiKey := cfSecret.Data[tunnelSpec.Cloudflare.CLOUDFLARE_API_KEY]
-
-	if !okApiKey && !okApiToken {
-		err := fmt.Errorf("neither %s not %s found in secret %s, cannot construct client", tunnelSpec.Cloudflare.CLOUDFLARE_API_TOKEN, tunnelSpec.Cloudflare.CLOUDFLARE_API_KEY, tunnelSpec.Cloudflare.Secret)
-		log.Error(err, "key not found in secret")
+	// Load credentials using the unified loader
+	creds, err := loader.LoadFromCloudflareDetails(ctx, &tunnelSpec.Cloudflare, namespace)
+	if err != nil {
+		log.Error(err, "failed to load credentials")
 		return nil, nil, err
 	}
 
-	apiToken := string(cfAPITokenB64)
-	apiKey := string(cfAPIKeyB64)
-	apiEmail := tunnelSpec.Cloudflare.Email
-
-	cloudflareClient, err := getCloudflareClient(apiKey, apiEmail, apiToken)
+	// Create Cloudflare client based on auth type
+	cloudflareClient, err := createCloudflareClientFromCreds(creds)
 	if err != nil {
-		log.Error(err, "error initializing cloudflare api client", "client", cloudflareClient)
-		return &cf.API{}, &corev1.Secret{}, err
+		log.Error(err, "error initializing cloudflare api client")
+		return nil, nil, err
 	}
 
+	// Build API struct
 	cfAPI := &cf.API{
 		Log:              log,
 		AccountName:      tunnelSpec.Cloudflare.AccountName,
-		AccountId:        tunnelSpec.Cloudflare.AccountId,
-		Domain:           tunnelSpec.Cloudflare.Domain,
+		AccountId:        creds.AccountID,
+		Domain:           creds.Domain,
 		ValidAccountId:   tunnelStatus.AccountId,
 		ValidTunnelId:    tunnelStatus.TunnelId,
 		ValidTunnelName:  tunnelStatus.TunnelName,
@@ -108,14 +101,66 @@ func getAPIDetails(
 		CloudflareClient: cloudflareClient,
 	}
 
+	// Override with spec values if provided
+	if tunnelSpec.Cloudflare.AccountId != "" {
+		cfAPI.AccountId = tunnelSpec.Cloudflare.AccountId
+	}
+	if tunnelSpec.Cloudflare.Domain != "" {
+		cfAPI.Domain = tunnelSpec.Cloudflare.Domain
+	}
+
+	// Get the tunnel credential secret (needed for existing tunnel credentials)
+	// This is the secret that contains CLOUDFLARE_TUNNEL_CREDENTIAL_SECRET/FILE
+	cfSecret := &corev1.Secret{}
+	if tunnelSpec.Cloudflare.Secret != "" {
+		// Legacy mode: secret is specified in spec
+		if err := c.Get(ctx, apitypes.NamespacedName{Name: tunnelSpec.Cloudflare.Secret, Namespace: namespace}, cfSecret); err != nil {
+			log.V(1).Info("tunnel credential secret not found, this is fine for new tunnels", "secret", tunnelSpec.Cloudflare.Secret)
+			// Don't return error here - secret might not be needed for new tunnels
+		}
+	} else if tunnelSpec.Cloudflare.CredentialsRef != nil {
+		// New mode: get the secret from CloudflareCredentials
+		credsResource := &networkingv1alpha2.CloudflareCredentials{}
+		if err := c.Get(ctx, apitypes.NamespacedName{Name: tunnelSpec.Cloudflare.CredentialsRef.Name}, credsResource); err == nil {
+			secretNamespace := credsResource.Spec.SecretRef.Namespace
+			if secretNamespace == "" {
+				secretNamespace = "cloudflare-operator-system"
+			}
+			if err := c.Get(ctx, apitypes.NamespacedName{
+				Name:      credsResource.Spec.SecretRef.Name,
+				Namespace: secretNamespace,
+			}, cfSecret); err != nil {
+				log.V(1).Info("credentials secret not found", "secret", credsResource.Spec.SecretRef.Name)
+			}
+		}
+	}
+
 	return cfAPI, cfSecret, nil
 }
 
+// createCloudflareClientFromCreds creates a Cloudflare API client from loaded credentials.
+func createCloudflareClientFromCreds(creds *credentials.Credentials) (*cloudflare.API, error) {
+	switch creds.AuthType {
+	case networkingv1alpha2.AuthTypeAPIToken:
+		return cloudflare.NewWithAPIToken(creds.APIToken)
+	case networkingv1alpha2.AuthTypeGlobalAPIKey:
+		return cloudflare.New(creds.APIKey, creds.Email)
+	default:
+		// Fallback: try API Token first, then Global API Key
+		if creds.APIToken != "" {
+			return cloudflare.NewWithAPIToken(creds.APIToken)
+		} else if creds.APIKey != "" && creds.Email != "" {
+			return cloudflare.New(creds.APIKey, creds.Email)
+		}
+		return nil, errors.New("no valid API credentials found")
+	}
+}
+
 // getCloudflareClient returns an initialized *cloudflare.API using either an API Key + Email or an API Token
+// Deprecated: Use createCloudflareClientFromCreds instead
 func getCloudflareClient(apiKey, apiEmail, apiToken string) (*cloudflare.API, error) {
 	if apiToken != "" {
 		return cloudflare.NewWithAPIToken(apiToken)
-	} else {
-		return cloudflare.New(apiKey, apiEmail)
 	}
+	return cloudflare.New(apiKey, apiEmail)
 }

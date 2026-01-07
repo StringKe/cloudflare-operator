@@ -33,8 +33,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/cloudflare/cloudflare-go"
-
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
@@ -109,49 +107,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	return ctrl.Result{}, nil
 }
 
-// initAPIClient initializes the Cloudflare API client from the referenced Secret.
+// initAPIClient initializes the Cloudflare API client using the unified credential loader.
 func (r *Reconciler) initAPIClient() error {
-	// Get the secret containing API credentials
-	secret := &corev1.Secret{}
-	secretName := r.networkRoute.Spec.Cloudflare.Secret
-	namespace := "cloudflare-operator-system" // default namespace for cluster resources
-
-	if err := r.Get(r.ctx, apitypes.NamespacedName{Name: secretName, Namespace: namespace}, secret); err != nil {
-		r.log.Error(err, "failed to get secret", "secret", secretName, "namespace", namespace)
-		r.Recorder.Event(r.networkRoute, corev1.EventTypeWarning, controller.EventReasonAPIError, "Failed to get API secret")
-		return err
-	}
-
-	// Extract API token or key
-	apiToken := string(secret.Data[r.networkRoute.Spec.Cloudflare.CLOUDFLARE_API_TOKEN])
-	apiKey := string(secret.Data[r.networkRoute.Spec.Cloudflare.CLOUDFLARE_API_KEY])
-
-	if apiToken == "" && apiKey == "" {
-		err := fmt.Errorf("neither API token nor API key found in secret")
-		r.log.Error(err, "missing credentials in secret")
-		return err
-	}
-
-	// Create cloudflare client
-	var cloudflareClient *cloudflare.API
-	var err error
-	if apiToken != "" {
-		cloudflareClient, err = cloudflare.NewWithAPIToken(apiToken)
-	} else {
-		cloudflareClient, err = cloudflare.New(apiKey, r.networkRoute.Spec.Cloudflare.Email)
-	}
+	// Use the unified API client initialization
+	api, err := cf.NewAPIClientFromDetails(r.ctx, r.Client, "", r.networkRoute.Spec.Cloudflare)
 	if err != nil {
-		r.log.Error(err, "failed to create cloudflare client")
+		r.log.Error(err, "failed to initialize API client")
+		r.Recorder.Event(r.networkRoute, corev1.EventTypeWarning, controller.EventReasonAPIError, "Failed to initialize API client")
 		return err
 	}
 
-	r.cfAPI = &cf.API{
-		Log:              r.log,
-		AccountName:      r.networkRoute.Spec.Cloudflare.AccountName,
-		AccountId:        r.networkRoute.Spec.Cloudflare.AccountId,
-		ValidAccountId:   r.networkRoute.Status.AccountID,
-		CloudflareClient: cloudflareClient,
-	}
+	// Preserve validated account ID from status
+	api.ValidAccountId = r.networkRoute.Status.AccountID
+	r.cfAPI = api
 
 	return nil
 }

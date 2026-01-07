@@ -18,7 +18,6 @@ package accessapplication
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -32,8 +31,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
-
-	"github.com/cloudflare/cloudflare-go"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
@@ -98,39 +95,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 }
 
 func (r *Reconciler) initAPIClient() error {
-	secret := &corev1.Secret{}
-	secretName := r.app.Spec.Cloudflare.Secret
-	namespace := "cloudflare-operator-system"
-
-	if err := r.Get(r.ctx, apitypes.NamespacedName{Name: secretName, Namespace: namespace}, secret); err != nil {
-		return err
-	}
-
-	apiToken := string(secret.Data[r.app.Spec.Cloudflare.CLOUDFLARE_API_TOKEN])
-	apiKey := string(secret.Data[r.app.Spec.Cloudflare.CLOUDFLARE_API_KEY])
-
-	if apiToken == "" && apiKey == "" {
-		return fmt.Errorf("no API credentials found")
-	}
-
-	var cloudflareClient *cloudflare.API
-	var err error
-	if apiToken != "" {
-		cloudflareClient, err = cloudflare.NewWithAPIToken(apiToken)
-	} else {
-		cloudflareClient, err = cloudflare.New(apiKey, r.app.Spec.Cloudflare.Email)
-	}
+	// Use the unified API client initialization
+	api, err := cf.NewAPIClientFromDetails(r.ctx, r.Client, "", r.app.Spec.Cloudflare)
 	if err != nil {
+		r.log.Error(err, "failed to initialize API client")
 		return err
 	}
 
-	r.cfAPI = &cf.API{
-		Log:              r.log,
-		AccountName:      r.app.Spec.Cloudflare.AccountName,
-		AccountId:        r.app.Spec.Cloudflare.AccountId,
-		ValidAccountId:   r.app.Status.AccountID,
-		CloudflareClient: cloudflareClient,
-	}
+	// Preserve validated account ID from status
+	api.ValidAccountId = r.app.Status.AccountID
+	r.cfAPI = api
 
 	return nil
 }
