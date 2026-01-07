@@ -10,7 +10,9 @@
     A Kubernetes Operator for Cloudflare Zero Trust: Tunnels, Access, Gateway, and Device Management
     <br />
     <br />
-    <a href="https://github.com/StringKe/cloudflare-operator/blob/main/docs/getting-started.md"><strong>Getting Started Guide »</strong></a>
+    <a href="https://github.com/StringKe/cloudflare-operator/blob/main/docs/README.md"><strong>Documentation (English) »</strong></a>
+    |
+    <a href="https://github.com/StringKe/cloudflare-operator/blob/main/docs/README_zh.md"><strong>文档 (中文) »</strong></a>
     <br />
     <br />
     <a href="https://github.com/StringKe/cloudflare-operator/issues">Report Bug</a>
@@ -167,20 +169,21 @@ spec:
 ### Expose a Service
 
 ```yaml
-apiVersion: networking.cloudflare-operator.io/v1alpha2
+apiVersion: networking.cfargotunnel.com/v1alpha1
 kind: TunnelBinding
 metadata:
   name: my-service-binding
   namespace: default
-spec:
-  tunnelRef:
-    name: my-tunnel
-  subjects:
-    - name: my-service
-      spec:
-        fqdn: app.example.com
-        protocol: http
-        target: my-service:8080
+subjects:
+  - kind: Service
+    name: my-service
+    spec:
+      fqdn: app.example.com
+      protocol: http
+      target: http://my-service.default.svc:8080
+tunnelRef:
+  kind: Tunnel
+  name: my-tunnel
 ```
 
 ## CRD Reference
@@ -208,10 +211,16 @@ spec:
 
 ## Documentation
 
-- [Getting Started Guide](docs/getting-started.md)
-- [API Reference (v1alpha2)](docs/v1alpha2.md)
-- [Migration from v1alpha1](docs/migration/v1alpha2.md)
-- [Examples](docs/examples/)
+- **English**: [Full Documentation](docs/README.md)
+- **中文**: [完整文档](docs/README_zh.md)
+
+The documentation includes:
+- Installation Guide
+- API Token Permissions
+- CRD Reference (all 20 CRDs)
+- Usage Examples
+- Troubleshooting
+- Migration Guide
 
 ## Contributing
 
