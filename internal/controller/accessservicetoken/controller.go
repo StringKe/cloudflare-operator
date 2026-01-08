@@ -195,11 +195,23 @@ func (r *AccessServiceTokenReconciler) reconcileServiceToken(ctx context.Context
 			}
 		}
 	} else {
-		// Update existing service token
-		logger.Info("Updating Access Service Token", "tokenId", token.Status.TokenID)
-		result, err = apiClient.UpdateAccessServiceToken(token.Status.TokenID, tokenName, duration)
-		if err != nil {
-			return r.updateStatusError(ctx, token, err)
+		// Token already exists - only update if spec changed
+		if token.Status.ObservedGeneration == token.Generation && token.Status.State == "Ready" {
+			// No changes, skip update
+			logger.V(1).Info("Access Service Token spec unchanged, skipping update", "tokenId", token.Status.TokenID)
+			result = &cf.AccessServiceTokenResult{
+				TokenID:   token.Status.TokenID,
+				ClientID:  token.Status.ClientID,
+				AccountID: token.Status.AccountID,
+				ExpiresAt: token.Status.ExpiresAt,
+			}
+		} else {
+			// Spec changed, update the token
+			logger.Info("Updating Access Service Token", "tokenId", token.Status.TokenID)
+			result, err = apiClient.UpdateAccessServiceToken(token.Status.TokenID, tokenName, duration)
+			if err != nil {
+				return r.updateStatusError(ctx, token, err)
+			}
 		}
 	}
 
