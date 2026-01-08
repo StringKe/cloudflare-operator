@@ -4,29 +4,73 @@
 
 ## API Token 设置
 
-### 创建 API Token
+### 快速创建（推荐）
 
-1. 访问 [Cloudflare 控制台](https://dash.cloudflare.com/profile/api-tokens)
+使用脚本创建预配置的 API Token：
+
+```bash
+# 设置凭证
+export CF_API_TOKEN="你的已有token（需要有创建token的权限）"
+export CF_ACCOUNT_ID="你的账户ID"
+
+# 创建包含所有必需权限的 token
+curl -X POST "https://api.cloudflare.com/client/v4/user/tokens" \
+  -H "Authorization: Bearer $CF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{
+    "name": "cloudflare-operator",
+    "policies": [
+      {
+        "effect": "allow",
+        "resources": {"com.cloudflare.api.account.'$CF_ACCOUNT_ID'": "*"},
+        "permission_groups": [
+          {"id": "TUNNEL_EDIT_ID", "name": "Cloudflare Tunnel Edit"},
+          {"id": "ACCESS_APPS_EDIT_ID", "name": "Access: Apps and Policies Edit"},
+          {"id": "ACCESS_ORGS_EDIT_ID", "name": "Access: Organizations, Identity Providers, and Groups Edit"},
+          {"id": "ACCESS_TOKENS_EDIT_ID", "name": "Access: Service Tokens Edit"},
+          {"id": "ZERO_TRUST_EDIT_ID", "name": "Zero Trust Edit"}
+        ]
+      },
+      {
+        "effect": "allow",
+        "resources": {"com.cloudflare.api.account.zone.*": "*"},
+        "permission_groups": [
+          {"id": "DNS_EDIT_ID", "name": "DNS Edit"}
+        ]
+      }
+    ]
+  }'
+```
+
+> **注意**：将 `*_ID` 占位符替换为你账户的实际权限组 ID。通过以下 API 获取：`GET /accounts/{account_id}/iam/permission_groups`
+
+### 手动创建（控制台）
+
+1. 访问 [Cloudflare 控制台 > API Tokens](https://dash.cloudflare.com/profile/api-tokens)
 2. 点击 **Create Token**
 3. 选择 **Create Custom Token**
-4. 根据需要配置权限
+4. 按下表配置权限
 
 ### 权限矩阵
 
 | 功能 | 权限 | 范围 |
 |------|------|------|
-| **隧道管理** | `Account:Cloudflare Tunnel:Edit` | Account |
+| **Tunnel / ClusterTunnel** | `Account:Cloudflare Tunnel:Edit` | Account |
+| **VirtualNetwork** | `Account:Cloudflare Tunnel:Edit` | Account |
+| **NetworkRoute** | `Account:Cloudflare Tunnel:Edit` | Account |
+| **WARPConnector** | `Account:Cloudflare Tunnel:Edit` | Account |
 | **DNS 记录** | `Zone:DNS:Edit` | Zone（指定或全部）|
+| **TunnelBinding** | `Zone:DNS:Edit` + (可选) `Account:Access: Apps and Policies:Edit` | Account + Zone |
+| **PrivateService** | `Account:Cloudflare Tunnel:Edit` | Account |
 | **Access 应用** | `Account:Access: Apps and Policies:Edit` | Account |
-| **Access 组** | `Account:Access: Apps and Policies:Edit` | Account |
-| **Access 身份提供商** | `Account:Access: Apps and Policies:Edit` | Account |
+| **Access 组** | `Account:Access: Organizations, Identity Providers, and Groups:Edit` | Account |
+| **Access 身份提供商** | `Account:Access: Organizations, Identity Providers, and Groups:Edit` | Account |
 | **Access 服务令牌** | `Account:Access: Service Tokens:Edit` | Account |
+| **设备态势规则** | `Account:Access: Device Posture:Edit` | Account |
+| **设备设置策略** | `Account:Zero Trust:Edit` | Account |
 | **网关规则** | `Account:Zero Trust:Edit` | Account |
 | **网关列表** | `Account:Zero Trust:Edit` | Account |
 | **网关配置** | `Account:Zero Trust:Edit` | Account |
-| **设备设置** | `Account:Zero Trust:Edit` | Account |
-| **设备态势** | `Account:Zero Trust:Edit` | Account |
-| **WARP Connector** | `Account:Cloudflare Tunnel:Edit` | Account |
 
 ### 推荐的 Token 配置
 

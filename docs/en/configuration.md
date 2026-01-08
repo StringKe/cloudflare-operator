@@ -4,29 +4,73 @@ This guide covers API token configuration and credential management.
 
 ## API Token Setup
 
-### Creating an API Token
+### Quick Create (Recommended)
 
-1. Go to [Cloudflare Dashboard](https://dash.cloudflare.com/profile/api-tokens)
+Use the script to create a pre-configured API token:
+
+```bash
+# Set your credentials
+export CF_API_TOKEN="your-existing-token-with-token-create-permission"
+export CF_ACCOUNT_ID="your-account-id"
+
+# Create token with all required permissions
+curl -X POST "https://api.cloudflare.com/client/v4/user/tokens" \
+  -H "Authorization: Bearer $CF_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{
+    "name": "cloudflare-operator",
+    "policies": [
+      {
+        "effect": "allow",
+        "resources": {"com.cloudflare.api.account.'$CF_ACCOUNT_ID'": "*"},
+        "permission_groups": [
+          {"id": "TUNNEL_EDIT_ID", "name": "Cloudflare Tunnel Edit"},
+          {"id": "ACCESS_APPS_EDIT_ID", "name": "Access: Apps and Policies Edit"},
+          {"id": "ACCESS_ORGS_EDIT_ID", "name": "Access: Organizations, Identity Providers, and Groups Edit"},
+          {"id": "ACCESS_TOKENS_EDIT_ID", "name": "Access: Service Tokens Edit"},
+          {"id": "ZERO_TRUST_EDIT_ID", "name": "Zero Trust Edit"}
+        ]
+      },
+      {
+        "effect": "allow",
+        "resources": {"com.cloudflare.api.account.zone.*": "*"},
+        "permission_groups": [
+          {"id": "DNS_EDIT_ID", "name": "DNS Edit"}
+        ]
+      }
+    ]
+  }'
+```
+
+> **Note**: Replace `*_ID` placeholders with actual permission group IDs from your account. Get them via: `GET /accounts/{account_id}/iam/permission_groups`
+
+### Manual Create (Dashboard)
+
+1. Go to [Cloudflare Dashboard > API Tokens](https://dash.cloudflare.com/profile/api-tokens)
 2. Click **Create Token**
 3. Select **Create Custom Token**
-4. Configure permissions based on your needs
+4. Configure permissions as shown below
 
 ### Permission Matrix
 
 | Feature | Permission | Scope |
 |---------|------------|-------|
-| **Tunnel Management** | `Account:Cloudflare Tunnel:Edit` | Account |
+| **Tunnel / ClusterTunnel** | `Account:Cloudflare Tunnel:Edit` | Account |
+| **VirtualNetwork** | `Account:Cloudflare Tunnel:Edit` | Account |
+| **NetworkRoute** | `Account:Cloudflare Tunnel:Edit` | Account |
+| **WARPConnector** | `Account:Cloudflare Tunnel:Edit` | Account |
 | **DNS Records** | `Zone:DNS:Edit` | Zone (specific or all) |
+| **TunnelBinding** | `Zone:DNS:Edit` + (optional) `Account:Access: Apps and Policies:Edit` | Account + Zone |
+| **PrivateService** | `Account:Cloudflare Tunnel:Edit` | Account |
 | **Access Applications** | `Account:Access: Apps and Policies:Edit` | Account |
-| **Access Groups** | `Account:Access: Apps and Policies:Edit` | Account |
-| **Access Identity Providers** | `Account:Access: Apps and Policies:Edit` | Account |
+| **Access Groups** | `Account:Access: Organizations, Identity Providers, and Groups:Edit` | Account |
+| **Access Identity Providers** | `Account:Access: Organizations, Identity Providers, and Groups:Edit` | Account |
 | **Access Service Tokens** | `Account:Access: Service Tokens:Edit` | Account |
+| **Device Posture Rules** | `Account:Access: Device Posture:Edit` | Account |
+| **Device Settings Policy** | `Account:Zero Trust:Edit` | Account |
 | **Gateway Rules** | `Account:Zero Trust:Edit` | Account |
 | **Gateway Lists** | `Account:Zero Trust:Edit` | Account |
 | **Gateway Configuration** | `Account:Zero Trust:Edit` | Account |
-| **Device Settings** | `Account:Zero Trust:Edit` | Account |
-| **Device Posture** | `Account:Zero Trust:Edit` | Account |
-| **WARP Connector** | `Account:Cloudflare Tunnel:Edit` | Account |
 
 ### Recommended Token Configurations
 
