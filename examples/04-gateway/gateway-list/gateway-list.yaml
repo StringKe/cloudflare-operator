@@ -1,0 +1,115 @@
+# GatewayList - Lists for Gateway Rules (Cluster-scoped)
+# GatewayList - 网关规则使用的列表（集群级）
+#
+# Create lists of domains, IPs, URLs, or emails for use in Gateway rules.
+# 创建域名、IP、URL 或邮箱列表，用于网关规则。
+
+# Blocked Domains List
+# 阻止的域名列表
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: GatewayList
+metadata:
+  name: blocked-domains
+spec:
+  name: Blocked Domains
+  description: Company-wide blocked domain list
+
+  # List type: DOMAIN, EMAIL, URL, IP, SERIAL
+  # 列表类型：DOMAIN、EMAIL、URL、IP、SERIAL
+  type: DOMAIN
+
+  items:
+    - value: gambling-site.com
+      description: Gambling sites
+    - value: torrent-tracker.org
+      description: Torrent trackers
+    - value: proxy-bypass.net
+      description: Proxy bypass sites
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Social Media Domains
+# 社交媒体域名
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: GatewayList
+metadata:
+  name: social-media-domains
+spec:
+  name: Social Media
+  description: Social media platforms
+  type: DOMAIN
+
+  items:
+    - value: facebook.com
+      description: Facebook
+    - value: twitter.com
+      description: Twitter/X
+    - value: instagram.com
+      description: Instagram
+    - value: tiktok.com
+      description: TikTok
+    - value: linkedin.com
+      description: LinkedIn (may want to allow)
+    - value: reddit.com
+      description: Reddit
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Allowed IPs (whitelist)
+# 允许的 IP（白名单）
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: GatewayList
+metadata:
+  name: allowed-ips
+spec:
+  name: Allowed IPs
+  description: IP addresses that bypass security checks
+  type: IP
+
+  items:
+    - value: 203.0.113.0/24
+      description: Office network
+    - value: 198.51.100.50
+      description: VPN exit node
+    - value: 192.0.2.100
+      description: Partner API server
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Blocked URLs (specific paths)
+# 阻止的 URL（特定路径）
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: GatewayList
+metadata:
+  name: blocked-urls
+spec:
+  name: Blocked URLs
+  description: Specific URLs to block
+  type: URL
+
+  items:
+    - value: https://example.com/malicious-page
+      description: Known malicious page
+    - value: http://downloads.example.org/suspicious.exe
+      description: Suspicious download
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials

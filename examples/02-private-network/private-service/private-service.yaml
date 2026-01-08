@@ -1,0 +1,99 @@
+# PrivateService - Expose K8s Service via Private IP (Namespaced)
+# PrivateService - 通过私有 IP 暴露 K8s 服务（命名空间级）
+#
+# Assigns a private IP to a Kubernetes Service, making it accessible
+# to WARP clients without public DNS.
+# 为 Kubernetes Service 分配私有 IP，使 WARP 客户端无需公共 DNS 即可访问。
+#
+# Use cases / 使用场景:
+#   - Internal services that shouldn't have public DNS
+#   - 不应有公共 DNS 的内部服务
+#   - Legacy applications that require IP-based access
+#   - 需要基于 IP 访问的旧应用
+#   - Services with overlapping FQDNs in different environments
+#   - 不同环境中具有重叠 FQDN 的服务
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PrivateService
+metadata:
+  name: internal-api
+  namespace: default
+  labels:
+    app: internal-api
+spec:
+  # Private IP to assign (from your VirtualNetwork's range)
+  # 要分配的私有 IP（来自你的 VirtualNetwork 范围）
+  # Must not conflict with existing routes
+  # 不得与现有路由冲突
+  privateIP: 10.200.0.10
+
+  # Target service in Kubernetes
+  # Kubernetes 中的目标服务
+  serviceRef:
+    name: internal-api
+    # namespace: default  # Defaults to same namespace
+    port: 8080
+
+  # Associated tunnel
+  # 关联的隧道
+  tunnelRef:
+    kind: ClusterTunnel
+    name: private-network-tunnel
+
+  # Optional: Virtual network for isolation
+  # 可选：用于隔离的虚拟网络
+  virtualNetworkRef:
+    name: production-vnet
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Database Service (PostgreSQL)
+# 数据库服务（PostgreSQL）
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PrivateService
+metadata:
+  name: postgres-private
+  namespace: database
+spec:
+  privateIP: 10.200.0.20
+  serviceRef:
+    name: postgres
+    port: 5432
+  tunnelRef:
+    kind: ClusterTunnel
+    name: private-network-tunnel
+  virtualNetworkRef:
+    name: production-vnet
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Redis Cache
+# Redis 缓存
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PrivateService
+metadata:
+  name: redis-private
+  namespace: cache
+spec:
+  privateIP: 10.200.0.30
+  serviceRef:
+    name: redis
+    port: 6379
+  tunnelRef:
+    kind: ClusterTunnel
+    name: private-network-tunnel
+  virtualNetworkRef:
+    name: production-vnet
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials

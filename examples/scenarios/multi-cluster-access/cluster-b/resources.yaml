@@ -1,0 +1,103 @@
+# Cluster B (Staging) Resources
+# 集群 B（预发布）资源
+#
+# Apply this file to your staging cluster.
+# 将此文件应用到你的预发布集群。
+
+---
+# Cloudflare Credentials
+# Cloudflare 凭证
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cloudflare-credentials
+  namespace: cloudflare-operator-system
+type: Opaque
+stringData:
+  CLOUDFLARE_API_TOKEN: "<your-api-token>"
+
+---
+# Virtual Network for Staging
+# 预发布环境的虚拟网络
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: VirtualNetwork
+metadata:
+  name: staging-vnet
+  labels:
+    environment: staging
+    cluster: cluster-b
+spec:
+  name: Staging Network
+  comment: "Staging cluster virtual network"
+  isDefaultNetwork: false
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-credentials
+
+---
+# ClusterTunnel for Staging
+# 预发布环境的 ClusterTunnel
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: ClusterTunnel
+metadata:
+  name: staging-tunnel
+  labels:
+    environment: staging
+    cluster: cluster-b
+spec:
+  newTunnel:
+    name: staging-cluster-b
+  enableWarpRouting: true
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-credentials
+
+---
+# Network Routes for Staging
+# 预发布环境的网络路由
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: NetworkRoute
+metadata:
+  name: staging-pod-network
+  labels:
+    environment: staging
+    cluster: cluster-b
+spec:
+  network: 10.2.0.0/16
+  comment: "Staging Pod network"
+  tunnelRef:
+    kind: ClusterTunnel
+    name: staging-tunnel
+  virtualNetworkRef:
+    name: staging-vnet
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-credentials
+
+---
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: NetworkRoute
+metadata:
+  name: staging-service-network
+  labels:
+    environment: staging
+    cluster: cluster-b
+spec:
+  network: 10.102.0.0/16
+  comment: "Staging Service network"
+  tunnelRef:
+    kind: ClusterTunnel
+    name: staging-tunnel
+  virtualNetworkRef:
+    name: staging-vnet
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-credentials

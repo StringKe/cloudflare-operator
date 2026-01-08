@@ -1,0 +1,41 @@
+# ClusterTunnel with WARP Routing
+# 启用 WARP 路由的 ClusterTunnel
+#
+# This tunnel is used for private network access via WARP clients.
+# 此隧道用于通过 WARP 客户端进行私有网络访问。
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: ClusterTunnel
+metadata:
+  name: private-access-tunnel
+  labels:
+    purpose: private-access
+spec:
+  newTunnel:
+    name: k8s-private-access
+
+  # Enable WARP routing (required for private network access)
+  # 启用 WARP 路由（私有网络访问必需）
+  enableWarpRouting: true
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-credentials
+
+  # High availability deployment
+  # 高可用部署
+  deployPatch: |
+    spec:
+      replicas: 2
+      template:
+        spec:
+          affinity:
+            podAntiAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                podAffinityTerm:
+                  labelSelector:
+                    matchLabels:
+                      app.kubernetes.io/name: cloudflared
+                  topologyKey: kubernetes.io/hostname

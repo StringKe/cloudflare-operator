@@ -1,0 +1,143 @@
+# GatewayRule - DNS/HTTP/Network Policies (Cluster-scoped)
+# GatewayRule - DNS/HTTP/网络策略（集群级）
+#
+# Configure Cloudflare Gateway rules for traffic filtering and security.
+# 配置 Cloudflare 网关规则用于流量过滤和安全。
+
+# Block Malware and Phishing
+# 阻止恶意软件和钓鱼
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: GatewayRule
+metadata:
+  name: block-security-threats
+spec:
+  name: Block Security Threats
+  description: Block malware, phishing, and other security threats
+
+  # Priority (lower = higher priority)
+  # 优先级（数值越小优先级越高）
+  precedence: 100
+
+  enabled: true
+
+  # Action to take
+  # 要执行的操作
+  # Options: allow, block, log, isolate, l4_override, egress, resolve, quarantine
+  action: block
+
+  # Traffic filter (wirefilter syntax)
+  # 流量过滤器（wirefilter 语法）
+  # See: https://developers.cloudflare.com/cloudflare-one/policies/gateway/
+  traffic: 'dns.security_category in {80 83 84 85 86}'
+
+  # Filter types
+  # 过滤器类型
+  filters:
+    - dns
+
+  # Block page settings
+  # 阻止页面设置
+  ruleSettings:
+    blockPageEnabled: true
+    blockReason: "This site has been blocked due to security threats"
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Block Social Media during work hours
+# 工作时间阻止社交媒体
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: GatewayRule
+metadata:
+  name: block-social-media
+spec:
+  name: Block Social Media
+  description: Block social media during work hours
+  precedence: 200
+  enabled: true
+  action: block
+
+  # Reference a GatewayList
+  # 引用 GatewayList
+  traffic: 'any(dns.domains[*] in $<social-media-list-id>)'
+
+  # Only for specific user groups
+  # 仅针对特定用户组
+  identity: 'not any(identity.groups.name[*] in {"Marketing" "HR"})'
+
+  filters:
+    - dns
+    - http
+
+  ruleSettings:
+    blockPageEnabled: true
+    blockReason: "Social media is blocked during work hours"
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Log all traffic (for auditing)
+# 记录所有流量（用于审计）
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: GatewayRule
+metadata:
+  name: audit-log-all
+spec:
+  name: Audit Log All Traffic
+  description: Log all DNS and HTTP traffic for auditing
+  precedence: 9999  # Low priority, runs last
+  enabled: true
+  action: log
+
+  traffic: 'true'  # Match all traffic
+
+  filters:
+    - dns
+    - http
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Browser Isolation for Risky Sites
+# 高风险站点的浏览器隔离
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: GatewayRule
+metadata:
+  name: isolate-risky-sites
+spec:
+  name: Isolate Risky Sites
+  description: Use browser isolation for potentially risky sites
+  precedence: 150
+  enabled: true
+  action: isolate
+
+  traffic: 'dns.content_category in {32 118}'  # Newly seen domains, uncategorized
+
+  filters:
+    - http
+
+  ruleSettings:
+    bisoAdminControls:
+      disablePrinting: true
+      disableCopyPaste: true
+      disableDownload: true
+      disableUpload: false
+      disableKeyboard: false
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials

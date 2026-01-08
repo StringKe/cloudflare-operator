@@ -1,0 +1,70 @@
+# AccessServiceToken - Machine-to-Machine Authentication (Namespaced)
+# AccessServiceToken - 机器对机器认证（命名空间级）
+#
+# Create service tokens for automated systems to authenticate with Access.
+# 为自动化系统创建服务令牌以通过 Access 认证。
+#
+# Use cases / 使用场景:
+#   - CI/CD pipelines accessing protected APIs
+#   - CI/CD 流水线访问受保护的 API
+#   - Cronjobs that need to call internal services
+#   - 需要调用内部服务的定时任务
+#   - Service-to-service communication
+#   - 服务间通信
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessServiceToken
+metadata:
+  name: cicd-pipeline-token
+  namespace: default
+spec:
+  # Token name in Cloudflare
+  # Cloudflare 中的令牌名称
+  name: CI/CD Pipeline Token
+
+  # Token validity duration
+  # 令牌有效期
+  # Minimum: 1h, Maximum: 8760h (1 year)
+  # 最小：1h，最大：8760h（1年）
+  duration: 2160h  # 90 days
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Monitoring Service Token
+# 监控服务令牌
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessServiceToken
+metadata:
+  name: monitoring-token
+  namespace: monitoring
+spec:
+  name: Prometheus/Grafana Token
+  duration: 8760h  # 1 year
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Short-lived Token for Testing
+# 用于测试的短期令牌
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessServiceToken
+metadata:
+  name: test-token
+  namespace: default
+spec:
+  name: Test Environment Token
+  duration: 24h  # 1 day
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials

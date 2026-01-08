@@ -1,0 +1,55 @@
+# Cloudflare ClusterTunnel (Cluster-scoped)
+# Cloudflare 集群隧道（集群级）
+#
+# Same as Tunnel but cluster-scoped, accessible from any namespace.
+# 与 Tunnel 相同但为集群级，可从任何命名空间访问。
+#
+# Use ClusterTunnel when:
+# 使用 ClusterTunnel 的场景：
+#   - Multiple namespaces need to share the same tunnel
+#   - 多个命名空间需要共享同一隧道
+#   - You want a single tunnel for the entire cluster
+#   - 你想为整个集群使用单一隧道
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: ClusterTunnel
+metadata:
+  name: shared-cluster-tunnel
+  labels:
+    app.kubernetes.io/name: shared-cluster-tunnel
+    app.kubernetes.io/managed-by: cloudflare-operator
+spec:
+  # Create a new tunnel
+  # 创建新隧道
+  newTunnel:
+    name: shared-k8s-tunnel
+
+  # Cloudflare configuration
+  # Cloudflare 配置
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+    # Note: For ClusterTunnel, the secret must be in the operator's namespace
+    # 注意：对于 ClusterTunnel，secret 必须在 operator 的命名空间中
+
+  # Enable WARP routing for private network access
+  # 启用 WARP 路由以实现私有网络访问
+  enableWarpRouting: true
+
+  # Optional: High availability with multiple replicas
+  # 可选：使用多副本实现高可用
+  deployPatch: |
+    spec:
+      replicas: 2
+      template:
+        spec:
+          affinity:
+            podAntiAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                podAffinityTerm:
+                  labelSelector:
+                    matchLabels:
+                      app.kubernetes.io/name: cloudflared
+                  topologyKey: kubernetes.io/hostname

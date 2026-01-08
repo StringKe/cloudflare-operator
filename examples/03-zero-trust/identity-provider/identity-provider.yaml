@@ -1,0 +1,161 @@
+# AccessIdentityProvider - Identity Provider Configuration (Cluster-scoped)
+# AccessIdentityProvider - 身份提供商配置（集群级）
+#
+# Configure identity providers for Cloudflare Access authentication.
+# 为 Cloudflare Access 认证配置身份提供商。
+
+# Google Workspace (G Suite)
+# Google Workspace
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessIdentityProvider
+metadata:
+  name: google-workspace
+spec:
+  name: Google Workspace
+  type: google-apps
+
+  config:
+    # OAuth client ID from Google Console
+    # 来自 Google Console 的 OAuth 客户端 ID
+    clientId: "<google-client-id>.apps.googleusercontent.com"
+
+    # Reference to secret containing client secret
+    # 包含客户端密钥的 secret 引用
+    clientSecretRef:
+      name: google-oauth-secret
+      key: client-secret
+
+    # Google Workspace domain (for email verification)
+    # Google Workspace 域名（用于邮箱验证）
+    appsDomain: company.com
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# GitHub OAuth
+# GitHub OAuth
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessIdentityProvider
+metadata:
+  name: github
+spec:
+  name: GitHub
+  type: github
+
+  config:
+    clientId: "<github-client-id>"
+    clientSecretRef:
+      name: github-oauth-secret
+      key: client-secret
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Azure AD / Entra ID
+# Azure AD / Entra ID
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessIdentityProvider
+metadata:
+  name: azure-ad
+spec:
+  name: Azure AD
+  type: azure
+
+  config:
+    clientId: "<azure-app-id>"
+    clientSecretRef:
+      name: azure-oauth-secret
+      key: client-secret
+
+    # Azure tenant ID (use 'common' for multi-tenant)
+    # Azure 租户 ID（多租户使用 'common'）
+    directoryId: "<tenant-id>"
+
+    # Support email (shown to users)
+    # 支持邮箱（显示给用户）
+    supportUrl: https://support.company.com
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Generic OIDC Provider
+# 通用 OIDC 提供商
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessIdentityProvider
+metadata:
+  name: custom-oidc
+spec:
+  name: Custom OIDC
+  type: oidc
+
+  config:
+    clientId: "<oidc-client-id>"
+    clientSecretRef:
+      name: oidc-secret
+      key: client-secret
+
+    # OIDC endpoints (auto-discovered from issuer if supported)
+    # OIDC 端点（如果支持，从 issuer 自动发现）
+    authUrl: https://auth.example.com/authorize
+    tokenUrl: https://auth.example.com/oauth/token
+    certsUrl: https://auth.example.com/.well-known/jwks.json
+
+    # Claims mapping
+    # 声明映射
+    claims:
+      - email
+      - groups
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# One-Time PIN (OTP) - No external IdP required
+# 一次性 PIN（OTP）- 无需外部 IdP
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessIdentityProvider
+metadata:
+  name: otp
+spec:
+  name: Email OTP
+  type: onetimepin
+
+  # No config needed for OTP
+  # OTP 无需配置
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# OAuth Client Secret Example
+# OAuth 客户端密钥示例
+#
+# Store client secrets separately from IdP configuration
+# 将客户端密钥与 IdP 配置分开存储
+
+# apiVersion: v1
+# kind: Secret
+# metadata:
+#   name: google-oauth-secret
+#   namespace: cloudflare-operator-system
+# type: Opaque
+# stringData:
+#   client-secret: "<your-google-client-secret>"

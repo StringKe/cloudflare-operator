@@ -1,0 +1,21 @@
+# VirtualNetwork for Traffic Isolation
+# 用于流量隔离的虚拟网络
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: VirtualNetwork
+metadata:
+  name: k8s-network
+  labels:
+    cluster: primary
+spec:
+  name: Kubernetes Primary Cluster
+  comment: "Primary Kubernetes cluster private network"
+
+  # Set as default network (optional)
+  # 设为默认网络（可选）
+  isDefaultNetwork: true
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-credentials

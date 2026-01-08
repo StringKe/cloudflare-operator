@@ -1,0 +1,76 @@
+# VirtualNetwork - Cloudflare Virtual Network (Cluster-scoped)
+# VirtualNetwork - Cloudflare 虚拟网络（集群级）
+#
+# Virtual Networks provide traffic isolation for private network routing.
+# 虚拟网络为私有网络路由提供流量隔离。
+#
+# Use cases / 使用场景:
+#   - Isolate production and development traffic
+#   - 隔离生产和开发流量
+#   - Multi-tenant network separation
+#   - 多租户网络隔离
+#   - Overlapping IP range management
+#   - 重叠 IP 范围管理
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: VirtualNetwork
+metadata:
+  name: production-vnet
+  labels:
+    environment: production
+spec:
+  # Name in Cloudflare (optional, defaults to resource name)
+  # Cloudflare 中的名称（可选，默认为资源名称）
+  name: production-network
+
+  # Description / 描述
+  comment: "Production environment virtual network"
+
+  # Set as the default network for the account
+  # 设为账户的默认网络
+  # Only one network can be default
+  # 只能有一个网络设为默认
+  isDefaultNetwork: false
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Development Virtual Network
+# 开发虚拟网络
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: VirtualNetwork
+metadata:
+  name: development-vnet
+  labels:
+    environment: development
+spec:
+  name: development-network
+  comment: "Development and testing environment"
+  isDefaultNetwork: false
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Default Virtual Network
+# 默认虚拟网络
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: VirtualNetwork
+metadata:
+  name: default-vnet
+  labels:
+    environment: shared
+spec:
+  name: default-network
+  comment: "Default shared network for all traffic"
+  isDefaultNetwork: true  # This is the default network
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials

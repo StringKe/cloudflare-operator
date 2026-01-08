@@ -1,4 +1,4 @@
-<h1 align=center>Cloudflare Operator</h1>
+<h1 align=center>Cloudflare Zero Trust Operator</h1>
 
 <div align="center">
   <a href="https://github.com/StringKe/cloudflare-operator">
@@ -10,70 +10,46 @@
     A Kubernetes Operator for Cloudflare Zero Trust: Tunnels, Access, Gateway, and Device Management
     <br />
     <br />
-    <a href="https://github.com/StringKe/cloudflare-operator/blob/main/docs/README.md"><strong>Documentation (English) »</strong></a>
+    <a href="https://github.com/StringKe/cloudflare-operator/blob/main/docs/en/README.md"><strong>Documentation (English) »</strong></a>
     |
-    <a href="https://github.com/StringKe/cloudflare-operator/blob/main/docs/README_zh.md"><strong>文档 (中文) »</strong></a>
+    <a href="https://github.com/StringKe/cloudflare-operator/blob/main/docs/zh/README.md"><strong>文档 (中文) »</strong></a>
     <br />
     <br />
+    <a href="https://github.com/StringKe/cloudflare-operator/tree/main/examples">Examples</a>
+    ·
     <a href="https://github.com/StringKe/cloudflare-operator/issues">Report Bug</a>
     ·
     <a href="https://github.com/StringKe/cloudflare-operator/issues">Request Feature</a>
-    <br />
   </p>
 </div>
 
 [![GitHub license](https://img.shields.io/github/license/StringKe/cloudflare-operator?color=brightgreen)](https://github.com/StringKe/cloudflare-operator/blob/main/LICENSE)
-[![GitHub forks](https://img.shields.io/github/forks/StringKe/cloudflare-operator)](https://github.com/StringKe/cloudflare-operator/network)
-[![GitHub stars](https://img.shields.io/github/stars/StringKe/cloudflare-operator)](https://github.com/StringKe/cloudflare-operator/stargazers)
-[![GitHub issues](https://img.shields.io/github/issues/StringKe/cloudflare-operator)](https://github.com/StringKe/cloudflare-operator/issues)
+[![GitHub release](https://img.shields.io/github/v/release/StringKe/cloudflare-operator)](https://github.com/StringKe/cloudflare-operator/releases)
 [![Go Report Card](https://goreportcard.com/badge/github.com/StringKe/cloudflare-operator)](https://goreportcard.com/report/github.com/StringKe/cloudflare-operator)
 
-> **_NOTE_**: This project is currently in Alpha
+> **Note**: This project is currently in Alpha (v0.17.x)
 
 ## Overview
 
-The Cloudflare Operator provides Kubernetes-native management of Cloudflare Zero Trust resources. Built with `operator-sdk`, it enables declarative configuration of tunnels, access policies, gateway rules, and device settings through Custom Resources (CRDs).
+The Cloudflare Zero Trust Operator provides Kubernetes-native management of Cloudflare Zero Trust resources. Built with `kubebuilder` and `controller-runtime`, it enables declarative configuration of tunnels, access policies, gateway rules, and device settings through Custom Resource Definitions (CRDs).
 
 ## Features
 
-### Tunnel Management
-- **Tunnel / ClusterTunnel**: Create and manage Cloudflare Tunnels with scaled `cloudflared` deployments
-- **TunnelBinding**: Automatically configure tunnel ingress rules and DNS records for Services
-- **AccessTunnel**: Reference existing tunnels created outside of Kubernetes
-- **WARP Routing**: Enable private network access via WARP client (`enableWarpRouting`)
-
-### Private Network Access (ZTNA)
-- **VirtualNetwork**: Manage Cloudflare virtual networks for traffic isolation
-- **NetworkRoute**: Configure IP routes through tunnels to private networks
-- **PrivateService**: Expose Kubernetes Services to WARP clients via private IPs
-
-### Access Control
-- **AccessApplication**: Define Zero Trust applications with access policies
-- **AccessGroup**: Create reusable access groups with include/exclude/require rules
-- **AccessIdentityProvider**: Configure identity providers (OIDC, SAML, GitHub, Azure AD, etc.)
-- **AccessServiceToken**: Manage service tokens for machine-to-machine authentication
-
-### Gateway & Security
-- **GatewayRule**: Configure Cloudflare Gateway DNS, HTTP, and network policies
-- **GatewayList**: Manage lists (URLs, hostnames, IPs) for use in gateway rules
-- **GatewayConfiguration**: Global gateway settings and configurations
-
-### Device Management
-- **DeviceSettingsPolicy**: Configure WARP client settings, split tunnels, and fallback domains
-- **DevicePostureRule**: Define device posture checks for Zero Trust access
-
-### DNS & Connectivity
-- **DNSRecord**: Manage Cloudflare DNS records
-- **WARPConnector**: Deploy WARP connectors for site-to-site connectivity
+| Category | Features |
+|----------|----------|
+| **Tunnel Management** | Create/manage Cloudflare Tunnels, automatic cloudflared deployments, Service binding with DNS |
+| **Private Network** | Virtual Networks, Network Routes, Private Service exposure via WARP |
+| **Access Control** | Zero Trust Applications, Access Groups, Identity Providers, Service Tokens |
+| **Gateway & Security** | Gateway Rules (DNS/HTTP/L4), Gateway Lists, Browser Isolation |
+| **Device Management** | Split Tunnel configuration, Fallback Domains, Device Posture Rules |
+| **DNS & Connectivity** | DNS Record management, WARP Connectors for site-to-site |
 
 ## Architecture
-
-Here is how the operator and the Tunnel Resource fit into your deployment.
 
 ```mermaid
 flowchart TB
     subgraph Internet["Internet"]
-        Users["Users"]
+        Users["Users / WARP Clients"]
     end
 
     subgraph Cloudflare["Cloudflare Edge"]
@@ -85,6 +61,8 @@ flowchart TB
         subgraph CRDs["Custom Resources"]
             Tunnel["Tunnel / ClusterTunnel"]
             TB["TunnelBinding"]
+            VNet["VirtualNetwork"]
+            Route["NetworkRoute"]
         end
 
         subgraph Operator["Cloudflare Operator"]
@@ -92,78 +70,69 @@ flowchart TB
         end
 
         subgraph Managed["Managed Resources"]
-            ConfigMap["ConfigMap\n(tunnel config)"]
-            Secret["Secret\n(tunnel credentials)"]
-            Deployment["Deployment\n(cloudflared)"]
+            ConfigMap["ConfigMap"]
+            Secret["Secret"]
+            Deployment["cloudflared"]
         end
 
-        subgraph App["Your Application"]
-            Service["Service"]
-            Pod["Pod"]
-            Ingress["Ingress\n(optional local access)"]
+        subgraph App["Applications"]
+            Service["Services"]
+            Pod["Pods"]
         end
     end
 
-    %% User creates CRDs
-    Tunnel -.->|watches| Controller
-    TB -.->|watches| Controller
-
-    %% Operator manages resources
-    Controller -->|creates/updates| ConfigMap
-    Controller -->|creates/updates| Secret
-    Controller -->|creates/updates| Deployment
-    Controller -->|API calls\nDNS, Tunnel| API
-
-    %% cloudflared uses config
-    ConfigMap -->|mounts| Deployment
-    Secret -->|mounts| Deployment
-
-    %% Traffic flow
-    Users -->|HTTPS| Edge
-    Edge <-->|tunnel| Deployment
-    Deployment <-->|proxy| Service
+    CRDs -.->|watches| Controller
+    Controller -->|creates| Managed
+    Controller -->|API calls| API
+    Managed -->|proxy| Service
     Service --> Pod
-    Service --> Ingress
+    Users -->|HTTPS/WARP| Edge
+    Edge <-->|tunnel| Deployment
 ```
-
-**Flow:**
-1. User creates `Tunnel` and `TunnelBinding` custom resources
-2. Operator watches CRDs and creates ConfigMap, Secret, and cloudflared Deployment
-3. Operator calls Cloudflare API to register tunnel and DNS records
-4. cloudflared establishes secure tunnel to Cloudflare Edge
-5. Internet traffic flows: Users → Cloudflare Edge → Tunnel → Service → Pod
 
 ## Quick Start
 
 ### Prerequisites
-- Kubernetes cluster (v1.28+)
+
+- Kubernetes cluster v1.28+
 - Cloudflare account with Zero Trust enabled
-- Cloudflare API Token with appropriate permissions
+- Cloudflare API Token ([Create Token](https://dash.cloudflare.com/profile/api-tokens))
 
 ### Installation
 
 ```bash
-# Install CRDs
+# Install CRDs and operator
 kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator.crds.yaml
-
-# Install operator
 kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator.yaml
+
+# Verify installation
+kubectl get pods -n cloudflare-operator-system
 ```
 
 ### Create a Tunnel
 
 ```yaml
+# 1. Create API credentials secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cloudflare-credentials
+type: Opaque
+stringData:
+  CLOUDFLARE_API_TOKEN: "<your-api-token>"
+---
+# 2. Create tunnel
 apiVersion: networking.cloudflare-operator.io/v1alpha2
 kind: Tunnel
 metadata:
   name: my-tunnel
-  namespace: default
 spec:
+  newTunnel:
+    name: k8s-tunnel
   cloudflare:
-    accountId: <your-account-id>
+    accountId: "<your-account-id>"
     domain: example.com
-    secret: cloudflare-api-secret
-  enableWarpRouting: true  # Enable private network access
+    secret: cloudflare-credentials
 ```
 
 ### Expose a Service
@@ -172,15 +141,13 @@ spec:
 apiVersion: networking.cfargotunnel.com/v1alpha1
 kind: TunnelBinding
 metadata:
-  name: my-service-binding
-  namespace: default
+  name: web-binding
 subjects:
   - kind: Service
-    name: my-service
+    name: web-app
     spec:
       fqdn: app.example.com
       protocol: http
-      target: http://my-service.default.svc:8080
 tunnelRef:
   kind: Tunnel
   name: my-tunnel
@@ -188,46 +155,95 @@ tunnelRef:
 
 ## CRD Reference
 
-| CRD | Scope | Description |
-|-----|-------|-------------|
-| `Tunnel` | Namespaced | Cloudflare Tunnel with managed cloudflared deployment |
-| `ClusterTunnel` | Cluster | Cluster-wide Cloudflare Tunnel |
-| `TunnelBinding` | Namespaced | Bind Services to Tunnels with DNS records |
-| `AccessTunnel` | Namespaced | Reference to external tunnel |
-| `VirtualNetwork` | Cluster | Cloudflare virtual network |
-| `NetworkRoute` | Cluster | IP route through tunnel |
-| `PrivateService` | Namespaced | Expose Service via WARP private IP |
-| `AccessApplication` | Namespaced | Zero Trust application |
-| `AccessGroup` | Namespaced | Access policy group |
-| `AccessIdentityProvider` | Namespaced | Identity provider configuration |
-| `AccessServiceToken` | Namespaced | Service token for M2M auth |
-| `GatewayRule` | Namespaced | Gateway policy rule |
-| `GatewayList` | Namespaced | List for gateway policies |
-| `GatewayConfiguration` | Cluster | Global gateway settings |
-| `DeviceSettingsPolicy` | Cluster | WARP client settings |
-| `DevicePostureRule` | Namespaced | Device posture check |
-| `DNSRecord` | Namespaced | DNS record management |
-| `WARPConnector` | Namespaced | WARP connector deployment |
+### Tunnel Management
+
+| CRD | API Version | Scope | Description |
+|-----|-------------|-------|-------------|
+| Tunnel | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | Cloudflare Tunnel with managed cloudflared |
+| ClusterTunnel | `networking.cloudflare-operator.io/v1alpha2` | Cluster | Cluster-wide Cloudflare Tunnel |
+| TunnelBinding | `networking.cfargotunnel.com/v1alpha1` | Namespaced | Bind Services to Tunnels with DNS |
+
+### Private Network Access
+
+| CRD | API Version | Scope | Description |
+|-----|-------------|-------|-------------|
+| VirtualNetwork | `networking.cloudflare-operator.io/v1alpha2` | Cluster | Cloudflare virtual network for isolation |
+| NetworkRoute | `networking.cloudflare-operator.io/v1alpha2` | Cluster | Route CIDR through tunnel |
+| PrivateService | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | Expose Service via private IP |
+
+### Access Control
+
+| CRD | API Version | Scope | Description |
+|-----|-------------|-------|-------------|
+| AccessApplication | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | Zero Trust application |
+| AccessGroup | `networking.cloudflare-operator.io/v1alpha2` | **Cluster** | Access policy group |
+| AccessIdentityProvider | `networking.cloudflare-operator.io/v1alpha2` | **Cluster** | Identity provider config |
+| AccessServiceToken | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | Service token for M2M |
+
+### Gateway & Security
+
+| CRD | API Version | Scope | Description |
+|-----|-------------|-------|-------------|
+| GatewayRule | `networking.cloudflare-operator.io/v1alpha2` | **Cluster** | Gateway policy rule |
+| GatewayList | `networking.cloudflare-operator.io/v1alpha2` | **Cluster** | List for gateway rules |
+| GatewayConfiguration | `networking.cloudflare-operator.io/v1alpha2` | Cluster | Global gateway settings |
+
+### Device Management
+
+| CRD | API Version | Scope | Description |
+|-----|-------------|-------|-------------|
+| DeviceSettingsPolicy | `networking.cloudflare-operator.io/v1alpha2` | Cluster | WARP client settings |
+| DevicePostureRule | `networking.cloudflare-operator.io/v1alpha2` | **Cluster** | Device posture check |
+
+### DNS & Connectivity
+
+| CRD | API Version | Scope | Description |
+|-----|-------------|-------|-------------|
+| DNSRecord | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | DNS record management |
+| WARPConnector | `networking.cloudflare-operator.io/v1alpha2` | **Cluster** | WARP connector deployment |
+
+## Examples
+
+See the [examples](examples/) directory for comprehensive usage examples:
+
+- **[Basic](examples/01-basic/)** - Credentials, Tunnels, DNS, Service Binding
+- **[Private Network](examples/02-private-network/)** - Virtual Networks, Routes, Private Services
+- **[Zero Trust](examples/03-zero-trust/)** - Access Apps, Groups, Identity Providers
+- **[Gateway](examples/04-gateway/)** - Gateway Rules, Lists
+- **[Device](examples/05-device/)** - Device Policies, Posture Rules
+- **[Scenarios](examples/scenarios/)** - Complete real-world scenarios
 
 ## Documentation
 
-- **English**: [Full Documentation](docs/README.md)
-- **中文**: [完整文档](docs/README_zh.md)
+| Language | Link |
+|----------|------|
+| English | [docs/en/README.md](docs/en/README.md) |
+| 中文 | [docs/zh/README.md](docs/zh/README.md) |
 
-The documentation includes:
+Documentation includes:
 - Installation Guide
 - API Token Permissions
-- CRD Reference (all 20 CRDs)
-- Usage Examples
-- Troubleshooting
-- Migration Guide
+- Complete CRD Reference
+- Troubleshooting Guide
+- Migration Guide (v1alpha1 → v1alpha2)
+
+## API Token Permissions
+
+| Feature | Permission | Scope |
+|---------|------------|-------|
+| Tunnels | `Account:Cloudflare Tunnel:Edit` | Account |
+| DNS | `Zone:DNS:Edit` | Zone |
+| Access | `Account:Access: Apps and Policies:Edit` | Account |
+| Gateway | `Account:Zero Trust:Edit` | Account |
 
 ## Contributing
 
-Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) for details.
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## License
 
-This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+Apache License 2.0 - See [LICENSE](LICENSE) for details.
 
-> **_NOTE_**: This is **NOT** an official operator provided/backed by Cloudflare Inc. It utilizes their [v4 API](https://api.cloudflare.com/) and their [`cloudflared`](https://github.com/cloudflare/cloudflared) to automate setting up of tunnels on Kubernetes.
+---
+
+> **Disclaimer**: This is **NOT** an official Cloudflare product. It uses the [Cloudflare API](https://api.cloudflare.com/) and [cloudflared](https://github.com/cloudflare/cloudflared) to automate Zero Trust configuration on Kubernetes.

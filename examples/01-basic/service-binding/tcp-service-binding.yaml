@@ -1,0 +1,61 @@
+# TCP/SSH/RDP Service Binding
+# TCP/SSH/RDP 服务绑定
+#
+# Expose non-HTTP services through Cloudflare Tunnel.
+# 通过 Cloudflare Tunnel 暴露非 HTTP 服务。
+#
+# Access with: cloudflared access <protocol> --hostname <fqdn>
+# 访问方式：cloudflared access <protocol> --hostname <fqdn>
+
+apiVersion: networking.cfargotunnel.com/v1alpha1
+kind: TunnelBinding
+metadata:
+  name: tcp-services-binding
+  namespace: default
+spec:
+  subjects:
+    # SSH server
+    # SSH 服务器
+    - kind: Service
+      name: ssh-bastion
+      spec:
+        fqdn: ssh.example.com
+        protocol: ssh
+        target: tcp://ssh-bastion.default.svc.cluster.local:22
+        # proxyAddress: 127.0.0.1  # Local proxy address
+        # proxyPort: 2222          # Local proxy port
+
+    # PostgreSQL database
+    # PostgreSQL 数据库
+    - kind: Service
+      name: postgres
+      spec:
+        fqdn: db.example.com
+        protocol: tcp
+        target: tcp://postgres.default.svc.cluster.local:5432
+
+    # RDP server (Windows)
+    # RDP 服务器（Windows）
+    - kind: Service
+      name: windows-rdp
+      spec:
+        fqdn: rdp.example.com
+        protocol: rdp
+        target: tcp://windows-rdp.default.svc.cluster.local:3389
+
+  tunnelRef:
+    kind: Tunnel
+    name: my-tunnel
+
+---
+# Example: Access SSH through the tunnel
+# 示例：通过隧道访问 SSH
+#
+# 1. Install cloudflared on client / 在客户端安装 cloudflared
+# 2. Run: cloudflared access ssh --hostname ssh.example.com
+#    运行：cloudflared access ssh --hostname ssh.example.com
+#
+# Or configure SSH config / 或配置 SSH config:
+#
+# Host ssh.example.com
+#   ProxyCommand cloudflared access ssh --hostname %h

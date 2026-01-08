@@ -1,0 +1,62 @@
+# Cloudflare Tunnel (Namespaced)
+# Cloudflare 隧道（命名空间级）
+#
+# Creates a new Cloudflare Tunnel and deploys cloudflared as a Deployment.
+# 创建新的 Cloudflare Tunnel 并将 cloudflared 部署为 Deployment。
+#
+# Prerequisites / 前置条件:
+#   - Cloudflare API credentials secret (see ../credentials/)
+#   - 已创建 Cloudflare API 凭证 secret（见 ../credentials/）
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: Tunnel
+metadata:
+  name: my-tunnel
+  namespace: default
+  labels:
+    app.kubernetes.io/name: my-tunnel
+    app.kubernetes.io/managed-by: cloudflare-operator
+spec:
+  # Create a new tunnel with this name
+  # 使用此名称创建新隧道
+  newTunnel:
+    name: my-k8s-tunnel
+
+  # Cloudflare configuration
+  # Cloudflare 配置
+  cloudflare:
+    # Your Cloudflare Account ID (required)
+    # 你的 Cloudflare 账户 ID（必填）
+    # Find it at: Dashboard > Any domain > API section
+    # 在此处找到：控制台 > 任意域名 > API 部分
+    accountId: "<your-account-id>"
+
+    # Your domain managed by Cloudflare (required)
+    # 由 Cloudflare 管理的域名（必填）
+    domain: "<your-domain.com>"
+
+    # Name of the secret containing API credentials (required)
+    # 包含 API 凭证的 secret 名称（必填）
+    secret: cloudflare-api-credentials
+
+  # Optional: Enable WARP routing for private network access
+  # 可选：启用 WARP 路由以实现私有网络访问
+  # enableWarpRouting: true
+
+  # Optional: Tunnel protocol (auto, quic, http2)
+  # 可选：隧道协议（auto、quic、http2）
+  # protocol: auto
+
+  # Optional: Default response when no ingress rule matches
+  # 可选：无匹配入口规则时的默认响应
+  # fallbackTarget: http_status:404
+
+  # Optional: Customize cloudflared deployment
+  # 可选：自定义 cloudflared 部署
+  # deployPatch: |
+  #   spec:
+  #     replicas: 3
+  #     template:
+  #       spec:
+  #         nodeSelector:
+  #           node-type: edge

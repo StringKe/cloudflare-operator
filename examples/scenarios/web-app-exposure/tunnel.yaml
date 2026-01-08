@@ -1,0 +1,26 @@
+# Cloudflare Tunnel for Web Application
+# Web 应用的 Cloudflare Tunnel
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: Tunnel
+metadata:
+  name: web-app-tunnel
+  namespace: web-app
+spec:
+  newTunnel:
+    name: web-app-tunnel
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-credentials
+
+  # Default 404 for unmatched requests
+  # 未匹配请求的默认 404
+  fallbackTarget: http_status:404
+
+  # Optional: Scale cloudflared replicas
+  # 可选：扩展 cloudflared 副本
+  # deployPatch: |
+  #   spec:
+  #     replicas: 2

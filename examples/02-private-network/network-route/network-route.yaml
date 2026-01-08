@@ -1,0 +1,91 @@
+# NetworkRoute - Route CIDR through Tunnel (Cluster-scoped)
+# NetworkRoute - 通过隧道路由 CIDR（集群级）
+#
+# Enable WARP clients to access private network ranges through Cloudflare Tunnel.
+# 允许 WARP 客户端通过 Cloudflare Tunnel 访问私有网络范围。
+#
+# Prerequisites / 前置条件:
+#   - ClusterTunnel or Tunnel with enableWarpRouting: true
+#   - 启用 enableWarpRouting: true 的 ClusterTunnel 或 Tunnel
+#   - Optional: VirtualNetwork for traffic isolation
+#   - 可选：VirtualNetwork 用于流量隔离
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: NetworkRoute
+metadata:
+  name: k8s-pod-network
+  labels:
+    environment: production
+    auto-populate: "true"  # Label for DeviceSettingsPolicy auto-populate
+spec:
+  # CIDR range to route through the tunnel (required)
+  # 通过隧道路由的 CIDR 范围（必填）
+  network: 10.244.0.0/16
+
+  # Description / 描述
+  comment: "Kubernetes Pod network - production cluster"
+
+  # Reference to the tunnel (required)
+  # 隧道引用（必填）
+  tunnelRef:
+    # Tunnel or ClusterTunnel
+    kind: ClusterTunnel
+    name: private-network-tunnel
+    # namespace: default  # Only for Tunnel kind
+
+  # Optional: Associate with a virtual network for isolation
+  # 可选：关联虚拟网络以实现隔离
+  virtualNetworkRef:
+    name: production-vnet
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Kubernetes Service Network Route
+# Kubernetes Service 网络路由
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: NetworkRoute
+metadata:
+  name: k8s-service-network
+  labels:
+    environment: production
+    auto-populate: "true"
+spec:
+  network: 10.96.0.0/12
+  comment: "Kubernetes Service network - production cluster"
+  tunnelRef:
+    kind: ClusterTunnel
+    name: private-network-tunnel
+  virtualNetworkRef:
+    name: production-vnet
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Internal Office Network Route
+# 内部办公网络路由
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: NetworkRoute
+metadata:
+  name: office-network
+  labels:
+    environment: production
+spec:
+  network: 192.168.1.0/24
+  comment: "Office internal network"
+  tunnelRef:
+    kind: ClusterTunnel
+    name: private-network-tunnel
+  # No virtualNetworkRef = use default network
+  # 无 virtualNetworkRef = 使用默认网络
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials

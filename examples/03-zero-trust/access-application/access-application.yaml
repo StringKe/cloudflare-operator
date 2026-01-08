@@ -1,0 +1,152 @@
+# AccessApplication - Zero Trust Application (Namespaced)
+# AccessApplication - 零信任应用（命名空间级）
+#
+# Protect web applications with Cloudflare Access authentication.
+# 使用 Cloudflare Access 认证保护 Web 应用。
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessApplication
+metadata:
+  name: internal-dashboard
+  namespace: default
+spec:
+  # Application name in Cloudflare
+  # Cloudflare 中的应用名称
+  name: Internal Dashboard
+
+  # Domain to protect (required)
+  # 要保护的域名（必填）
+  domain: dashboard.example.com
+
+  # Application type
+  # 应用类型
+  # Options: self_hosted, saas, ssh, vnc, app_launcher, warp, biso, bookmark, dash_sso
+  type: self_hosted
+
+  # Session duration (how long before re-authentication)
+  # 会话持续时间（重新认证前的时长）
+  sessionDuration: 24h
+
+  # Access policies - reference AccessGroup resources
+  # 访问策略 - 引用 AccessGroup 资源
+  policies:
+    - name: employees      # AccessGroup name
+      decision: allow      # allow, deny, non_identity, bypass
+      precedence: 1        # Lower = higher priority
+
+    - name: service-accounts
+      decision: allow
+      precedence: 2
+
+  # Optional: Logo for the app launcher
+  # 可选：应用启动器的 Logo
+  logoUrl: https://example.com/logo.png
+
+  # Show in App Launcher
+  # 在应用启动器中显示
+  appLauncherVisible: true
+
+  # Skip the "You are accessing..." interstitial page
+  # 跳过"你正在访问..."过渡页面
+  skipInterstitial: true
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# SSH Application
+# SSH 应用
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessApplication
+metadata:
+  name: ssh-access
+  namespace: default
+spec:
+  name: SSH Bastion
+  domain: ssh.example.com
+  type: ssh
+
+  sessionDuration: 8h
+
+  policies:
+    - name: engineering-team
+      decision: allow
+      precedence: 1
+
+  # Require secure devices for SSH
+  # SSH 需要安全设备
+  # policies:
+  #   - name: secure-devices
+  #     decision: allow
+  #     precedence: 1
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Public Application (bypass authentication)
+# 公开应用（绕过认证）
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessApplication
+metadata:
+  name: public-api
+  namespace: default
+spec:
+  name: Public API
+  domain: api.example.com
+  type: self_hosted
+
+  # Allow everyone (no authentication)
+  # 允许所有人（无认证）
+  policies:
+    - name: everyone
+      decision: bypass
+      precedence: 1
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Application with Custom Deny Page
+# 带自定义拒绝页面的应用
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessApplication
+metadata:
+  name: admin-panel
+  namespace: default
+spec:
+  name: Admin Panel
+  domain: admin.example.com
+  type: self_hosted
+
+  sessionDuration: 1h
+
+  policies:
+    - name: engineering-team
+      decision: allow
+      precedence: 1
+
+  # Custom deny message
+  # 自定义拒绝消息
+  customDenyMessage: "Access denied. Please contact IT support."
+  customDenyUrl: https://support.example.com/access-denied
+
+  # Security settings
+  # 安全设置
+  httpOnlyCookieAttribute: true
+  sameSiteCookieAttribute: strict
+  enableBindingCookie: true
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials

@@ -1,0 +1,158 @@
+# AccessGroup - Reusable Access Policies (Cluster-scoped)
+# AccessGroup - 可复用的访问策略（集群级）
+#
+# Define groups of users/conditions that can be reused across Access Applications.
+# 定义可在 Access 应用中复用的用户/条件组。
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessGroup
+metadata:
+  name: employees
+  labels:
+    type: employee-group
+spec:
+  # Group name in Cloudflare
+  # Cloudflare 中的组名称
+  name: All Employees
+
+  # Include rules - users must match at least ONE rule
+  # Include 规则 - 用户必须匹配至少一条规则
+  include:
+    # Match by email domain
+    # 按邮箱域名匹配
+    - emailDomain:
+        domain: company.com
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Engineering Team Group
+# 工程团队组
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessGroup
+metadata:
+  name: engineering-team
+spec:
+  name: Engineering Team
+
+  include:
+    # GitHub organization and teams
+    # GitHub 组织和团队
+    - github:
+        name: "your-org"
+        identityProviderId: "<github-idp-id>"
+        teams:
+          - engineering
+          - devops
+          - sre
+
+    # Or specific emails
+    # 或特定邮箱
+    - email:
+        email: lead-engineer@company.com
+
+  # Exclude rules - users matching these are denied even if they match include
+  # Exclude 规则 - 匹配这些规则的用户会被拒绝，即使他们匹配了 include
+  exclude:
+    - email:
+        email: suspended@company.com
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Contractors Group with Geo Restriction
+# 带地理限制的承包商组
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessGroup
+metadata:
+  name: contractors
+spec:
+  name: External Contractors
+
+  include:
+    - emailDomain:
+        domain: contractor-company.com
+
+  # Require rules - users must match ALL require rules
+  # Require 规则 - 用户必须匹配所有 require 规则
+  require:
+    # Must be in allowed countries
+    # 必须在允许的国家
+    - country:
+        country:
+          - US
+          - CA
+          - GB
+          - DE
+
+  # Block from certain countries
+  # 阻止来自某些国家
+  exclude:
+    - country:
+        country:
+          - CN
+          - RU
+          - KP
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Service Accounts Group (for M2M auth)
+# 服务账户组（用于 M2M 认证）
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessGroup
+metadata:
+  name: service-accounts
+spec:
+  name: Service Accounts
+
+  include:
+    # Any valid service token
+    # 任意有效的服务令牌
+    - anyValidServiceToken: true
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Secure Devices Group (requires device posture)
+# 安全设备组（需要设备态势）
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessGroup
+metadata:
+  name: secure-devices
+spec:
+  name: Secure Devices Only
+
+  include:
+    - everyone: true
+
+  require:
+    # Require device posture check
+    # 要求设备态势检查
+    - devicePosture:
+        integrationUid: "<device-posture-rule-id>"
+
+    # Require valid certificate
+    # 要求有效证书
+    - certificate: true
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials

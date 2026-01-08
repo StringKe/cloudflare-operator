@@ -1,0 +1,47 @@
+# Multi-Service TunnelBinding
+# 多服务 TunnelBinding
+#
+# Bind multiple services to the same tunnel with different FQDNs.
+# 将多个服务绑定到同一隧道，使用不同的 FQDN。
+
+apiVersion: networking.cfargotunnel.com/v1alpha1
+kind: TunnelBinding
+metadata:
+  name: multi-app-binding
+  namespace: default
+spec:
+  subjects:
+    # Frontend application
+    # 前端应用
+    - kind: Service
+      name: frontend
+      spec:
+        fqdn: www.example.com
+        protocol: http
+
+    # Backend API
+    # 后端 API
+    - kind: Service
+      name: backend-api
+      spec:
+        fqdn: api.example.com
+        protocol: https
+        # Path matching (regex) - only for http/https
+        # 路径匹配（正则）- 仅限 http/https
+        path: /api/.*
+
+    # Admin panel with custom target
+    # 管理面板，使用自定义目标
+    - kind: Service
+      name: admin
+      spec:
+        fqdn: admin.example.com
+        protocol: https
+        target: https://admin.default.svc.cluster.local:8443
+        # Skip TLS verification for self-signed certs
+        # 跳过自签名证书的 TLS 验证
+        noTlsVerify: true
+
+  tunnelRef:
+    kind: ClusterTunnel
+    name: shared-cluster-tunnel

@@ -1,0 +1,106 @@
+# Cluster A (Production) Resources
+# 集群 A（生产）资源
+#
+# Apply this file to your production cluster.
+# 将此文件应用到你的生产集群。
+
+---
+# Cloudflare Credentials
+# Cloudflare 凭证
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cloudflare-credentials
+  namespace: cloudflare-operator-system
+type: Opaque
+stringData:
+  CLOUDFLARE_API_TOKEN: "<your-api-token>"
+
+---
+# Virtual Network for Production
+# 生产环境的虚拟网络
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: VirtualNetwork
+metadata:
+  name: production-vnet
+  labels:
+    environment: production
+    cluster: cluster-a
+spec:
+  name: Production Network
+  comment: "Production cluster virtual network"
+  isDefaultNetwork: false  # Don't set as default
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-credentials
+
+---
+# ClusterTunnel for Production
+# 生产环境的 ClusterTunnel
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: ClusterTunnel
+metadata:
+  name: production-tunnel
+  labels:
+    environment: production
+    cluster: cluster-a
+spec:
+  newTunnel:
+    name: prod-cluster-a
+  enableWarpRouting: true
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-credentials
+  deployPatch: |
+    spec:
+      replicas: 2
+
+---
+# Network Routes for Production
+# 生产环境的网络路由
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: NetworkRoute
+metadata:
+  name: prod-pod-network
+  labels:
+    environment: production
+    cluster: cluster-a
+spec:
+  network: 10.1.0.0/16
+  comment: "Production Pod network"
+  tunnelRef:
+    kind: ClusterTunnel
+    name: production-tunnel
+  virtualNetworkRef:
+    name: production-vnet
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-credentials
+
+---
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: NetworkRoute
+metadata:
+  name: prod-service-network
+  labels:
+    environment: production
+    cluster: cluster-a
+spec:
+  network: 10.101.0.0/16
+  comment: "Production Service network"
+  tunnelRef:
+    kind: ClusterTunnel
+    name: production-tunnel
+  virtualNetworkRef:
+    name: production-vnet
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-credentials

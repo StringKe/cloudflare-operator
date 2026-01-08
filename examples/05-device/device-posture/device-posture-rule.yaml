@@ -1,0 +1,139 @@
+# DevicePostureRule - Device Health Checks (Cluster-scoped)
+# DevicePostureRule - 设备健康检查（集群级）
+#
+# Define rules to verify device security posture before granting access.
+# 定义规则以在授予访问权限前验证设备安全态势。
+
+# Require Disk Encryption
+# 要求磁盘加密
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: DevicePostureRule
+metadata:
+  name: require-disk-encryption
+spec:
+  name: Require Disk Encryption
+  description: Ensure device has disk encryption enabled
+
+  # Rule type
+  # 规则类型
+  # Options: file, application, serial_number, os_version, domain_joined,
+  #          disk_encryption, firewall, workspace_one, crowdstrike_s2s,
+  #          sentinelone, tanium, intune, kolide
+  type: disk_encryption
+
+  # Platform filter
+  # 平台过滤
+  match:
+    platform: mac  # windows, mac, linux, ios, android
+
+  input:
+    requireAll: true
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Require Firewall Enabled
+# 要求启用防火墙
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: DevicePostureRule
+metadata:
+  name: require-firewall
+spec:
+  name: Require Firewall
+  description: Ensure device firewall is enabled
+  type: firewall
+
+  match:
+    platform: windows
+
+  input:
+    enabled: true
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Check OS Version
+# 检查操作系统版本
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: DevicePostureRule
+metadata:
+  name: require-os-version
+spec:
+  name: Require Minimum OS Version
+  description: Ensure device is running a supported OS version
+  type: os_version
+
+  match:
+    platform: mac
+
+  input:
+    # Minimum macOS version
+    # 最低 macOS 版本
+    version: "13.0"
+    operator: ">="
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Check Required Application
+# 检查必需的应用程序
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: DevicePostureRule
+metadata:
+  name: require-security-app
+spec:
+  name: Require Security Application
+  description: Ensure security software is installed
+  type: application
+
+  match:
+    platform: mac
+
+  input:
+    # Check if application exists
+    # 检查应用是否存在
+    path: /Applications/CrowdStrike Falcon.app
+    sha256: ""  # Optional: verify hash
+    thumbprint: ""  # Optional: verify certificate
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Domain Joined Check (Windows)
+# 域加入检查（Windows）
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: DevicePostureRule
+metadata:
+  name: require-domain-joined
+spec:
+  name: Require Domain Joined
+  description: Ensure Windows device is joined to corporate domain
+  type: domain_joined
+
+  match:
+    platform: windows
+
+  input:
+    domain: "corp.company.com"
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials

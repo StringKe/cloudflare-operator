@@ -1,0 +1,85 @@
+# Network Routes for Kubernetes Networks
+# Kubernetes 网络的网络路由
+
+# Pod Network Route
+# Pod 网络路由
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: NetworkRoute
+metadata:
+  name: k8s-pod-network
+  labels:
+    cluster: primary
+    auto-populate: "true"  # For DeviceSettingsPolicy auto-populate
+spec:
+  # Kubernetes Pod CIDR
+  # Kubernetes Pod CIDR
+  # Check with: kubectl get nodes -o jsonpath='{.items[*].spec.podCIDR}'
+  network: 10.244.0.0/16
+
+  comment: "Kubernetes Pod network (Flannel)"
+
+  tunnelRef:
+    kind: ClusterTunnel
+    name: private-access-tunnel
+
+  virtualNetworkRef:
+    name: k8s-network
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-credentials
+
+---
+# Service Network Route
+# Service 网络路由
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: NetworkRoute
+metadata:
+  name: k8s-service-network
+  labels:
+    cluster: primary
+    auto-populate: "true"
+spec:
+  # Kubernetes Service CIDR
+  # Kubernetes Service CIDR
+  network: 10.96.0.0/12
+
+  comment: "Kubernetes Service network"
+
+  tunnelRef:
+    kind: ClusterTunnel
+    name: private-access-tunnel
+
+  virtualNetworkRef:
+    name: k8s-network
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-credentials
+
+---
+# Node Network Route (optional - for node access)
+# 节点网络路由（可选 - 用于节点访问）
+
+# apiVersion: networking.cloudflare-operator.io/v1alpha2
+# kind: NetworkRoute
+# metadata:
+#   name: k8s-node-network
+#   labels:
+#     cluster: primary
+# spec:
+#   network: 192.168.1.0/24
+#   comment: "Kubernetes node network"
+#   tunnelRef:
+#     kind: ClusterTunnel
+#     name: private-access-tunnel
+#   virtualNetworkRef:
+#     name: k8s-network
+#   cloudflare:
+#     accountId: "<your-account-id>"
+#     domain: "<your-domain.com>"
+#     secret: cloudflare-credentials

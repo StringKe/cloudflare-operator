@@ -1,0 +1,33 @@
+# TunnelBinding - Expose Web App
+# TunnelBinding - 暴露 Web 应用
+#
+# Binds the web-app service to the tunnel with automatic DNS
+# 将 web-app 服务绑定到隧道，自动配置 DNS
+
+apiVersion: networking.cfargotunnel.com/v1alpha1
+kind: TunnelBinding
+metadata:
+  name: web-app-binding
+  namespace: web-app
+spec:
+  subjects:
+    - kind: Service
+      name: web-app
+      spec:
+        # Public hostname for the application
+        # 应用的公共主机名
+        # This will create a CNAME record: app.example.com → <tunnel-id>.cfargotunnel.com
+        # 这将创建 CNAME 记录：app.example.com → <tunnel-id>.cfargotunnel.com
+        fqdn: app.<your-domain.com>
+
+        # Protocol to use
+        # 使用的协议
+        protocol: http
+
+        # Backend target (auto-generated if not specified)
+        # 后端目标（未指定时自动生成）
+        # target: http://web-app.web-app.svc.cluster.local:80
+
+  tunnelRef:
+    kind: Tunnel
+    name: web-app-tunnel

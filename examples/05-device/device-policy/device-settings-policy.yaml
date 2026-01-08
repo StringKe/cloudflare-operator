@@ -1,0 +1,99 @@
+# DeviceSettingsPolicy - WARP Client Configuration (Cluster-scoped)
+# DeviceSettingsPolicy - WARP 客户端配置（集群级）
+#
+# Configure split tunnel, fallback domains, and other WARP client settings.
+# 配置分流隧道、回退域和其他 WARP 客户端设置。
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: DeviceSettingsPolicy
+metadata:
+  name: default-device-policy
+spec:
+  # Split tunnel mode: exclude (default) or include
+  # 分流模式：exclude（默认）或 include
+  #
+  # exclude: Route all traffic through WARP except specified addresses
+  # exclude：除指定地址外，所有流量通过 WARP
+  #
+  # include: Only route specified addresses through WARP
+  # include：仅指定地址通过 WARP
+  splitTunnelMode: exclude
+
+  # Addresses to EXCLUDE from WARP tunnel (when mode=exclude)
+  # 从 WARP 隧道中排除的地址（mode=exclude 时）
+  splitTunnelExclude:
+    # Local networks (typically excluded)
+    # 本地网络（通常排除）
+    - address: 10.0.0.0/8
+      description: Private network (Class A)
+    - address: 172.16.0.0/12
+      description: Private network (Class B)
+    - address: 192.168.0.0/16
+      description: Private network (Class C)
+
+    # Localhost
+    - address: 127.0.0.0/8
+      description: Localhost
+
+    # Local services
+    - host: printer.local
+      description: Local printer
+
+  # Fallback domains - use custom DNS servers for specific domains
+  # 回退域 - 为特定域使用自定义 DNS 服务器
+  fallbackDomains:
+    - suffix: internal.company.com
+      description: Internal company domains
+      dnsServer:
+        - 10.0.0.53
+        - 10.0.1.53
+
+    - suffix: corp.local
+      description: Legacy Active Directory domains
+      dnsServer:
+        - 192.168.1.53
+
+  # Auto-populate from NetworkRoute resources
+  # 从 NetworkRoute 资源自动填充
+  autoPopulateFromRoutes:
+    enabled: true
+    # Only include routes with this label
+    # 仅包含带此标签的路由
+    labelSelector:
+      matchLabels:
+        auto-populate: "true"
+    # Prefix for auto-generated descriptions
+    # 自动生成描述的前缀
+    descriptionPrefix: "Auto: "
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Include Mode Policy (only route specific traffic through WARP)
+# Include 模式策略（仅将特定流量通过 WARP 路由）
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: DeviceSettingsPolicy
+metadata:
+  name: include-mode-policy
+spec:
+  splitTunnelMode: include
+
+  # Addresses to INCLUDE in WARP tunnel (when mode=include)
+  # 包含在 WARP 隧道中的地址（mode=include 时）
+  splitTunnelInclude:
+    # Only route corporate network through WARP
+    # 仅将企业网络通过 WARP 路由
+    - address: 10.100.0.0/16
+      description: Corporate network
+
+    - address: 10.200.0.0/16
+      description: Kubernetes cluster network
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials

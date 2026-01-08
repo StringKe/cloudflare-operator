@@ -1,0 +1,53 @@
+# Use Existing Tunnel
+# 使用现有隧道
+#
+# Reference a tunnel that was created outside of Kubernetes
+# (e.g., via Cloudflare Dashboard or CLI).
+# 引用在 Kubernetes 外部创建的隧道
+#（例如，通过 Cloudflare 控制台或 CLI）。
+#
+# Note: You must provide the tunnel credentials secret manually.
+# 注意：你必须手动提供隧道凭证 secret。
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: Tunnel
+metadata:
+  name: existing-tunnel
+  namespace: default
+spec:
+  # Reference existing tunnel by ID
+  # 通过 ID 引用现有隧道
+  existingTunnel:
+    # Option 1: Use tunnel ID (UUID format)
+    # 方式一：使用隧道 ID（UUID 格式）
+    id: "<tunnel-uuid>"
+
+    # Option 2: Use tunnel name (uncomment to use)
+    # 方式二：使用隧道名称（取消注释使用）
+    # name: "my-existing-tunnel"
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# Tunnel credentials secret (for existing tunnels)
+# 隧道凭证 secret（用于现有隧道）
+#
+# Get credentials from: cloudflared tunnel token <tunnel-name>
+# 获取凭证：cloudflared tunnel token <tunnel-name>
+
+# apiVersion: v1
+# kind: Secret
+# metadata:
+#   name: tunnel-credentials
+#   namespace: default
+# type: Opaque
+# stringData:
+#   credentials.json: |
+#     {
+#       "AccountTag": "<account-tag>",
+#       "TunnelSecret": "<tunnel-secret>",
+#       "TunnelID": "<tunnel-id>"
+#     }

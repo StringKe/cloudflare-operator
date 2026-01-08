@@ -1,0 +1,53 @@
+# Sample Web Application
+# 示例 Web 应用
+#
+# This is a simple nginx deployment for demonstration.
+# Replace with your actual application.
+# 这是用于演示的简单 nginx 部署。
+# 请替换为你的实际应用。
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-app
+  namespace: web-app
+  labels:
+    app: web-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: web-app
+  template:
+    metadata:
+      labels:
+        app: web-app
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:alpine
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-app
+  namespace: web-app
+  labels:
+    app: web-app
+spec:
+  selector:
+    app: web-app
+  ports:
+    - port: 80
+      targetPort: 80
+      protocol: TCP

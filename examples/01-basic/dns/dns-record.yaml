@@ -1,0 +1,96 @@
+# DNSRecord - Manage Cloudflare DNS Records
+# DNSRecord - 管理 Cloudflare DNS 记录
+#
+# Create and manage DNS records in your Cloudflare zone.
+# 在 Cloudflare 区域中创建和管理 DNS 记录。
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: DNSRecord
+metadata:
+  name: www-record
+  namespace: default
+spec:
+  # Record name (subdomain or FQDN)
+  # 记录名称（子域名或 FQDN）
+  name: www
+
+  # Record type: A, AAAA, CNAME, TXT, MX, NS, SRV, CAA
+  # 记录类型：A、AAAA、CNAME、TXT、MX、NS、SRV、CAA
+  type: A
+
+  # Record content (IP address, hostname, or text value)
+  # 记录内容（IP 地址、主机名或文本值）
+  content: 203.0.113.50
+
+  # TTL in seconds (1 = auto, managed by Cloudflare)
+  # TTL 秒数（1 = 自动，由 Cloudflare 管理）
+  ttl: 1
+
+  # Enable Cloudflare proxy (orange cloud)
+  # 启用 Cloudflare 代理（橙色云朵）
+  # Only available for A, AAAA, CNAME records
+  # 仅适用于 A、AAAA、CNAME 记录
+  proxied: true
+
+  # Optional comment
+  # 可选注释
+  comment: "Web server managed by K8s operator"
+
+  cloudflare:
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# CNAME Record Example
+# CNAME 记录示例
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: DNSRecord
+metadata:
+  name: blog-cname
+  namespace: default
+spec:
+  name: blog
+  type: CNAME
+  content: www.example.com
+  proxied: true
+  cloudflare:
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# TXT Record Example (for verification, SPF, etc.)
+# TXT 记录示例（用于验证、SPF 等）
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: DNSRecord
+metadata:
+  name: txt-verification
+  namespace: default
+spec:
+  name: _verify
+  type: TXT
+  content: "verification-token-12345"
+  ttl: 3600
+  cloudflare:
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# MX Record Example (for email)
+# MX 记录示例（用于邮件）
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: DNSRecord
+metadata:
+  name: mx-record
+  namespace: default
+spec:
+  name: "@"  # Root domain / 根域名
+  type: MX
+  content: mail.example.com
+  priority: 10
+  ttl: 3600
+  cloudflare:
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials

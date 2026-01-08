@@ -1,0 +1,50 @@
+# TunnelBinding - Bind Services to Tunnel
+# TunnelBinding - 将服务绑定到隧道
+#
+# Automatically configures tunnel ingress rules and DNS records
+# for Kubernetes Services.
+# 自动为 Kubernetes Service 配置隧道入口规则和 DNS 记录。
+#
+# Prerequisites / 前置条件:
+#   - A Tunnel or ClusterTunnel resource
+#   - 已创建 Tunnel 或 ClusterTunnel 资源
+#   - Target Service exists
+#   - 目标 Service 存在
+
+apiVersion: networking.cfargotunnel.com/v1alpha1
+kind: TunnelBinding
+metadata:
+  name: web-app-binding
+  namespace: default
+  labels:
+    app.kubernetes.io/name: web-app
+spec:
+  # Services to expose through the tunnel
+  # 通过隧道暴露的服务
+  subjects:
+    - kind: Service
+      name: web-app
+      spec:
+        # Public FQDN for this service (required)
+        # 此服务的公共 FQDN（必填）
+        fqdn: app.example.com
+
+        # Protocol: http, https, tcp, udp, ssh, rdp, smb
+        # 协议：http、https、tcp、udp、ssh、rdp、smb
+        protocol: http
+
+        # Backend target URL (optional, auto-generated if not specified)
+        # 后端目标 URL（可选，未指定时自动生成）
+        # target: http://web-app.default.svc.cluster.local:8080
+
+  # Reference to the tunnel
+  # 隧道引用
+  tunnelRef:
+    # Tunnel or ClusterTunnel
+    # Tunnel 或 ClusterTunnel
+    kind: Tunnel
+    name: my-tunnel
+
+    # Disable automatic DNS record creation (optional)
+    # 禁用自动 DNS 记录创建（可选）
+    # disableDNSUpdates: false

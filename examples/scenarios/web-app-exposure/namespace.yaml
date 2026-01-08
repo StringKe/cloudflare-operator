@@ -1,0 +1,10 @@
+# Namespace for Web Application
+# Web 应用的命名空间
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: web-app
+  labels:
+    app.kubernetes.io/name: web-app
+    app.kubernetes.io/managed-by: cloudflare-operator

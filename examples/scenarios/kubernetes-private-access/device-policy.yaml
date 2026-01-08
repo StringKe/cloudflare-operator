@@ -1,0 +1,52 @@
+# Device Settings Policy for WARP Clients
+# WARP 客户端的设备设置策略
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: DeviceSettingsPolicy
+metadata:
+  name: k8s-access-policy
+spec:
+  # Exclude mode: route all except specified
+  # 排除模式：路由所有流量，除了指定的
+  splitTunnelMode: exclude
+
+  # Exclude local networks from WARP
+  # 从 WARP 排除本地网络
+  splitTunnelExclude:
+    - address: 192.168.0.0/16
+      description: Local home/office network
+    - address: 172.16.0.0/12
+      description: Docker networks
+    - address: 127.0.0.0/8
+      description: Localhost
+
+  # Fallback domains for Kubernetes DNS
+  # Kubernetes DNS 的回退域
+  # This allows resolving service.namespace.svc.cluster.local
+  # 这允许解析 service.namespace.svc.cluster.local
+  fallbackDomains:
+    - suffix: svc.cluster.local
+      description: Kubernetes service DNS
+      dnsServer:
+        # Use your cluster's CoreDNS/kube-dns service IP
+        # 使用你集群的 CoreDNS/kube-dns 服务 IP
+        - 10.96.0.10
+
+    - suffix: pod.cluster.local
+      description: Kubernetes pod DNS
+      dnsServer:
+        - 10.96.0.10
+
+  # Auto-populate split tunnel from NetworkRoutes
+  # 从 NetworkRoute 自动填充分流隧道
+  autoPopulateFromRoutes:
+    enabled: true
+    labelSelector:
+      matchLabels:
+        auto-populate: "true"
+    descriptionPrefix: "Auto: "
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-credentials
