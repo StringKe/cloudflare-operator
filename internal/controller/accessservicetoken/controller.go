@@ -195,10 +195,16 @@ func (r *AccessServiceTokenReconciler) reconcileServiceToken(ctx context.Context
 			}
 		}
 	} else {
-		// Token already exists - only update if spec changed
-		if token.Status.ObservedGeneration == token.Generation && token.Status.State == "Ready" {
-			// No changes, skip update
+		// Token already exists - only update if spec changed (generation changed)
+		if token.Status.ObservedGeneration == token.Generation {
+			// No changes to spec, skip update and reuse existing status
 			logger.V(1).Info("Access Service Token spec unchanged, skipping update", "tokenId", token.Status.TokenID)
+			// If already Ready, just return with existing status
+			if token.Status.State == "Ready" {
+				return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
+			}
+			// If in Error state but generation unchanged, also skip update
+			// Use cached values to update state to Ready since token exists
 			result = &cf.AccessServiceTokenResult{
 				TokenID:   token.Status.TokenID,
 				ClientID:  token.Status.ClientID,
