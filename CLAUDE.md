@@ -20,10 +20,11 @@
 - **Group**: `networking.cloudflare-operator.io`
 - **版本**: v1alpha1 (deprecated), v1alpha2 (storage version)
 
-### 已实现的 CRD (21个)
+### 已实现的 CRD (19个)
 
 | 类别 | CRD | 作用域 | 状态 |
 |------|-----|--------|------|
+| **凭证** | CloudflareCredentials | Cluster | ✅ 完成 |
 | **网络层** | Tunnel | Namespaced | ✅ 完成 |
 | | ClusterTunnel | Cluster | ✅ 完成 |
 | | VirtualNetwork | Cluster | ✅ 完成 |
@@ -31,17 +32,17 @@
 | | WARPConnector | Cluster | ⚠️ 框架完成 |
 | **服务层** | TunnelBinding | Namespaced | ✅ 完成 |
 | | PrivateService | Namespaced | ✅ 完成 |
-| | DNSRecord | Namespaced | ⚠️ 框架完成 |
+| | DNSRecord | Namespaced | ✅ 完成 |
+| **身份层** | AccessApplication | Namespaced | ✅ 完成 |
+| | AccessGroup | Cluster | ✅ 完成 |
+| | AccessServiceToken | Cluster | ✅ 完成 |
+| | AccessIdentityProvider | Cluster | ✅ 完成 |
+| | AccessTunnel | Namespaced | ⚠️ 框架完成 |
 | **设备层** | DevicePostureRule | Cluster | ⚠️ 框架完成 |
 | | DeviceSettingsPolicy | Cluster | ⚠️ 框架完成 |
 | **网关层** | GatewayRule | Cluster | ⚠️ 框架完成 |
 | | GatewayList | Cluster | ⚠️ 框架完成 |
-| | GatewayConfiguration | Cluster | ⚠️ 框架完成 |
-| **身份层** | AccessApplication | Namespaced | ⚠️ 框架完成 |
-| | AccessGroup | Cluster | ⚠️ 框架完成 |
-| | AccessServiceToken | Namespaced | ⚠️ 框架完成 |
-| | AccessIdentityProvider | Cluster | ⚠️ 框架完成 |
-| **凭证** | CloudflareCredentials | Cluster | ✅ 完成 |
+| | GatewayConfiguration | Cluster | ✅ 完成 |
 
 ---
 
