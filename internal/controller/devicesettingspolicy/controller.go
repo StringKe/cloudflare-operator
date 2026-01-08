@@ -32,7 +32,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
@@ -136,9 +138,10 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 	// because they are account-wide settings. The user should manage this manually
 	// or use another DeviceSettingsPolicy to reset them.
 
-	// Remove finalizer
-	controllerutil.RemoveFinalizer(r.policy, controller.DeviceSettingsPolicyFinalizer)
-	if err := r.Update(r.ctx, r.policy); err != nil {
+	// P0 FIX: Remove finalizer with retry logic to handle conflicts
+	if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.policy, func() {
+		controllerutil.RemoveFinalizer(r.policy, controller.DeviceSettingsPolicyFinalizer)
+	}); err != nil {
 		r.log.Error(err, "failed to remove finalizer")
 		return ctrl.Result{}, err
 	}
@@ -314,11 +317,70 @@ func (r *Reconciler) setCondition(status metav1.ConditionStatus, reason, message
 	})
 }
 
+// policyMatchesNetworkRoute checks if a DeviceSettingsPolicy should be triggered by a NetworkRoute change.
+func policyMatchesNetworkRoute(policy *networkingv1alpha2.DeviceSettingsPolicy, route *networkingv1alpha2.NetworkRoute) bool {
+	if policy.Spec.AutoPopulateFromRoutes == nil || !policy.Spec.AutoPopulateFromRoutes.Enabled {
+		return false
+	}
+
+	// Check if the NetworkRoute matches the label selector (if any)
+	if policy.Spec.AutoPopulateFromRoutes.LabelSelector != nil {
+		selector, err := metav1.LabelSelectorAsSelector(policy.Spec.AutoPopulateFromRoutes.LabelSelector)
+		if err != nil {
+			return false
+		}
+		if !selector.Matches(labels.Set(route.Labels)) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// findDeviceSettingsPoliciesForNetworkRoute returns a list of reconcile requests for DeviceSettingsPolicies
+// that have AutoPopulateFromRoutes enabled and might reference the given NetworkRoute.
+func (r *Reconciler) findDeviceSettingsPoliciesForNetworkRoute(ctx context.Context, obj client.Object) []reconcile.Request {
+	route, ok := obj.(*networkingv1alpha2.NetworkRoute)
+	if !ok {
+		return nil
+	}
+	logger := ctrllog.FromContext(ctx)
+
+	// Find all DeviceSettingsPolicies that have AutoPopulateFromRoutes enabled
+	policyList := &networkingv1alpha2.DeviceSettingsPolicyList{}
+	if err := r.List(ctx, policyList); err != nil {
+		logger.Error(err, "Failed to list DeviceSettingsPolicies for NetworkRoute watch")
+		return nil
+	}
+
+	requests := make([]reconcile.Request, 0, len(policyList.Items))
+	for i := range policyList.Items {
+		policy := &policyList.Items[i]
+		if !policyMatchesNetworkRoute(policy, route) {
+			continue
+		}
+
+		logger.Info("NetworkRoute changed, triggering DeviceSettingsPolicy reconcile",
+			"networkroute", route.Name,
+			"devicesettingspolicy", policy.Name)
+		requests = append(requests, reconcile.Request{
+			NamespacedName: client.ObjectKeyFromObject(policy),
+		})
+	}
+
+	return requests
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("devicesettingspolicy-controller")
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.DeviceSettingsPolicy{}).
+		// P1 FIX: Watch NetworkRoute changes for auto-populate feature
+		Watches(
+			&networkingv1alpha2.NetworkRoute{},
+			handler.EnqueueRequestsFromMapFunc(r.findDeviceSettingsPoliciesForNetworkRoute),
+		).
 		Complete(r)
 }
 

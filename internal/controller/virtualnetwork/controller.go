@@ -170,9 +170,10 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 		}
 	}
 
-	// Remove finalizer
-	controllerutil.RemoveFinalizer(r.vnet, controller.VirtualNetworkFinalizer)
-	if err := r.Update(r.ctx, r.vnet); err != nil {
+	// P2 FIX: Remove finalizer with retry logic to handle conflicts
+	if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.vnet, func() {
+		controllerutil.RemoveFinalizer(r.vnet, controller.VirtualNetworkFinalizer)
+	}); err != nil {
 		r.log.Error(err, "failed to remove finalizer")
 		return ctrl.Result{}, err
 	}

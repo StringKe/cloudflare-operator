@@ -34,6 +34,7 @@ import (
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
+	"github.com/StringKe/cloudflare-operator/internal/controller"
 )
 
 const (
@@ -95,24 +96,28 @@ func (r *AccessGroupReconciler) handleDeletion(ctx context.Context, accessGroup 
 		if accessGroup.Status.GroupID != "" {
 			logger.Info("Deleting Access Group from Cloudflare", "groupId", accessGroup.Status.GroupID)
 			if err := apiClient.DeleteAccessGroup(accessGroup.Status.GroupID); err != nil {
-				// Check if resource already deleted
+				// P0 FIX: Check if resource already deleted
 				if !cf.IsNotFoundError(err) {
 					logger.Error(err, "Failed to delete Access Group from Cloudflare")
-					r.Recorder.Event(accessGroup, corev1.EventTypeWarning, "DeleteFailed",
-						fmt.Sprintf("Failed to delete from Cloudflare: %v", err))
+					r.Recorder.Event(accessGroup, corev1.EventTypeWarning, controller.EventReasonDeleteFailed,
+						fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
 					return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 				}
 				logger.Info("Access Group already deleted from Cloudflare")
+				r.Recorder.Event(accessGroup, corev1.EventTypeNormal, "AlreadyDeleted", "Access Group was already deleted from Cloudflare")
 			} else {
-				r.Recorder.Event(accessGroup, corev1.EventTypeNormal, "Deleted", "Deleted from Cloudflare")
+				r.Recorder.Event(accessGroup, corev1.EventTypeNormal, controller.EventReasonDeleted, "Deleted from Cloudflare")
 			}
 		}
 
-		// Remove finalizer
-		controllerutil.RemoveFinalizer(accessGroup, FinalizerName)
-		if err := r.Update(ctx, accessGroup); err != nil {
+		// P0 FIX: Remove finalizer with retry logic to handle conflicts
+		if err := controller.UpdateWithConflictRetry(ctx, r.Client, accessGroup, func() {
+			controllerutil.RemoveFinalizer(accessGroup, FinalizerName)
+		}); err != nil {
+			logger.Error(err, "failed to remove finalizer")
 			return ctrl.Result{}, err
 		}
+		r.Recorder.Event(accessGroup, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
 	}
 
 	return ctrl.Result{}, nil
@@ -147,11 +152,11 @@ func (r *AccessGroupReconciler) reconcileAccessGroup(ctx context.Context, access
 			fmt.Sprintf("Creating Access Group '%s' in Cloudflare", params.Name))
 		result, err = apiClient.CreateAccessGroup(params)
 		if err != nil {
-			r.Recorder.Event(accessGroup, corev1.EventTypeWarning, "CreateFailed",
-				fmt.Sprintf("Failed to create Access Group: %v", err))
+			r.Recorder.Event(accessGroup, corev1.EventTypeWarning, controller.EventReasonCreateFailed,
+				fmt.Sprintf("Failed to create Access Group: %s", cf.SanitizeErrorMessage(err)))
 			return r.updateStatusError(ctx, accessGroup, err)
 		}
-		r.Recorder.Event(accessGroup, corev1.EventTypeNormal, "Created",
+		r.Recorder.Event(accessGroup, corev1.EventTypeNormal, controller.EventReasonCreated,
 			fmt.Sprintf("Created Access Group with ID '%s'", result.ID))
 	} else {
 		// Update existing access group
@@ -160,11 +165,11 @@ func (r *AccessGroupReconciler) reconcileAccessGroup(ctx context.Context, access
 			fmt.Sprintf("Updating Access Group '%s' in Cloudflare", accessGroup.Status.GroupID))
 		result, err = apiClient.UpdateAccessGroup(accessGroup.Status.GroupID, params)
 		if err != nil {
-			r.Recorder.Event(accessGroup, corev1.EventTypeWarning, "UpdateFailed",
-				fmt.Sprintf("Failed to update Access Group: %v", err))
+			r.Recorder.Event(accessGroup, corev1.EventTypeWarning, controller.EventReasonUpdateFailed,
+				fmt.Sprintf("Failed to update Access Group: %s", cf.SanitizeErrorMessage(err)))
 			return r.updateStatusError(ctx, accessGroup, err)
 		}
-		r.Recorder.Event(accessGroup, corev1.EventTypeNormal, "Updated",
+		r.Recorder.Event(accessGroup, corev1.EventTypeNormal, controller.EventReasonUpdated,
 			fmt.Sprintf("Updated Access Group '%s'", result.ID))
 	}
 
@@ -267,17 +272,20 @@ func (r *AccessGroupReconciler) buildGroupRules(rules []networkingv1alpha2.Acces
 }
 
 func (r *AccessGroupReconciler) updateStatusError(ctx context.Context, accessGroup *networkingv1alpha2.AccessGroup, err error) (ctrl.Result, error) {
-	accessGroup.Status.State = "Error"
-	meta.SetStatusCondition(&accessGroup.Status.Conditions, metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionFalse,
-		Reason:             "ReconcileError",
-		Message:            err.Error(),
-		LastTransitionTime: metav1.Now(),
+	// P0 FIX: Use UpdateStatusWithConflictRetry for status updates
+	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, accessGroup, func() {
+		accessGroup.Status.State = "Error"
+		meta.SetStatusCondition(&accessGroup.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: accessGroup.Generation,
+			Reason:             "ReconcileError",
+			Message:            cf.SanitizeErrorMessage(err),
+			LastTransitionTime: metav1.Now(),
+		})
+		accessGroup.Status.ObservedGeneration = accessGroup.Generation
 	})
-	accessGroup.Status.ObservedGeneration = accessGroup.Generation
-
-	if updateErr := r.Status().Update(ctx, accessGroup); updateErr != nil {
+	if updateErr != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
 	}
 
@@ -285,19 +293,22 @@ func (r *AccessGroupReconciler) updateStatusError(ctx context.Context, accessGro
 }
 
 func (r *AccessGroupReconciler) updateStatusSuccess(ctx context.Context, accessGroup *networkingv1alpha2.AccessGroup, result *cf.AccessGroupResult) (ctrl.Result, error) {
-	accessGroup.Status.GroupID = result.ID
-	accessGroup.Status.State = "Ready"
-	meta.SetStatusCondition(&accessGroup.Status.Conditions, metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionTrue,
-		Reason:             "Reconciled",
-		Message:            "Access Group successfully reconciled",
-		LastTransitionTime: metav1.Now(),
+	// P0 FIX: Use UpdateStatusWithConflictRetry for status updates
+	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, accessGroup, func() {
+		accessGroup.Status.GroupID = result.ID
+		accessGroup.Status.State = "Ready"
+		meta.SetStatusCondition(&accessGroup.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: accessGroup.Generation,
+			Reason:             "Reconciled",
+			Message:            "Access Group successfully reconciled",
+			LastTransitionTime: metav1.Now(),
+		})
+		accessGroup.Status.ObservedGeneration = accessGroup.Generation
 	})
-	accessGroup.Status.ObservedGeneration = accessGroup.Generation
-
-	if err := r.Status().Update(ctx, accessGroup); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
+	if updateErr != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
 	}
 
 	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil

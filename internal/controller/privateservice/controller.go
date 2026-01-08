@@ -32,7 +32,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
@@ -186,9 +188,10 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 		}
 	}
 
-	// Remove finalizer
-	controllerutil.RemoveFinalizer(r.privateService, controller.PrivateServiceFinalizer)
-	if err := r.Update(r.ctx, r.privateService); err != nil {
+	// P2 FIX: Remove finalizer with retry logic to handle conflicts
+	if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.privateService, func() {
+		controllerutil.RemoveFinalizer(r.privateService, controller.PrivateServiceFinalizer)
+	}); err != nil {
 		r.log.Error(err, "failed to remove finalizer")
 		return ctrl.Result{}, err
 	}
@@ -361,8 +364,16 @@ func (r *Reconciler) updatePrivateService(network, tunnelID, tunnelName, virtual
 		oldVNetID = "default"
 	}
 	if err := r.cfAPI.DeleteTunnelRoute(r.privateService.Status.Network, oldVNetID); err != nil {
-		r.log.Error(err, "failed to delete old tunnel route")
-		// Continue anyway to create new route
+		// P1 FIX: Only ignore NotFound errors, fail on other errors to prevent orphaned routes
+		if !cf.IsNotFoundError(err) {
+			r.log.Error(err, "failed to delete old tunnel route")
+			r.Recorder.Event(r.privateService, corev1.EventTypeWarning,
+				controller.EventReasonDeleteFailed,
+				fmt.Sprintf("Failed to delete old route %s: %s", r.privateService.Status.Network, cf.SanitizeErrorMessage(err)))
+			r.setCondition(metav1.ConditionFalse, controller.EventReasonDeleteFailed, "Failed to delete old route")
+			return err
+		}
+		r.log.Info("Old tunnel route already deleted", "network", r.privateService.Status.Network)
 	}
 
 	// Create new route
@@ -406,10 +417,170 @@ func (r *Reconciler) setCondition(status metav1.ConditionStatus, reason, message
 	})
 }
 
+// findPrivateServicesForTunnel returns reconcile requests for PrivateServices that reference the given Tunnel
+//
+//nolint:revive // cognitive-complexity: watch handler logic is inherently complex
+func (r *Reconciler) findPrivateServicesForTunnel(ctx context.Context, obj client.Object) []reconcile.Request {
+	tunnel, ok := obj.(*networkingv1alpha2.Tunnel)
+	if !ok {
+		return nil
+	}
+	log := ctrllog.FromContext(ctx)
+
+	// List all PrivateServices
+	privateServices := &networkingv1alpha2.PrivateServiceList{}
+	if err := r.List(ctx, privateServices); err != nil {
+		log.Error(err, "Failed to list PrivateServices for Tunnel watch")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, ps := range privateServices.Items {
+		if ps.Spec.TunnelRef.Kind == "Tunnel" &&
+			ps.Spec.TunnelRef.Name == tunnel.Name {
+			// Check namespace match (use PrivateService namespace if TunnelRef namespace is empty)
+			refNamespace := ps.Spec.TunnelRef.Namespace
+			if refNamespace == "" {
+				refNamespace = ps.Namespace
+			}
+			if refNamespace == tunnel.Namespace {
+				log.Info("Tunnel changed, triggering PrivateService reconcile",
+					"tunnel", tunnel.Name,
+					"privateservice", ps.Name)
+				requests = append(requests, reconcile.Request{
+					NamespacedName: apitypes.NamespacedName{
+						Name:      ps.Name,
+						Namespace: ps.Namespace,
+					},
+				})
+			}
+		}
+	}
+	return requests
+}
+
+// findPrivateServicesForClusterTunnel returns reconcile requests for PrivateServices that reference the given ClusterTunnel
+func (r *Reconciler) findPrivateServicesForClusterTunnel(ctx context.Context, obj client.Object) []reconcile.Request {
+	clusterTunnel, ok := obj.(*networkingv1alpha2.ClusterTunnel)
+	if !ok {
+		return nil
+	}
+	log := ctrllog.FromContext(ctx)
+
+	// List all PrivateServices
+	privateServices := &networkingv1alpha2.PrivateServiceList{}
+	if err := r.List(ctx, privateServices); err != nil {
+		log.Error(err, "Failed to list PrivateServices for ClusterTunnel watch")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, ps := range privateServices.Items {
+		// ClusterTunnel is the default kind or explicitly specified
+		if (ps.Spec.TunnelRef.Kind == "" || ps.Spec.TunnelRef.Kind == "ClusterTunnel") &&
+			ps.Spec.TunnelRef.Name == clusterTunnel.Name {
+			log.Info("ClusterTunnel changed, triggering PrivateService reconcile",
+				"clustertunnel", clusterTunnel.Name,
+				"privateservice", ps.Name)
+			requests = append(requests, reconcile.Request{
+				NamespacedName: apitypes.NamespacedName{
+					Name:      ps.Name,
+					Namespace: ps.Namespace,
+				},
+			})
+		}
+	}
+	return requests
+}
+
+// findPrivateServicesForVirtualNetwork returns reconcile requests for PrivateServices that reference the given VirtualNetwork
+func (r *Reconciler) findPrivateServicesForVirtualNetwork(ctx context.Context, obj client.Object) []reconcile.Request {
+	vnet, ok := obj.(*networkingv1alpha2.VirtualNetwork)
+	if !ok {
+		return nil
+	}
+	log := ctrllog.FromContext(ctx)
+
+	// List all PrivateServices
+	privateServices := &networkingv1alpha2.PrivateServiceList{}
+	if err := r.List(ctx, privateServices); err != nil {
+		log.Error(err, "Failed to list PrivateServices for VirtualNetwork watch")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, ps := range privateServices.Items {
+		if ps.Spec.VirtualNetworkRef != nil && ps.Spec.VirtualNetworkRef.Name == vnet.Name {
+			log.Info("VirtualNetwork changed, triggering PrivateService reconcile",
+				"virtualnetwork", vnet.Name,
+				"privateservice", ps.Name)
+			requests = append(requests, reconcile.Request{
+				NamespacedName: apitypes.NamespacedName{
+					Name:      ps.Name,
+					Namespace: ps.Namespace,
+				},
+			})
+		}
+	}
+	return requests
+}
+
+// findPrivateServicesForService returns reconcile requests for PrivateServices that reference the given Service
+func (r *Reconciler) findPrivateServicesForService(ctx context.Context, obj client.Object) []reconcile.Request {
+	svc, ok := obj.(*corev1.Service)
+	if !ok {
+		return nil
+	}
+	log := ctrllog.FromContext(ctx)
+
+	// List all PrivateServices in the same namespace
+	privateServices := &networkingv1alpha2.PrivateServiceList{}
+	if err := r.List(ctx, privateServices, client.InNamespace(svc.Namespace)); err != nil {
+		log.Error(err, "Failed to list PrivateServices for Service watch")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, ps := range privateServices.Items {
+		if ps.Spec.ServiceRef.Name == svc.Name {
+			log.Info("Service changed, triggering PrivateService reconcile",
+				"service", svc.Name,
+				"privateservice", ps.Name)
+			requests = append(requests, reconcile.Request{
+				NamespacedName: apitypes.NamespacedName{
+					Name:      ps.Name,
+					Namespace: ps.Namespace,
+				},
+			})
+		}
+	}
+	return requests
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("privateservice-controller")
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.PrivateService{}).
+		// P0 FIX: Watch Tunnel changes to trigger PrivateService reconcile when TunnelId becomes available
+		Watches(
+			&networkingv1alpha2.Tunnel{},
+			handler.EnqueueRequestsFromMapFunc(r.findPrivateServicesForTunnel),
+		).
+		// P0 FIX: Watch ClusterTunnel changes
+		Watches(
+			&networkingv1alpha2.ClusterTunnel{},
+			handler.EnqueueRequestsFromMapFunc(r.findPrivateServicesForClusterTunnel),
+		).
+		// P0 FIX: Watch VirtualNetwork changes
+		Watches(
+			&networkingv1alpha2.VirtualNetwork{},
+			handler.EnqueueRequestsFromMapFunc(r.findPrivateServicesForVirtualNetwork),
+		).
+		// P2 FIX: Watch Service changes for ClusterIP updates
+		Watches(
+			&corev1.Service{},
+			handler.EnqueueRequestsFromMapFunc(r.findPrivateServicesForService),
+		).
 		Complete(r)
 }

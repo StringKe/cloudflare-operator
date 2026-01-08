@@ -117,11 +117,14 @@ func (r *AccessServiceTokenReconciler) handleDeletion(ctx context.Context, token
 			// Don't block on this - the secret might have been deleted already
 		}
 
-		// Remove finalizer
-		controllerutil.RemoveFinalizer(token, FinalizerName)
-		if err := r.Update(ctx, token); err != nil {
+		// P0 FIX: Remove finalizer with retry logic to handle conflicts
+		if err := controller.UpdateWithConflictRetry(ctx, r.Client, token, func() {
+			controllerutil.RemoveFinalizer(token, FinalizerName)
+		}); err != nil {
+			logger.Error(err, "failed to remove finalizer")
 			return ctrl.Result{}, err
 		}
+		r.Recorder.Event(token, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
 	}
 
 	return ctrl.Result{}, nil
@@ -294,6 +297,7 @@ func (r *AccessServiceTokenReconciler) updateStatusWithWarning(
 		meta.SetStatusCondition(&token.Status.Conditions, metav1.Condition{
 			Type:               "Ready",
 			Status:             metav1.ConditionTrue,
+			ObservedGeneration: token.Generation,
 			Reason:             "AdoptedWithWarning",
 			Message:            warning,
 			LastTransitionTime: metav1.Now(),
@@ -355,6 +359,7 @@ func (r *AccessServiceTokenReconciler) updateStatusError(ctx context.Context, to
 		meta.SetStatusCondition(&token.Status.Conditions, metav1.Condition{
 			Type:               "Ready",
 			Status:             metav1.ConditionFalse,
+			ObservedGeneration: token.Generation,
 			Reason:             "ReconcileError",
 			Message:            cf.SanitizeErrorMessage(err),
 			LastTransitionTime: metav1.Now(),
@@ -382,6 +387,7 @@ func (r *AccessServiceTokenReconciler) updateStatusSuccess(ctx context.Context, 
 		meta.SetStatusCondition(&token.Status.Conditions, metav1.Condition{
 			Type:               "Ready",
 			Status:             metav1.ConditionTrue,
+			ObservedGeneration: token.Generation,
 			Reason:             "Reconciled",
 			Message:            "Access Service Token successfully reconciled",
 			LastTransitionTime: metav1.Now(),

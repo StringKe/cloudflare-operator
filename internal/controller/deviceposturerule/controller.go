@@ -34,6 +34,7 @@ import (
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
+	"github.com/StringKe/cloudflare-operator/internal/controller"
 )
 
 const (
@@ -95,24 +96,28 @@ func (r *DevicePostureRuleReconciler) handleDeletion(ctx context.Context, rule *
 		if rule.Status.RuleID != "" {
 			logger.Info("Deleting Device Posture Rule from Cloudflare", "ruleId", rule.Status.RuleID)
 			if err := apiClient.DeleteDevicePostureRule(rule.Status.RuleID); err != nil {
-				// Check if resource already deleted
+				// P0 FIX: Check if resource already deleted
 				if !cf.IsNotFoundError(err) {
 					logger.Error(err, "Failed to delete Device Posture Rule from Cloudflare")
-					r.Recorder.Event(rule, corev1.EventTypeWarning, "DeleteFailed",
-						fmt.Sprintf("Failed to delete from Cloudflare: %v", err))
+					r.Recorder.Event(rule, corev1.EventTypeWarning, controller.EventReasonDeleteFailed,
+						fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
 					return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 				}
 				logger.Info("Device Posture Rule already deleted from Cloudflare")
+				r.Recorder.Event(rule, corev1.EventTypeNormal, "AlreadyDeleted", "Device Posture Rule was already deleted from Cloudflare")
 			} else {
-				r.Recorder.Event(rule, corev1.EventTypeNormal, "Deleted", "Deleted from Cloudflare")
+				r.Recorder.Event(rule, corev1.EventTypeNormal, controller.EventReasonDeleted, "Deleted from Cloudflare")
 			}
 		}
 
-		// Remove finalizer
-		controllerutil.RemoveFinalizer(rule, FinalizerName)
-		if err := r.Update(ctx, rule); err != nil {
+		// P0 FIX: Remove finalizer with retry logic to handle conflicts
+		if err := controller.UpdateWithConflictRetry(ctx, r.Client, rule, func() {
+			controllerutil.RemoveFinalizer(rule, FinalizerName)
+		}); err != nil {
+			logger.Error(err, "failed to remove finalizer")
 			return ctrl.Result{}, err
 		}
+		r.Recorder.Event(rule, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
 	}
 
 	return ctrl.Result{}, nil
@@ -153,11 +158,11 @@ func (r *DevicePostureRuleReconciler) reconcileDevicePostureRule(ctx context.Con
 			fmt.Sprintf("Creating Device Posture Rule '%s' in Cloudflare", params.Name))
 		result, err = apiClient.CreateDevicePostureRule(params)
 		if err != nil {
-			r.Recorder.Event(rule, corev1.EventTypeWarning, "CreateFailed",
-				fmt.Sprintf("Failed to create Device Posture Rule: %v", err))
+			r.Recorder.Event(rule, corev1.EventTypeWarning, controller.EventReasonCreateFailed,
+				fmt.Sprintf("Failed to create Device Posture Rule: %s", cf.SanitizeErrorMessage(err)))
 			return r.updateStatusError(ctx, rule, err)
 		}
-		r.Recorder.Event(rule, corev1.EventTypeNormal, "Created",
+		r.Recorder.Event(rule, corev1.EventTypeNormal, controller.EventReasonCreated,
 			fmt.Sprintf("Created Device Posture Rule with ID '%s'", result.ID))
 	} else {
 		// Update existing device posture rule
@@ -166,11 +171,11 @@ func (r *DevicePostureRuleReconciler) reconcileDevicePostureRule(ctx context.Con
 			fmt.Sprintf("Updating Device Posture Rule '%s' in Cloudflare", rule.Status.RuleID))
 		result, err = apiClient.UpdateDevicePostureRule(rule.Status.RuleID, params)
 		if err != nil {
-			r.Recorder.Event(rule, corev1.EventTypeWarning, "UpdateFailed",
-				fmt.Sprintf("Failed to update Device Posture Rule: %v", err))
+			r.Recorder.Event(rule, corev1.EventTypeWarning, controller.EventReasonUpdateFailed,
+				fmt.Sprintf("Failed to update Device Posture Rule: %s", cf.SanitizeErrorMessage(err)))
 			return r.updateStatusError(ctx, rule, err)
 		}
-		r.Recorder.Event(rule, corev1.EventTypeNormal, "Updated",
+		r.Recorder.Event(rule, corev1.EventTypeNormal, controller.EventReasonUpdated,
 			fmt.Sprintf("Updated Device Posture Rule '%s'", result.ID))
 	}
 
@@ -261,17 +266,20 @@ func (r *DevicePostureRuleReconciler) buildInput(input *networkingv1alpha2.Devic
 }
 
 func (r *DevicePostureRuleReconciler) updateStatusError(ctx context.Context, rule *networkingv1alpha2.DevicePostureRule, err error) (ctrl.Result, error) {
-	rule.Status.State = "Error"
-	meta.SetStatusCondition(&rule.Status.Conditions, metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionFalse,
-		Reason:             "ReconcileError",
-		Message:            err.Error(),
-		LastTransitionTime: metav1.Now(),
+	// P0 FIX: Use UpdateStatusWithConflictRetry for status updates
+	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, rule, func() {
+		rule.Status.State = "Error"
+		meta.SetStatusCondition(&rule.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: rule.Generation,
+			Reason:             "ReconcileError",
+			Message:            cf.SanitizeErrorMessage(err),
+			LastTransitionTime: metav1.Now(),
+		})
+		rule.Status.ObservedGeneration = rule.Generation
 	})
-	rule.Status.ObservedGeneration = rule.Generation
-
-	if updateErr := r.Status().Update(ctx, rule); updateErr != nil {
+	if updateErr != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
 	}
 
@@ -279,20 +287,23 @@ func (r *DevicePostureRuleReconciler) updateStatusError(ctx context.Context, rul
 }
 
 func (r *DevicePostureRuleReconciler) updateStatusSuccess(ctx context.Context, rule *networkingv1alpha2.DevicePostureRule, result *cf.DevicePostureRuleResult) (ctrl.Result, error) {
-	rule.Status.RuleID = result.ID
-	rule.Status.AccountID = result.AccountID
-	rule.Status.State = "Ready"
-	meta.SetStatusCondition(&rule.Status.Conditions, metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionTrue,
-		Reason:             "Reconciled",
-		Message:            "Device Posture Rule successfully reconciled",
-		LastTransitionTime: metav1.Now(),
+	// P0 FIX: Use UpdateStatusWithConflictRetry for status updates
+	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, rule, func() {
+		rule.Status.RuleID = result.ID
+		rule.Status.AccountID = result.AccountID
+		rule.Status.State = "Ready"
+		meta.SetStatusCondition(&rule.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: rule.Generation,
+			Reason:             "Reconciled",
+			Message:            "Device Posture Rule successfully reconciled",
+			LastTransitionTime: metav1.Now(),
+		})
+		rule.Status.ObservedGeneration = rule.Generation
 	})
-	rule.Status.ObservedGeneration = rule.Generation
-
-	if err := r.Status().Update(ctx, rule); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
+	if updateErr != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
 	}
 
 	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil

@@ -34,6 +34,7 @@ import (
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
+	"github.com/StringKe/cloudflare-operator/internal/controller"
 )
 
 const (
@@ -99,24 +100,28 @@ func (r *DNSRecordReconciler) handleDeletion(ctx context.Context, record *networ
 		if record.Status.RecordID != "" && record.Status.ZoneID != "" {
 			logger.Info("Deleting DNS Record from Cloudflare", "recordId", record.Status.RecordID)
 			if err := apiClient.DeleteDNSRecord(record.Status.ZoneID, record.Status.RecordID); err != nil {
-				// Check if resource already deleted
+				// P0 FIX: Check if resource already deleted
 				if !cf.IsNotFoundError(err) {
 					logger.Error(err, "Failed to delete DNS Record from Cloudflare")
 					r.Recorder.Event(record, corev1.EventTypeWarning, "DeleteFailed",
-						fmt.Sprintf("Failed to delete from Cloudflare: %v", err))
+						fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
 					return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 				}
 				logger.Info("DNS Record already deleted from Cloudflare")
+				r.Recorder.Event(record, corev1.EventTypeNormal, "AlreadyDeleted", "DNS Record was already deleted from Cloudflare")
 			} else {
 				r.Recorder.Event(record, corev1.EventTypeNormal, "Deleted", "Deleted from Cloudflare")
 			}
 		}
 
-		// Remove finalizer
-		controllerutil.RemoveFinalizer(record, FinalizerName)
-		if err := r.Update(ctx, record); err != nil {
+		// P0 FIX: Remove finalizer with retry logic to handle conflicts
+		if err := controller.UpdateWithConflictRetry(ctx, r.Client, record, func() {
+			controllerutil.RemoveFinalizer(record, FinalizerName)
+		}); err != nil {
+			logger.Error(err, "failed to remove finalizer")
 			return ctrl.Result{}, err
 		}
+		r.Recorder.Event(record, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
 	}
 
 	return ctrl.Result{}, nil
@@ -155,11 +160,11 @@ func (r *DNSRecordReconciler) reconcileDNSRecord(ctx context.Context, record *ne
 			fmt.Sprintf("Creating DNS Record '%s' (type: %s) in Cloudflare", params.Name, params.Type))
 		result, err = apiClient.CreateDNSRecord(params)
 		if err != nil {
-			r.Recorder.Event(record, corev1.EventTypeWarning, "CreateFailed",
-				fmt.Sprintf("Failed to create DNS Record: %v", err))
+			r.Recorder.Event(record, corev1.EventTypeWarning, controller.EventReasonCreateFailed,
+				fmt.Sprintf("Failed to create DNS Record: %s", cf.SanitizeErrorMessage(err)))
 			return r.updateStatusError(ctx, record, err)
 		}
-		r.Recorder.Event(record, corev1.EventTypeNormal, "Created",
+		r.Recorder.Event(record, corev1.EventTypeNormal, controller.EventReasonCreated,
 			fmt.Sprintf("Created DNS Record with ID '%s'", result.ID))
 	} else {
 		// Update existing DNS record
@@ -168,11 +173,11 @@ func (r *DNSRecordReconciler) reconcileDNSRecord(ctx context.Context, record *ne
 			fmt.Sprintf("Updating DNS Record '%s' in Cloudflare", record.Status.RecordID))
 		result, err = apiClient.UpdateDNSRecord(record.Status.ZoneID, record.Status.RecordID, params)
 		if err != nil {
-			r.Recorder.Event(record, corev1.EventTypeWarning, "UpdateFailed",
-				fmt.Sprintf("Failed to update DNS Record: %v", err))
+			r.Recorder.Event(record, corev1.EventTypeWarning, controller.EventReasonUpdateFailed,
+				fmt.Sprintf("Failed to update DNS Record: %s", cf.SanitizeErrorMessage(err)))
 			return r.updateStatusError(ctx, record, err)
 		}
-		r.Recorder.Event(record, corev1.EventTypeNormal, "Updated",
+		r.Recorder.Event(record, corev1.EventTypeNormal, controller.EventReasonUpdated,
 			fmt.Sprintf("Updated DNS Record '%s'", result.ID))
 	}
 
@@ -278,17 +283,21 @@ func (r *DNSRecordReconciler) buildRecordData(data *networkingv1alpha2.DNSRecord
 }
 
 func (r *DNSRecordReconciler) updateStatusError(ctx context.Context, record *networkingv1alpha2.DNSRecord, err error) (ctrl.Result, error) {
-	record.Status.State = "Error"
-	meta.SetStatusCondition(&record.Status.Conditions, metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionFalse,
-		Reason:             "ReconcileError",
-		Message:            err.Error(),
-		LastTransitionTime: metav1.Now(),
+	// P0 FIX: Use UpdateStatusWithConflictRetry for status updates
+	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, record, func() {
+		record.Status.State = "Error"
+		meta.SetStatusCondition(&record.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: record.Generation,
+			Reason:             "ReconcileError",
+			Message:            cf.SanitizeErrorMessage(err),
+			LastTransitionTime: metav1.Now(),
+		})
+		record.Status.ObservedGeneration = record.Generation
 	})
-	record.Status.ObservedGeneration = record.Generation
 
-	if updateErr := r.Status().Update(ctx, record); updateErr != nil {
+	if updateErr != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
 	}
 
@@ -296,20 +305,24 @@ func (r *DNSRecordReconciler) updateStatusError(ctx context.Context, record *net
 }
 
 func (r *DNSRecordReconciler) updateStatusSuccess(ctx context.Context, record *networkingv1alpha2.DNSRecord, result *cf.DNSRecordResult) (ctrl.Result, error) {
-	record.Status.RecordID = result.ID
-	record.Status.ZoneID = result.ZoneID
-	record.Status.FQDN = result.Name
-	record.Status.State = "Ready"
-	meta.SetStatusCondition(&record.Status.Conditions, metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionTrue,
-		Reason:             "Reconciled",
-		Message:            "DNS Record successfully reconciled",
-		LastTransitionTime: metav1.Now(),
+	// P0 FIX: Use UpdateStatusWithConflictRetry for status updates
+	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, record, func() {
+		record.Status.RecordID = result.ID
+		record.Status.ZoneID = result.ZoneID
+		record.Status.FQDN = result.Name
+		record.Status.State = "Ready"
+		meta.SetStatusCondition(&record.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: record.Generation,
+			Reason:             controller.EventReasonReconciled,
+			Message:            "DNS Record successfully reconciled",
+			LastTransitionTime: metav1.Now(),
+		})
+		record.Status.ObservedGeneration = record.Generation
 	})
-	record.Status.ObservedGeneration = record.Generation
 
-	if err := r.Status().Update(ctx, record); err != nil {
+	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
 	}
 

@@ -35,6 +35,7 @@ import (
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
+	"github.com/StringKe/cloudflare-operator/internal/controller"
 )
 
 const (
@@ -96,24 +97,28 @@ func (r *AccessIdentityProviderReconciler) handleDeletion(ctx context.Context, i
 		if idp.Status.ProviderID != "" {
 			logger.Info("Deleting Access Identity Provider from Cloudflare", "providerId", idp.Status.ProviderID)
 			if err := apiClient.DeleteAccessIdentityProvider(idp.Status.ProviderID); err != nil {
-				// Check if resource already deleted
+				// P0 FIX: Check if resource already deleted
 				if !cf.IsNotFoundError(err) {
 					logger.Error(err, "Failed to delete Access Identity Provider from Cloudflare")
-					r.Recorder.Event(idp, corev1.EventTypeWarning, "DeleteFailed",
-						fmt.Sprintf("Failed to delete from Cloudflare: %v", err))
+					r.Recorder.Event(idp, corev1.EventTypeWarning, controller.EventReasonDeleteFailed,
+						fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
 					return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 				}
 				logger.Info("Access Identity Provider already deleted from Cloudflare")
+				r.Recorder.Event(idp, corev1.EventTypeNormal, "AlreadyDeleted", "Access Identity Provider was already deleted from Cloudflare")
 			} else {
-				r.Recorder.Event(idp, corev1.EventTypeNormal, "Deleted", "Deleted from Cloudflare")
+				r.Recorder.Event(idp, corev1.EventTypeNormal, controller.EventReasonDeleted, "Deleted from Cloudflare")
 			}
 		}
 
-		// Remove finalizer
-		controllerutil.RemoveFinalizer(idp, FinalizerName)
-		if err := r.Update(ctx, idp); err != nil {
+		// P0 FIX: Remove finalizer with retry logic to handle conflicts
+		if err := controller.UpdateWithConflictRetry(ctx, r.Client, idp, func() {
+			controllerutil.RemoveFinalizer(idp, FinalizerName)
+		}); err != nil {
+			logger.Error(err, "failed to remove finalizer")
 			return ctrl.Result{}, err
 		}
+		r.Recorder.Event(idp, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
 	}
 
 	return ctrl.Result{}, nil
@@ -143,11 +148,11 @@ func (r *AccessIdentityProviderReconciler) reconcileIdentityProvider(ctx context
 			fmt.Sprintf("Creating Access Identity Provider '%s' (type: %s) in Cloudflare", params.Name, params.Type))
 		result, err = apiClient.CreateAccessIdentityProvider(params)
 		if err != nil {
-			r.Recorder.Event(idp, corev1.EventTypeWarning, "CreateFailed",
-				fmt.Sprintf("Failed to create Access Identity Provider: %v", err))
+			r.Recorder.Event(idp, corev1.EventTypeWarning, controller.EventReasonCreateFailed,
+				fmt.Sprintf("Failed to create Access Identity Provider: %s", cf.SanitizeErrorMessage(err)))
 			return r.updateStatusError(ctx, idp, err)
 		}
-		r.Recorder.Event(idp, corev1.EventTypeNormal, "Created",
+		r.Recorder.Event(idp, corev1.EventTypeNormal, controller.EventReasonCreated,
 			fmt.Sprintf("Created Access Identity Provider with ID '%s'", result.ID))
 	} else {
 		// Update existing identity provider
@@ -156,11 +161,11 @@ func (r *AccessIdentityProviderReconciler) reconcileIdentityProvider(ctx context
 			fmt.Sprintf("Updating Access Identity Provider '%s' in Cloudflare", idp.Status.ProviderID))
 		result, err = apiClient.UpdateAccessIdentityProvider(idp.Status.ProviderID, params)
 		if err != nil {
-			r.Recorder.Event(idp, corev1.EventTypeWarning, "UpdateFailed",
-				fmt.Sprintf("Failed to update Access Identity Provider: %v", err))
+			r.Recorder.Event(idp, corev1.EventTypeWarning, controller.EventReasonUpdateFailed,
+				fmt.Sprintf("Failed to update Access Identity Provider: %s", cf.SanitizeErrorMessage(err)))
 			return r.updateStatusError(ctx, idp, err)
 		}
-		r.Recorder.Event(idp, corev1.EventTypeNormal, "Updated",
+		r.Recorder.Event(idp, corev1.EventTypeNormal, controller.EventReasonUpdated,
 			fmt.Sprintf("Updated Access Identity Provider '%s'", result.ID))
 	}
 
@@ -251,17 +256,20 @@ func (r *AccessIdentityProviderReconciler) buildConfig(config *networkingv1alpha
 }
 
 func (r *AccessIdentityProviderReconciler) updateStatusError(ctx context.Context, idp *networkingv1alpha2.AccessIdentityProvider, err error) (ctrl.Result, error) {
-	idp.Status.State = "Error"
-	meta.SetStatusCondition(&idp.Status.Conditions, metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionFalse,
-		Reason:             "ReconcileError",
-		Message:            err.Error(),
-		LastTransitionTime: metav1.Now(),
+	// P0 FIX: Use UpdateStatusWithConflictRetry for status updates
+	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, idp, func() {
+		idp.Status.State = "Error"
+		meta.SetStatusCondition(&idp.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: idp.Generation,
+			Reason:             "ReconcileError",
+			Message:            cf.SanitizeErrorMessage(err),
+			LastTransitionTime: metav1.Now(),
+		})
+		idp.Status.ObservedGeneration = idp.Generation
 	})
-	idp.Status.ObservedGeneration = idp.Generation
-
-	if updateErr := r.Status().Update(ctx, idp); updateErr != nil {
+	if updateErr != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
 	}
 
@@ -269,19 +277,22 @@ func (r *AccessIdentityProviderReconciler) updateStatusError(ctx context.Context
 }
 
 func (r *AccessIdentityProviderReconciler) updateStatusSuccess(ctx context.Context, idp *networkingv1alpha2.AccessIdentityProvider, result *cf.AccessIdentityProviderResult) (ctrl.Result, error) {
-	idp.Status.ProviderID = result.ID
-	idp.Status.State = "Ready"
-	meta.SetStatusCondition(&idp.Status.Conditions, metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionTrue,
-		Reason:             "Reconciled",
-		Message:            "Access Identity Provider successfully reconciled",
-		LastTransitionTime: metav1.Now(),
+	// P0 FIX: Use UpdateStatusWithConflictRetry for status updates
+	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, idp, func() {
+		idp.Status.ProviderID = result.ID
+		idp.Status.State = "Ready"
+		meta.SetStatusCondition(&idp.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: idp.Generation,
+			Reason:             "Reconciled",
+			Message:            "Access Identity Provider successfully reconciled",
+			LastTransitionTime: metav1.Now(),
+		})
+		idp.Status.ObservedGeneration = idp.Generation
 	})
-	idp.Status.ObservedGeneration = idp.Generation
-
-	if err := r.Status().Update(ctx, idp); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
+	if updateErr != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
 	}
 
 	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil

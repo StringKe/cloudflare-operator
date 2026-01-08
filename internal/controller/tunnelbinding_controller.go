@@ -37,7 +37,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	networkingv1alpha1 "github.com/StringKe/cloudflare-operator/api/v1alpha1"
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
@@ -251,20 +253,26 @@ func (r *TunnelBindingReconciler) setStatus() ([]string, error) {
 	r.binding.Status.Services = status
 	r.binding.Status.Hostnames = strings.TrimSuffix(hostnamesStr, ",")
 
-	if err := r.Client.Status().Update(r.ctx, r.binding); err != nil {
+	// P0 FIX: Use retry logic for status update to handle conflicts
+	if err := UpdateStatusWithConflictRetry(r.ctx, r.Client, r.binding, func() {
+		r.binding.Status.Services = status
+		r.binding.Status.Hostnames = strings.TrimSuffix(hostnamesStr, ",")
+	}); err != nil {
 		r.log.Error(err, "Failed to update TunnelBinding status", "TunnelBinding.Namespace", r.binding.Namespace, "TunnelBinding.Name", r.binding.Name)
 		r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedStatusSet", "Failed to set Tunnel status required for operation")
 		return nil, err
 	}
 
-	// Update annotation with current hostnames for next reconcile
-	if r.binding.Annotations == nil {
-		r.binding.Annotations = make(map[string]string)
-	}
-	r.binding.Annotations[tunnelPreviousHostnamesAnnotation] = strings.TrimSuffix(hostnamesStr, ",")
-	if err := r.Update(r.ctx, r.binding); err != nil {
+	// P0 FIX: Update annotation with retry logic for concurrency safety (PR #166 fix improvement)
+	if err := UpdateWithConflictRetry(r.ctx, r.Client, r.binding, func() {
+		if r.binding.Annotations == nil {
+			r.binding.Annotations = make(map[string]string)
+		}
+		r.binding.Annotations[tunnelPreviousHostnamesAnnotation] = strings.TrimSuffix(hostnamesStr, ",")
+	}); err != nil {
 		r.log.Error(err, "Failed to update previous hostnames annotation")
-		// Don't return error here - status was updated successfully, annotation update failure is not critical
+		// P0 FIX: Return error to trigger retry - annotation is critical for DNS cleanup
+		return nil, err
 	}
 
 	r.log.Info("Tunnel status is set", "status", r.binding.Status, "removedHostnames", removedHostnames)
@@ -276,23 +284,25 @@ func (r *TunnelBindingReconciler) deletionLogic() error {
 		// Run finalization logic. If the finalization logic fails,
 		// don't remove the finalizer so that we can retry during the next reconciliation.
 
-		errors := false
-		var err error
+		// P0 FIX: Aggregate all errors and only remove finalizer if ALL deletions succeed
+		var errs []error
 		for _, info := range r.binding.Status.Services {
-			if err = r.deleteDNSLogic(info.Hostname); err != nil {
-				errors = true
+			if err := r.deleteDNSLogic(info.Hostname); err != nil {
+				errs = append(errs, fmt.Errorf("delete DNS %s: %w", info.Hostname, err))
 			}
 		}
-		if errors {
-			r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FinalizerNotUnset", "Not removing Finalizer due to errors")
-			return err
+		if len(errs) > 0 {
+			aggregatedErr := errors.Join(errs...)
+			r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FinalizerNotUnset",
+				fmt.Sprintf("Not removing Finalizer due to %d errors", len(errs)))
+			return aggregatedErr
 		}
 
-		// Remove tunnelFinalizer. Once all finalizers have been
-		// removed, the object will be deleted.
-		controllerutil.RemoveFinalizer(r.binding, tunnelFinalizer)
-		err = r.Update(r.ctx, r.binding)
-		if err != nil {
+		// Remove tunnelFinalizer with retry logic.
+		// P0 FIX: Use UpdateWithConflictRetry for safe finalizer removal
+		if err := UpdateWithConflictRetry(r.ctx, r.Client, r.binding, func() {
+			controllerutil.RemoveFinalizer(r.binding, tunnelFinalizer)
+		}); err != nil {
 			r.log.Error(err, "unable to delete Finalizer")
 			r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedFinalizerUnset", "Failed to remove Finalizer")
 			return err
@@ -338,18 +348,18 @@ func (r *TunnelBindingReconciler) creationLogic() error {
 
 	r.Recorder.Event(r.binding, corev1.EventTypeNormal, "MetaSet", "TunnelBinding Finalizer and Labels added")
 
-	errors := false
-	var err error
+	// P1 FIX: Use errors.Join for proper error aggregation (fixes variable name conflict with errors package)
+	var errs []error
 	// Create DNS entries
 	for _, info := range r.binding.Status.Services {
-		err = r.createDNSLogic(info.Hostname)
-		if err != nil {
-			errors = true
+		if err := r.createDNSLogic(info.Hostname); err != nil {
+			errs = append(errs, fmt.Errorf("create DNS %s: %w", info.Hostname, err))
 		}
 	}
-	if errors {
-		r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedDNSCreatePartial", "Some DNS entries failed to create")
-		return err
+	if len(errs) > 0 {
+		r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedDNSCreatePartial",
+			fmt.Sprintf("Some DNS entries failed to create (%d errors)", len(errs)))
+		return errors.Join(errs...)
 	}
 	return nil
 }
@@ -382,12 +392,16 @@ func (r *TunnelBindingReconciler) createDNSLogic(hostname string) error {
 	newDnsId, err := r.cfAPI.InsertOrUpdateCName(hostname, dnsTxtResponse.DnsId)
 	if err != nil {
 		r.log.Error(err, "Failed to insert/update DNS entry", "Hostname", hostname)
-		r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedCreatingDns", fmt.Sprintf("Failed to insert/update DNS entry: %s", err.Error()))
+		// P0 FIX: Use SanitizeErrorMessage to prevent sensitive info leakage
+		r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedCreatingDns",
+			fmt.Sprintf("Failed to insert/update DNS entry: %s", cf.SanitizeErrorMessage(err)))
 		return err
 	}
 	if err := r.cfAPI.InsertOrUpdateTXT(hostname, txtId, newDnsId); err != nil {
 		r.log.Error(err, "Failed to insert/update TXT entry", "Hostname", hostname)
-		r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedCreatingTxt", fmt.Sprintf("Failed to insert/update TXT entry: %s", err.Error()))
+		// P0 FIX: Use SanitizeErrorMessage to prevent sensitive info leakage
+		r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedCreatingTxt",
+			fmt.Sprintf("Failed to insert/update TXT entry: %s", cf.SanitizeErrorMessage(err)))
 		if err := r.cfAPI.DeleteDNSId(hostname, newDnsId, dnsTxtResponse.DnsId != ""); err != nil {
 			r.log.Info("Failed to delete DNS entry, left in broken state", "Hostname", hostname)
 			r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedDeletingDns", "Failed to delete DNS entry, left in broken state")
@@ -428,13 +442,17 @@ func (r *TunnelBindingReconciler) deleteDNSLogic(hostname string) error {
 		} else {
 			if err := r.cfAPI.DeleteDNSId(hostname, dnsTxtResponse.DnsId, true); err != nil {
 				r.log.Info("Failed to delete DNS entry", "Hostname", hostname)
-				r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedDeletingDns", fmt.Sprintf("Failed to delete DNS entry: %s", err.Error()))
+				// P0 FIX: Use SanitizeErrorMessage to prevent sensitive info leakage
+				errMsg := fmt.Sprintf("Failed to delete DNS entry: %s", cf.SanitizeErrorMessage(err))
+				r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedDeletingDns", errMsg)
 				return err
 			}
 			r.log.Info("Deleted DNS entry", "Hostname", hostname)
 			r.Recorder.Event(r.binding, corev1.EventTypeNormal, "DeletedDns", "Deleted DNS entry")
 			if err := r.cfAPI.DeleteDNSId(hostname, txtId, true); err != nil {
-				r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedDeletingTxt", fmt.Sprintf("Failed to delete TXT entry: %s", err.Error()))
+				// P0 FIX: Use SanitizeErrorMessage to prevent sensitive info leakage
+				errMsg := fmt.Sprintf("Failed to delete TXT entry: %s", cf.SanitizeErrorMessage(err))
+				r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedDeletingTxt", errMsg)
 				return err
 			}
 			r.log.Info("Deleted DNS TXT entry", "Hostname", hostname)
@@ -724,10 +742,129 @@ func (r *TunnelBindingReconciler) configureCloudflareDaemon() error {
 	return r.setConfigMapConfiguration(config)
 }
 
+// findTunnelBindingsForTunnel returns reconcile requests for TunnelBindings that reference the given Tunnel
+func (r *TunnelBindingReconciler) findTunnelBindingsForTunnel(ctx context.Context, obj client.Object) []reconcile.Request {
+	tunnel, ok := obj.(*networkingv1alpha2.Tunnel)
+	if !ok {
+		return nil
+	}
+	log := ctrllog.FromContext(ctx)
+
+	// List all TunnelBindings
+	bindings := &networkingv1alpha1.TunnelBindingList{}
+	if err := r.List(ctx, bindings); err != nil {
+		log.Error(err, "Failed to list TunnelBindings for Tunnel watch")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, binding := range bindings.Items {
+		if strings.ToLower(binding.TunnelRef.Kind) == "tunnel" &&
+			binding.TunnelRef.Name == tunnel.Name &&
+			binding.Namespace == tunnel.Namespace {
+			log.Info("Tunnel changed, triggering TunnelBinding reconcile",
+				"tunnel", tunnel.Name,
+				"tunnelbinding", binding.Name)
+			requests = append(requests, reconcile.Request{
+				NamespacedName: apitypes.NamespacedName{
+					Name:      binding.Name,
+					Namespace: binding.Namespace,
+				},
+			})
+		}
+	}
+	return requests
+}
+
+// findTunnelBindingsForClusterTunnel returns reconcile requests for TunnelBindings that reference the given ClusterTunnel
+func (r *TunnelBindingReconciler) findTunnelBindingsForClusterTunnel(ctx context.Context, obj client.Object) []reconcile.Request {
+	clusterTunnel, ok := obj.(*networkingv1alpha2.ClusterTunnel)
+	if !ok {
+		return nil
+	}
+	log := ctrllog.FromContext(ctx)
+
+	// List all TunnelBindings
+	bindings := &networkingv1alpha1.TunnelBindingList{}
+	if err := r.List(ctx, bindings); err != nil {
+		log.Error(err, "Failed to list TunnelBindings for ClusterTunnel watch")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, binding := range bindings.Items {
+		if strings.ToLower(binding.TunnelRef.Kind) == "clustertunnel" &&
+			binding.TunnelRef.Name == clusterTunnel.Name {
+			log.Info("ClusterTunnel changed, triggering TunnelBinding reconcile",
+				"clustertunnel", clusterTunnel.Name,
+				"tunnelbinding", binding.Name)
+			requests = append(requests, reconcile.Request{
+				NamespacedName: apitypes.NamespacedName{
+					Name:      binding.Name,
+					Namespace: binding.Namespace,
+				},
+			})
+		}
+	}
+	return requests
+}
+
+// findTunnelBindingsForService returns reconcile requests for TunnelBindings that reference the given Service
+//
+//nolint:revive // cognitive-complexity: watch handler logic is inherently complex
+func (r *TunnelBindingReconciler) findTunnelBindingsForService(ctx context.Context, obj client.Object) []reconcile.Request {
+	svc, ok := obj.(*corev1.Service)
+	if !ok {
+		return nil
+	}
+	log := ctrllog.FromContext(ctx)
+
+	// List all TunnelBindings in the same namespace
+	bindings := &networkingv1alpha1.TunnelBindingList{}
+	if err := r.List(ctx, bindings, client.InNamespace(svc.Namespace)); err != nil {
+		log.Error(err, "Failed to list TunnelBindings for Service watch")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, binding := range bindings.Items {
+		for _, subject := range binding.Subjects {
+			if subject.Name == svc.Name {
+				log.Info("Service changed, triggering TunnelBinding reconcile",
+					"service", svc.Name,
+					"tunnelbinding", binding.Name)
+				requests = append(requests, reconcile.Request{
+					NamespacedName: apitypes.NamespacedName{
+						Name:      binding.Name,
+						Namespace: binding.Namespace,
+					},
+				})
+				break
+			}
+		}
+	}
+	return requests
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *TunnelBindingReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("cloudflare-operator")
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha1.TunnelBinding{}).
+		// P0 FIX: Watch Tunnel changes to trigger TunnelBinding reconcile when credentials change
+		Watches(
+			&networkingv1alpha2.Tunnel{},
+			handler.EnqueueRequestsFromMapFunc(r.findTunnelBindingsForTunnel),
+		).
+		// P0 FIX: Watch ClusterTunnel changes to trigger TunnelBinding reconcile
+		Watches(
+			&networkingv1alpha2.ClusterTunnel{},
+			handler.EnqueueRequestsFromMapFunc(r.findTunnelBindingsForClusterTunnel),
+		).
+		// P1 FIX: Watch Service changes to trigger TunnelBinding reconcile when ports change
+		Watches(
+			&corev1.Service{},
+			handler.EnqueueRequestsFromMapFunc(r.findTunnelBindingsForService),
+		).
 		Complete(r)
 }

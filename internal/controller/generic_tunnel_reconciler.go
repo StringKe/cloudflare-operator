@@ -344,8 +344,8 @@ func updateTunnelStatusMinimalWithRetry(r GenericTunnelReconciler) error {
 	return fmt.Errorf("failed to update tunnel status after %d retries: %w", maxRetries, lastErr)
 }
 
-// setTunnelState sets the tunnel state and condition (best effort, logs errors but doesn't return them)
-func setTunnelState(r GenericTunnelReconciler, state string, conditionStatus metav1.ConditionStatus, reason, message string) {
+// applyTunnelState applies the state and condition to the tunnel object in memory
+func applyTunnelState(r GenericTunnelReconciler, state string, conditionStatus metav1.ConditionStatus, reason, message string) {
 	status := r.GetTunnel().GetStatus()
 	status.State = state
 	status.ObservedGeneration = r.GetTunnel().GetObject().GetGeneration()
@@ -359,8 +359,40 @@ func setTunnelState(r GenericTunnelReconciler, state string, conditionStatus met
 	})
 
 	r.GetTunnel().SetStatus(status)
-	if err := r.GetClient().Status().Update(r.GetContext(), r.GetTunnel().GetObject()); err != nil {
-		r.GetLog().Error(err, "Failed to update tunnel state", "state", state)
+}
+
+// setTunnelState sets the tunnel state and condition with retry on conflict (best effort, logs errors but doesn't return them)
+// P0 FIX: Added retry logic for status update to handle concurrent reconciles
+//
+//nolint:revive // retry loop complexity is inherent to the logic
+func setTunnelState(r GenericTunnelReconciler, state string, conditionStatus metav1.ConditionStatus, reason, message string) {
+	const maxRetries = 3
+	var lastErr error
+
+	for i := 0; i < maxRetries; i++ {
+		if i > 0 {
+			if err := refetchTunnelForRetry(r); err != nil {
+				r.GetLog().Error(err, "Failed to refetch tunnel for state update retry")
+				return
+			}
+		}
+
+		applyTunnelState(r, state, conditionStatus, reason, message)
+
+		err := r.GetClient().Status().Update(r.GetContext(), r.GetTunnel().GetObject())
+		if err == nil {
+			return
+		}
+		if !apierrors.IsConflict(err) {
+			r.GetLog().Error(err, "Failed to update tunnel state", "state", state)
+			return
+		}
+		r.GetLog().Info("Tunnel state update conflict, retrying", "attempt", i+1, "state", state)
+		lastErr = err
+	}
+
+	if lastErr != nil {
+		r.GetLog().Error(lastErr, "Failed to update tunnel state after retries", "state", state)
 	}
 }
 
@@ -499,6 +531,32 @@ func ensureSecretFinalizer(r GenericTunnelReconciler) error {
 	return nil
 }
 
+// applyTunnelStatusActive applies the "active" status fields to the tunnel object in memory
+func applyTunnelStatusActive(r GenericTunnelReconciler) {
+	status := r.GetTunnel().GetStatus()
+	status.AccountId = r.GetCfAPI().ValidAccountId
+	status.TunnelId = r.GetCfAPI().ValidTunnelId
+	status.TunnelName = r.GetCfAPI().ValidTunnelName
+	status.ZoneId = r.GetCfAPI().ValidZoneId
+	status.State = "active"
+	status.ObservedGeneration = r.GetTunnel().GetObject().GetGeneration()
+
+	// Set condition for ready state
+	meta.SetStatusCondition(&status.Conditions, metav1.Condition{
+		Type:               "Ready",
+		Status:             metav1.ConditionTrue,
+		Reason:             "Reconciled",
+		Message:            "Tunnel is active and ready",
+		ObservedGeneration: r.GetTunnel().GetObject().GetGeneration(),
+	})
+
+	r.GetTunnel().SetStatus(status)
+}
+
+// updateTunnelStatus updates the tunnel status with retry on conflict
+// P0 FIX: Added retry logic for status update to handle concurrent reconciles
+//
+//nolint:revive // function length is acceptable for reconciliation logic
 func updateTunnelStatus(r GenericTunnelReconciler) error {
 	labels := r.GetTunnel().GetLabels()
 	if labels == nil {
@@ -536,33 +594,40 @@ func updateTunnelStatus(r GenericTunnelReconciler) error {
 		}
 	}
 
-	status := r.GetTunnel().GetStatus()
-	status.AccountId = r.GetCfAPI().ValidAccountId
-	status.TunnelId = r.GetCfAPI().ValidTunnelId
-	status.TunnelName = r.GetCfAPI().ValidTunnelName
-	status.ZoneId = r.GetCfAPI().ValidZoneId
-	status.State = "active"
-	status.ObservedGeneration = r.GetTunnel().GetObject().GetGeneration()
+	// P0 FIX: Update status with retry on conflict
+	const maxRetries = 3
+	var lastErr error
 
-	// Set condition for ready state
-	meta.SetStatusCondition(&status.Conditions, metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionTrue,
-		Reason:             "Reconciled",
-		Message:            "Tunnel is active and ready",
-		ObservedGeneration: r.GetTunnel().GetObject().GetGeneration(),
-	})
+	for i := 0; i < maxRetries; i++ {
+		if i > 0 {
+			if err := refetchTunnelForRetry(r); err != nil {
+				return err
+			}
+		}
 
-	r.GetTunnel().SetStatus(status)
-	if err := r.GetClient().Status().Update(r.GetContext(), r.GetTunnel().GetObject()); err != nil {
-		r.GetLog().Error(err, "Failed to update Tunnel status",
-			"namespace", r.GetTunnel().GetNamespace(), "name", r.GetTunnel().GetName())
-		r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning,
-			"FailedStatusSet", "Failed to set Tunnel status required for operation")
-		return err
+		applyTunnelStatusActive(r)
+
+		err := r.GetClient().Status().Update(r.GetContext(), r.GetTunnel().GetObject())
+		if err == nil {
+			r.GetLog().Info("Tunnel status is set", "status", r.GetTunnel().GetStatus())
+			return nil
+		}
+		if !apierrors.IsConflict(err) {
+			r.GetLog().Error(err, "Failed to update Tunnel status",
+				"namespace", r.GetTunnel().GetNamespace(), "name", r.GetTunnel().GetName())
+			r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning,
+				"FailedStatusSet", "Failed to set Tunnel status required for operation")
+			return err
+		}
+		r.GetLog().Info("Tunnel status update conflict, retrying", "attempt", i+1)
+		lastErr = err
 	}
-	r.GetLog().Info("Tunnel status is set", "status", r.GetTunnel().GetStatus())
-	return nil
+
+	r.GetLog().Error(lastErr, "Failed to update Tunnel status after retries",
+		"namespace", r.GetTunnel().GetNamespace(), "name", r.GetTunnel().GetName())
+	r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning,
+		"FailedStatusSet", "Failed to set Tunnel status after retries")
+	return fmt.Errorf("failed to update tunnel status after %d retries: %w", maxRetries, lastErr)
 }
 
 func createManagedResources(r GenericTunnelReconciler) (ctrl.Result, error) {

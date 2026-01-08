@@ -18,6 +18,7 @@ package warpconnector
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"time"
 
@@ -113,8 +114,10 @@ func (r *WARPConnectorReconciler) handleDeletion(ctx context.Context, connector 
 			}
 		}
 
-		// Delete routes from Cloudflare
+		// P1 FIX: Delete routes from Cloudflare with error aggregation
+		// All routes must be successfully deleted before removing finalizer
 		if connector.Status.TunnelID != "" {
+			var routeErrors []error
 			for _, route := range connector.Spec.Routes {
 				logger.Info("Deleting route", "network", route.Network)
 				if err := apiClient.DeleteTunnelRoute(route.Network, ""); err != nil {
@@ -123,9 +126,15 @@ func (r *WARPConnectorReconciler) handleDeletion(ctx context.Context, connector 
 						logger.Info("Route already deleted from Cloudflare", "network", route.Network)
 					} else {
 						logger.Error(err, "Failed to delete route", "network", route.Network)
-						// Continue with other routes even if one fails
+						routeErrors = append(routeErrors, fmt.Errorf("delete route %s: %w", route.Network, err))
 					}
 				}
+			}
+			// If any route deletion failed, aggregate errors and retry later
+			if len(routeErrors) > 0 {
+				aggregatedErr := stderrors.Join(routeErrors...)
+				logger.Error(aggregatedErr, "Some routes failed to delete, will retry")
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, aggregatedErr
 			}
 		}
 
@@ -143,11 +152,14 @@ func (r *WARPConnectorReconciler) handleDeletion(ctx context.Context, connector 
 			}
 		}
 
-		// Remove finalizer
-		controllerutil.RemoveFinalizer(connector, FinalizerName)
-		if err := r.Update(ctx, connector); err != nil {
+		// P2 FIX: Remove finalizer with retry logic to handle conflicts
+		if err := controller.UpdateWithConflictRetry(ctx, r.Client, connector, func() {
+			controllerutil.RemoveFinalizer(connector, FinalizerName)
+		}); err != nil {
+			logger.Error(err, "Failed to remove finalizer")
 			return ctrl.Result{}, err
 		}
+		logger.Info("Finalizer removed successfully")
 	}
 
 	return ctrl.Result{}, nil
@@ -378,6 +390,7 @@ func (r *WARPConnectorReconciler) updateStatusError(ctx context.Context, connect
 		meta.SetStatusCondition(&connector.Status.Conditions, metav1.Condition{
 			Type:               "Ready",
 			Status:             metav1.ConditionFalse,
+			ObservedGeneration: connector.Generation,
 			Reason:             "ReconcileError",
 			Message:            cf.SanitizeErrorMessage(err),
 			LastTransitionTime: metav1.Now(),
@@ -403,6 +416,7 @@ func (r *WARPConnectorReconciler) updateStatusSuccess(ctx context.Context, conne
 		meta.SetStatusCondition(&connector.Status.Conditions, metav1.Condition{
 			Type:               "Ready",
 			Status:             metav1.ConditionTrue,
+			ObservedGeneration: connector.Generation,
 			Reason:             "Reconciled",
 			Message:            "WARP Connector successfully reconciled",
 			LastTransitionTime: metav1.Now(),

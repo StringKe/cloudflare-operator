@@ -1,14 +1,14 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+本文件为 Claude Code 提供项目开发指南和代码规范。
 
 ## 项目概述
 
-**Cloudflare Operator** - Kubernetes Operator for managing Cloudflare Tunnels and DNS records.
+**Cloudflare Zero Trust Kubernetes Operator** - 管理 Cloudflare Zero Trust 全套资源的 Kubernetes Operator。
 
-**Fork 说明**: 本项目 fork 自 [adyanth/cloudflare-operator](https://github.com/StringKe/cloudflare-operator)，目标是扩展为完整的 **Cloudflare Zero Trust Kubernetes Operator**。
+**Fork 来源**: [adyanth/cloudflare-operator](https://github.com/adyanth/cloudflare-operator)
 
-**技术栈**：
+**技术栈**:
 - Go 1.24
 - Kubebuilder v4
 - controller-runtime v0.20
@@ -16,246 +16,371 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 当前实现状态
 
-### API Group (当前)
+### API Group
 - **Group**: `networking.cloudflare-operator.io`
 - **版本**: v1alpha1 (deprecated), v1alpha2 (storage version)
 
-### 已实现的 CRD (4个)
+### 已实现的 CRD (21个)
 
-| CRD | 作用域 | 说明 |
-|-----|--------|------|
-| `Tunnel` | Namespaced | 管理 Cloudflare Tunnel，支持创建新 Tunnel 或使用已有 Tunnel |
-| `ClusterTunnel` | Cluster | 集群级别的 Tunnel，可被多个 namespace 共享 |
-| `TunnelBinding` | Namespaced | 将 K8s Service 绑定到 Tunnel，暴露服务并管理 DNS |
-| `AccessTunnel` | Namespaced | 创建访问 Cloudflare Access 保护服务的客户端 |
+| 类别 | CRD | 作用域 | 状态 |
+|------|-----|--------|------|
+| **网络层** | Tunnel | Namespaced | ✅ 完成 |
+| | ClusterTunnel | Cluster | ✅ 完成 |
+| | VirtualNetwork | Cluster | ✅ 完成 |
+| | NetworkRoute | Cluster | ✅ 完成 |
+| | WARPConnector | Cluster | ⚠️ 框架完成 |
+| **服务层** | TunnelBinding | Namespaced | ✅ 完成 |
+| | PrivateService | Namespaced | ✅ 完成 |
+| | DNSRecord | Namespaced | ⚠️ 框架完成 |
+| **设备层** | DevicePostureRule | Cluster | ⚠️ 框架完成 |
+| | DeviceSettingsPolicy | Cluster | ⚠️ 框架完成 |
+| **网关层** | GatewayRule | Cluster | ⚠️ 框架完成 |
+| | GatewayList | Cluster | ⚠️ 框架完成 |
+| | GatewayConfiguration | Cluster | ⚠️ 框架完成 |
+| **身份层** | AccessApplication | Namespaced | ⚠️ 框架完成 |
+| | AccessGroup | Cluster | ⚠️ 框架完成 |
+| | AccessServiceToken | Namespaced | ⚠️ 框架完成 |
+| | AccessIdentityProvider | Cluster | ⚠️ 框架完成 |
+| **凭证** | CloudflareCredentials | Cluster | ✅ 完成 |
 
-### 已实现的控制器
+---
 
-```
-internal/controller/
-├── tunnel_controller.go        # Tunnel reconciler
-├── clustertunnel_controller.go # ClusterTunnel reconciler
-├── tunnelbinding_controller.go # TunnelBinding reconciler
-└── (accesstunnel 未完全实现)
-```
+## 代码质量规范 (必须遵守)
 
-### 当前工作流程
+### 1. 状态更新必须使用冲突重试
 
-```
-Tunnel/ClusterTunnel
-       │
-       ├── 创建/使用 Cloudflare Tunnel
-       ├── 生成 ConfigMap (cloudflared 配置)
-       ├── 生成 Secret (tunnel credentials)
-       └── 部署 Deployment (cloudflared pod)
-              │
-              ▼
-       TunnelBinding
-              │
-              ├── 监听 Service
-              ├── 更新 ConfigMap (添加 ingress 规则)
-              └── 创建 DNS CNAME 记录
-```
+```go
+// ✅ 正确: 使用 UpdateStatusWithConflictRetry
+err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, obj, func() {
+    obj.Status.State = "active"
+    controller.SetSuccessCondition(&obj.Status.Conditions, "Reconciled successfully")
+})
 
-## 未来设计目标
-
-详细设计请参考: [docs/design/ZERO_TRUST_OPERATOR_DESIGN.md](docs/design/ZERO_TRUST_OPERATOR_DESIGN.md)
-
-### 目标 API Group
-- **Group**: `cloudflare.com`
-- **Annotation 前缀**: `cloudflare.com/`
-
-### 计划实现的 CRD (21个)
-
-#### 网络层 (Networks)
-- `Tunnel` / `ClusterTunnel` - 现有，需迁移 API Group
-- `NetworkRoute` - CIDR → Tunnel 路由映射 (私有网络访问核心)
-- `VirtualNetwork` - 网络隔离，多租户支持
-- `WARPConnector` - Site-to-Site 连接
-
-#### 服务层 (Services)
-- `TunnelBinding` - 公开访问 (现有)
-- `PrivateService` - 私有访问，仅 WARP 可达
-
-#### 设备层 (Devices)
-- `DevicePostureRule` - 设备安全检查规则
-- `DevicePostureIntegration` - 第三方集成
-- `DeviceSettingsPolicy` - Split Tunnels / Local Domain Fallback
-
-#### 网关层 (Gateway)
-- `GatewayRule` - DNS/HTTP/L4/Egress 过滤规则
-- `GatewayList` - IP/域名/URL 列表
-- `GatewayLocation` - DNS over HTTPS 位置
-- `GatewayConfiguration` - 全局网关配置
-
-#### 身份层 (Access)
-- `AccessApplication` - Access 应用
-- `AccessGroup` - 访问组
-- `AccessPolicy` - 访问策略
-- `AccessServiceToken` - 服务令牌
-- `AccessIdentityProvider` - IdP 配置
-
-### 两种访问模式
-
-```
-私有访问 (WARP Only)                    公开访问 (Access Protected)
-┌─────────────────────┐                ┌─────────────────────┐
-│ WARP Client         │                │ Browser             │
-│ ↓                   │                │ ↓                   │
-│ 设备注册 + 态势检查   │                │ 公开域名             │
-│ ↓                   │                │ ↓                   │
-│ 私有 IP / 内部域名    │                │ Access 登录          │
-│ 10.244.x.x          │                │ ↓                   │
-│ ↓                   │                │ Cloudflare Edge     │
-│ Cloudflare Edge     │                │ ↓                   │
-│ ↓                   │                │ Tunnel              │
-│ Tunnel (WARP Route) │                │ ↓                   │
-│ ↓                   │                │ K8s Service         │
-│ K8s Service         │                └─────────────────────┘
-└─────────────────────┘
+// ❌ 错误: 直接更新状态
+err := r.Status().Update(ctx, obj)
 ```
 
-## 常用命令
+### 2. Finalizer 操作必须使用重试
 
-### 开发与测试
-```bash
-make manifests          # 生成 CRD 和 Webhook 配置
-make generate           # 生成 DeepCopy 方法
-make fmt                # 格式化代码
-make vet                # 运行 Go vet
-make test               # 运行单元测试
-make test-e2e           # 在 Kind 集群上运行 E2E 测试
-make lint               # 运行 golangci-lint
-make lint-fix           # 自动修复 lint 问题
+```go
+// ✅ 正确: 使用 UpdateWithConflictRetry
+err := controller.UpdateWithConflictRetry(ctx, r.Client, obj, func() {
+    controllerutil.RemoveFinalizer(obj, FinalizerName)
+})
+
+// ❌ 错误: 直接更新
+controllerutil.RemoveFinalizer(obj, FinalizerName)
+err := r.Update(ctx, obj)
 ```
 
-### 构建与运行
-```bash
-make build              # 构建二进制文件到 bin/manager
-make run                # 本地运行 Operator
-make docker-build       # 构建 Docker 镜像
-make docker-buildx      # 多平台构建
+### 3. 条件管理必须使用 meta.SetStatusCondition
+
+```go
+// ✅ 正确: 使用辅助函数
+controller.SetSuccessCondition(&status.Conditions, "Resource reconciled")
+controller.SetErrorCondition(&status.Conditions, err)
+
+// 或直接使用 meta.SetStatusCondition
+meta.SetStatusCondition(&status.Conditions, metav1.Condition{
+    Type:               "Ready",
+    Status:             metav1.ConditionTrue,
+    Reason:             "Reconciled",
+    Message:            "Resource is ready",
+    ObservedGeneration: obj.Generation,
+})
 ```
 
-### 部署
-```bash
-make install            # 安装 CRD 到集群
-make uninstall          # 卸载 CRD
-make deploy             # 部署 Operator 到集群
-make undeploy           # 移除 Operator
+### 4. 事件消息禁止包含敏感信息
+
+```go
+// ✅ 正确: 使用 SanitizeErrorMessage
+r.Recorder.Event(obj, corev1.EventTypeWarning, "Failed",
+    fmt.Sprintf("Error: %s", cf.SanitizeErrorMessage(err)))
+
+// ❌ 错误: 直接使用 err.Error()
+r.Recorder.Event(obj, corev1.EventTypeWarning, "Failed", err.Error())
 ```
+
+### 5. 删除操作必须检查 NotFound
+
+```go
+// ✅ 正确: 检查资源是否已删除
+if err := r.cfAPI.DeleteResource(id); err != nil {
+    if !cf.IsNotFoundError(err) {
+        return err  // 真正的错误
+    }
+    // 已删除，继续处理
+    log.Info("Resource already deleted")
+}
+```
+
+### 6. 删除时必须聚合所有错误
+
+```go
+// ✅ 正确: 聚合错误，全部成功后才移除 Finalizer
+var errs []error
+for _, item := range items {
+    if err := deleteItem(item); err != nil {
+        errs = append(errs, fmt.Errorf("delete %s: %w", item.Name, err))
+    }
+}
+if len(errs) > 0 {
+    return errors.Join(errs...)  // 不移除 Finalizer，下次重试
+}
+// 全部成功，移除 Finalizer
+```
+
+### 7. 必须添加依赖资源的 Watch
+
+```go
+// ✅ 正确: Watch 所有依赖资源
+func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+    return ctrl.NewControllerManagedBy(mgr).
+        For(&v1alpha2.MyResource{}).
+        Watches(&v1alpha2.Tunnel{},
+            handler.EnqueueRequestsFromMapFunc(r.findResourcesForTunnel)).
+        Watches(&v1alpha2.VirtualNetwork{},
+            handler.EnqueueRequestsFromMapFunc(r.findResourcesForVNet)).
+        Watches(&corev1.Service{},
+            handler.EnqueueRequestsFromMapFunc(r.findResourcesForService)).
+        Complete(r)
+}
+```
+
+### 8. 资源采用必须检测冲突
+
+```go
+// ✅ 正确: 检查管理标记防止冲突
+mgmtInfo := controller.NewManagementInfo(obj, "MyResource")
+if conflict := controller.GetConflictingManager(existing.Comment, mgmtInfo); conflict != nil {
+    return fmt.Errorf("resource managed by %s/%s", conflict.Kind, conflict.Name)
+}
+// 在 Comment 中添加管理标记
+comment := controller.BuildManagedComment(mgmtInfo, userComment)
+```
+
+---
+
+## 控制器标准模板
+
+### Reconcile 流程
+
+```go
+func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+    // 1. 获取资源
+    obj := &v1alpha2.MyResource{}
+    if err := r.Get(ctx, req.NamespacedName, obj); err != nil {
+        if apierrors.IsNotFound(err) {
+            return ctrl.Result{}, nil
+        }
+        return ctrl.Result{}, err
+    }
+
+    // 2. 初始化 API 客户端
+    if err := r.initAPIClient(); err != nil {
+        r.setCondition(metav1.ConditionFalse, "APIError", err.Error())
+        return ctrl.Result{}, err
+    }
+
+    // 3. 处理删除
+    if obj.GetDeletionTimestamp() != nil {
+        return r.handleDeletion()
+    }
+
+    // 4. 添加 Finalizer
+    if !controllerutil.ContainsFinalizer(obj, FinalizerName) {
+        controllerutil.AddFinalizer(obj, FinalizerName)
+        if err := r.Update(ctx, obj); err != nil {
+            return ctrl.Result{}, err
+        }
+    }
+
+    // 5. 业务逻辑
+    if err := r.reconcile(); err != nil {
+        return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+    }
+
+    return ctrl.Result{}, nil
+}
+```
+
+### 删除处理
+
+```go
+func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
+    if !controllerutil.ContainsFinalizer(obj, FinalizerName) {
+        return ctrl.Result{}, nil
+    }
+
+    // 1. 从 Cloudflare 删除 (检查 NotFound)
+    if err := r.cfAPI.Delete(id); err != nil {
+        if !cf.IsNotFoundError(err) {
+            r.Recorder.Event(obj, corev1.EventTypeWarning, "DeleteFailed",
+                cf.SanitizeErrorMessage(err))
+            return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+        }
+    }
+
+    // 2. 移除 Finalizer (使用重试)
+    if err := controller.UpdateWithConflictRetry(ctx, r.Client, obj, func() {
+        controllerutil.RemoveFinalizer(obj, FinalizerName)
+    }); err != nil {
+        return ctrl.Result{}, err
+    }
+
+    return ctrl.Result{}, nil
+}
+```
+
+---
 
 ## 代码结构
 
 ```
 api/
 ├── v1alpha1/                 # 旧版 API (deprecated)
-│   ├── tunnel_types.go       # Tunnel CRD
-│   ├── clustertunnel_types.go
-│   ├── tunnelbinding_types.go
-│   └── accesstunnel_types.go
 └── v1alpha2/                 # 当前存储版本
-    ├── tunnel_types.go       # 支持 deployPatch
-    └── clustertunnel_types.go
+    ├── tunnel_types.go
+    ├── clustertunnel_types.go
+    ├── virtualnetwork_types.go
+    ├── networkroute_types.go
+    ├── privateservice_types.go
+    ├── accessapplication_types.go
+    └── ...
 
 internal/
 ├── controller/
+│   ├── status.go             # 状态更新辅助函数
+│   ├── constants.go          # 常量定义
+│   ├── management.go         # 资源管理标记
+│   ├── adoption.go           # 资源采用逻辑
+│   ├── generic_tunnel_reconciler.go  # Tunnel 共享逻辑
 │   ├── tunnel_controller.go
-│   ├── clustertunnel_controller.go
 │   ├── tunnelbinding_controller.go
-│   ├── tunnel.go             # Tunnel 接口定义
-│   ├── tunnel_adapter.go     # Tunnel/ClusterTunnel 适配器
-│   └── generic_tunnel_reconciler.go  # 共享 reconcile 逻辑
+│   ├── virtualnetwork/controller.go
+│   ├── networkroute/controller.go
+│   ├── privateservice/controller.go
+│   └── ...
 ├── clients/
-│   ├── cf/                   # Cloudflare API 客户端
-│   │   ├── api.go
-│   │   └── configuration.go
-│   └── k8s/
-│       └── kubectl_apply.go
-└── webhook/                  # 验证 Webhooks
-
-config/                       # Kustomize 部署清单
-docs/
-├── design/                   # 设计文档
-│   └── ZERO_TRUST_OPERATOR_DESIGN.md
-└── migration/                # 迁移指南
+│   └── cf/                   # Cloudflare API 客户端
+│       ├── api.go
+│       ├── network.go        # VirtualNetwork, TunnelRoute
+│       ├── device.go         # Device 设置
+│       └── errors.go         # 错误处理辅助
+└── credentials/              # 凭证加载逻辑
 ```
 
-## 关键代码模式
+---
 
-### Tunnel 接口模式
-`Tunnel` 和 `ClusterTunnel` 通过 `Tunnel` 接口统一:
-
-```go
-// internal/controller/tunnel.go
-type Tunnel interface {
-    GetObject() client.Object
-    GetNamespace() string
-    GetName() string
-    GetSpec() networkingv1alpha2.TunnelSpec
-    GetStatus() networkingv1alpha2.TunnelStatus
-    SetStatus(networkingv1alpha2.TunnelStatus)
-    DeepCopyTunnel() Tunnel
-}
-```
-
-### GenericTunnelReconciler
-通用 reconciler 接口，`TunnelReconciler` 和 `ClusterTunnelReconciler` 都实现此接口:
-
-```go
-// internal/controller/generic_tunnel_reconciler.go
-type GenericTunnelReconciler interface {
-    GetClient() client.Client
-    GetRecorder() record.EventRecorder
-    GetScheme() *runtime.Scheme
-    GetContext() context.Context
-    GetLog() logr.Logger
-    GetTunnel() Tunnel
-    GetCfAPI() *cf.API
-    SetCfAPI(*cf.API)
-    // ...
-}
-```
-
-## 测试
-
-- **框架**: Ginkgo v2 + Gomega
-- **K8s 测试版本**: 1.31.0 (envtest)
-- **单元测试**: `internal/controller/*_test.go`
-- **E2E 测试**: `test/e2e/e2e_test.go`
+## 常用命令
 
 ```bash
-# 运行特定测试
-go test -v ./internal/controller/... -run TestXxx
+# 开发
+make manifests          # 生成 CRD
+make generate           # 生成 DeepCopy
+make fmt vet            # 格式化和检查
+make test               # 单元测试
+make lint               # 运行 golangci-lint
+make lint-fix           # 自动修复 lint
 
-# 运行带覆盖率的测试
-make test
+# 构建
+make build              # 构建二进制
+make docker-build       # 构建 Docker 镜像
+make docker-buildx      # 多平台构建
+
+# 部署
+make install            # 安装 CRD
+make deploy             # 部署 Operator
+make undeploy           # 移除 Operator
+
+# E2E 测试
+make test-e2e           # Kind 集群 E2E 测试
 ```
 
-## 代码规范
+---
 
-- 使用 golangci-lint v2.1.5
-- 修改 CRD 后必须运行 `make manifests generate`
-- 遵循 Conventional Commits 规范
+## 核心辅助函数
 
-## 核心依赖
+### status.go
 
-- `github.com/cloudflare/cloudflare-go` - Cloudflare API 客户端
-- `sigs.k8s.io/controller-runtime` - Kubernetes Operator 框架
-- `k8s.io/api`, `k8s.io/client-go` - Kubernetes API
+```go
+// 状态更新辅助
+controller.UpdateStatusWithConflictRetry(ctx, client, obj, updateFn)
+controller.UpdateWithConflictRetry(ctx, client, obj, updateFn)
 
-## 上游 PR 参考
+// 条件设置辅助
+controller.SetCondition(conditions, type, status, reason, message)
+controller.SetSuccessCondition(conditions, message)
+controller.SetErrorCondition(conditions, err)
+```
 
-待合并的功能 PR (来自 adyanth/cloudflare-operator):
-- PR #115: Access Config 支持
-- PR #166: FQDN 变更时 DNS 清理
-- PR #158: Tunnel Secret Finalizer
-- PR #140: Dummy TunnelBinding (无 Service 的 binding)
-- PR #178: Leader Election 修复
+### cf/errors.go
+
+```go
+// 错误检查
+cf.IsNotFoundError(err)     // 资源不存在
+cf.IsConflictError(err)     // 资源已存在
+cf.SanitizeErrorMessage(err) // 清理敏感信息
+```
+
+### management.go
+
+```go
+// 资源管理标记
+controller.NewManagementInfo(obj, kind)
+controller.BuildManagedComment(mgmtInfo, userComment)
+controller.GetConflictingManager(comment, mgmtInfo)
+```
+
+---
+
+## 测试要求
+
+1. **所有控制器必须通过**:
+   - `make fmt` - 代码格式化
+   - `make vet` - 静态检查
+   - `make lint` - golangci-lint
+   - `make test` - 单元测试
+
+2. **修改 CRD 后必须运行**:
+   ```bash
+   make manifests generate
+   ```
+
+3. **提交前验证**:
+   ```bash
+   make fmt vet test lint build
+   ```
+
+---
+
+## Git 提交规范
+
+遵循 [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+feat: 新功能
+fix: Bug 修复
+docs: 文档更新
+refactor: 重构
+test: 测试
+chore: 构建/工具
+```
+
+示例:
+```
+feat(networkroute): add VirtualNetwork watch handler
+
+- Add findNetworkRoutesForVirtualNetwork function
+- Update SetupWithManager to watch VirtualNetwork changes
+- Fixes P0 issue where NetworkRoute not reconciled on VNet update
+```
+
+---
 
 ## 参考资源
 
 - [Cloudflare Zero Trust Docs](https://developers.cloudflare.com/cloudflare-one/)
 - [Cloudflare API Reference](https://developers.cloudflare.com/api/)
 - [cloudflare-go SDK](https://github.com/cloudflare/cloudflare-go)
-- [原始仓库](https://github.com/StringKe/cloudflare-operator)
+- [controller-runtime](https://github.com/kubernetes-sigs/controller-runtime)

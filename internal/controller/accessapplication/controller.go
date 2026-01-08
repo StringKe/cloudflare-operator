@@ -31,7 +31,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
@@ -130,8 +132,15 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 		}
 	}
 
-	controllerutil.RemoveFinalizer(r.app, AccessApplicationFinalizer)
-	return ctrl.Result{}, r.Update(r.ctx, r.app)
+	// P0 FIX: Remove finalizer with retry logic to handle conflicts
+	if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.app, func() {
+		controllerutil.RemoveFinalizer(r.app, AccessApplicationFinalizer)
+	}); err != nil {
+		r.log.Error(err, "failed to remove finalizer")
+		return ctrl.Result{}, err
+	}
+	r.Recorder.Event(r.app, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
+	return ctrl.Result{}, nil
 }
 
 func (r *Reconciler) reconcileApplication() error {
@@ -233,9 +242,62 @@ func (r *Reconciler) setCondition(status metav1.ConditionStatus, reason, message
 	})
 }
 
+// appReferencesIDP checks if an AccessApplication references the given AccessIdentityProvider.
+func appReferencesIDP(app *networkingv1alpha2.AccessApplication, idpName string) bool {
+	for _, ref := range app.Spec.AllowedIdpRefs {
+		if ref.Name == idpName {
+			return true
+		}
+	}
+	return false
+}
+
+// findAccessApplicationsForIdentityProvider returns a list of reconcile requests for AccessApplications
+// that reference the given AccessIdentityProvider.
+func (r *Reconciler) findAccessApplicationsForIdentityProvider(ctx context.Context, obj client.Object) []reconcile.Request {
+	idp, ok := obj.(*networkingv1alpha2.AccessIdentityProvider)
+	if !ok {
+		return nil
+	}
+	logger := ctrllog.FromContext(ctx)
+
+	// Find all AccessApplications that reference this IdP
+	appList := &networkingv1alpha2.AccessApplicationList{}
+	if err := r.List(ctx, appList); err != nil {
+		logger.Error(err, "Failed to list AccessApplications for IdentityProvider watch")
+		return nil
+	}
+
+	requests := make([]reconcile.Request, 0, len(appList.Items))
+	for i := range appList.Items {
+		app := &appList.Items[i]
+		if !appReferencesIDP(app, idp.Name) {
+			continue
+		}
+
+		logger.Info("AccessIdentityProvider changed, triggering AccessApplication reconcile",
+			"identityprovider", idp.Name,
+			"accessapplication", app.Name,
+			"namespace", app.Namespace)
+		requests = append(requests, reconcile.Request{
+			NamespacedName: apitypes.NamespacedName{
+				Name:      app.Name,
+				Namespace: app.Namespace,
+			},
+		})
+	}
+
+	return requests
+}
+
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("accessapplication-controller")
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.AccessApplication{}).
+		// P1 FIX: Watch AccessIdentityProvider changes for IdP reference updates
+		Watches(
+			&networkingv1alpha2.AccessIdentityProvider{},
+			handler.EnqueueRequestsFromMapFunc(r.findAccessApplicationsForIdentityProvider),
+		).
 		Complete(r)
 }

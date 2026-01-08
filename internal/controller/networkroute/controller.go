@@ -180,9 +180,10 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 		r.log.Info("No network specified, assuming route was never created or already deleted")
 	}
 
-	// Remove finalizer
-	controllerutil.RemoveFinalizer(r.networkRoute, controller.NetworkRouteFinalizer)
-	if err := r.Update(r.ctx, r.networkRoute); err != nil {
+	// P2 FIX: Remove finalizer with retry logic to handle conflicts
+	if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.networkRoute, func() {
+		controllerutil.RemoveFinalizer(r.networkRoute, controller.NetworkRouteFinalizer)
+	}); err != nil {
 		r.log.Error(err, "failed to remove finalizer")
 		return ctrl.Result{}, err
 	}
@@ -414,6 +415,80 @@ func (r *Reconciler) findNetworkRoutesForVirtualNetwork(ctx context.Context, obj
 	return requests
 }
 
+// findNetworkRoutesForTunnel returns reconcile requests for NetworkRoutes that reference the given Tunnel
+//
+//nolint:revive // cognitive-complexity: watch handler logic is inherently complex
+func (r *Reconciler) findNetworkRoutesForTunnel(ctx context.Context, obj client.Object) []reconcile.Request {
+	tunnel, ok := obj.(*networkingv1alpha2.Tunnel)
+	if !ok {
+		return nil
+	}
+	log := ctrllog.FromContext(ctx)
+
+	// List all NetworkRoutes
+	routes := &networkingv1alpha2.NetworkRouteList{}
+	if err := r.List(ctx, routes); err != nil {
+		log.Error(err, "Failed to list NetworkRoutes for Tunnel watch")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, route := range routes.Items {
+		if route.Spec.TunnelRef.Kind == "Tunnel" &&
+			route.Spec.TunnelRef.Name == tunnel.Name {
+			// Check namespace match
+			refNamespace := route.Spec.TunnelRef.Namespace
+			if refNamespace == "" {
+				refNamespace = "default"
+			}
+			if refNamespace == tunnel.Namespace {
+				log.Info("Tunnel changed, triggering NetworkRoute reconcile",
+					"tunnel", tunnel.Name,
+					"networkroute", route.Name)
+				requests = append(requests, reconcile.Request{
+					NamespacedName: apitypes.NamespacedName{
+						Name: route.Name,
+					},
+				})
+			}
+		}
+	}
+	return requests
+}
+
+// findNetworkRoutesForClusterTunnel returns reconcile requests for NetworkRoutes that reference the given ClusterTunnel
+func (r *Reconciler) findNetworkRoutesForClusterTunnel(ctx context.Context, obj client.Object) []reconcile.Request {
+	clusterTunnel, ok := obj.(*networkingv1alpha2.ClusterTunnel)
+	if !ok {
+		return nil
+	}
+	log := ctrllog.FromContext(ctx)
+
+	// List all NetworkRoutes
+	routes := &networkingv1alpha2.NetworkRouteList{}
+	if err := r.List(ctx, routes); err != nil {
+		log.Error(err, "Failed to list NetworkRoutes for ClusterTunnel watch")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, route := range routes.Items {
+		// ClusterTunnel is the default kind or explicitly specified
+		if (route.Spec.TunnelRef.Kind == "" || route.Spec.TunnelRef.Kind == "ClusterTunnel") &&
+			route.Spec.TunnelRef.Name == clusterTunnel.Name {
+			log.Info("ClusterTunnel changed, triggering NetworkRoute reconcile",
+				"clustertunnel", clusterTunnel.Name,
+				"networkroute", route.Name)
+			requests = append(requests, reconcile.Request{
+				NamespacedName: apitypes.NamespacedName{
+					Name: route.Name,
+				},
+			})
+		}
+	}
+	return requests
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("networkroute-controller")
@@ -423,6 +498,16 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&networkingv1alpha2.VirtualNetwork{},
 			handler.EnqueueRequestsFromMapFunc(r.findNetworkRoutesForVirtualNetwork),
+		).
+		// P0 FIX: Watch Tunnel changes to trigger NetworkRoute reconcile when TunnelId becomes available
+		Watches(
+			&networkingv1alpha2.Tunnel{},
+			handler.EnqueueRequestsFromMapFunc(r.findNetworkRoutesForTunnel),
+		).
+		// P0 FIX: Watch ClusterTunnel changes
+		Watches(
+			&networkingv1alpha2.ClusterTunnel{},
+			handler.EnqueueRequestsFromMapFunc(r.findNetworkRoutesForClusterTunnel),
 		).
 		Complete(r)
 }

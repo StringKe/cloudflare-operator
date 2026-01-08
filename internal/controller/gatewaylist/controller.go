@@ -100,24 +100,28 @@ func (r *GatewayListReconciler) handleDeletion(ctx context.Context, list *networ
 		if list.Status.ListID != "" {
 			logger.Info("Deleting Gateway List from Cloudflare", "listId", list.Status.ListID)
 			if err := apiClient.DeleteGatewayList(list.Status.ListID); err != nil {
-				// Check if resource already deleted
+				// P0 FIX: Check if resource already deleted
 				if !cf.IsNotFoundError(err) {
 					logger.Error(err, "Failed to delete Gateway List from Cloudflare")
-					r.Recorder.Event(list, corev1.EventTypeWarning, "DeleteFailed",
-						fmt.Sprintf("Failed to delete from Cloudflare: %v", err))
+					r.Recorder.Event(list, corev1.EventTypeWarning, controller.EventReasonDeleteFailed,
+						fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
 					return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 				}
 				logger.Info("Gateway List already deleted from Cloudflare")
+				r.Recorder.Event(list, corev1.EventTypeNormal, "AlreadyDeleted", "Gateway List was already deleted from Cloudflare")
 			} else {
-				r.Recorder.Event(list, corev1.EventTypeNormal, "Deleted", "Deleted from Cloudflare")
+				r.Recorder.Event(list, corev1.EventTypeNormal, controller.EventReasonDeleted, "Deleted from Cloudflare")
 			}
 		}
 
-		// Remove finalizer
-		controllerutil.RemoveFinalizer(list, FinalizerName)
-		if err := r.Update(ctx, list); err != nil {
+		// P0 FIX: Remove finalizer with retry logic to handle conflicts
+		if err := controller.UpdateWithConflictRetry(ctx, r.Client, list, func() {
+			controllerutil.RemoveFinalizer(list, FinalizerName)
+		}); err != nil {
+			logger.Error(err, "failed to remove finalizer")
 			return ctrl.Result{}, err
 		}
+		r.Recorder.Event(list, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
 	}
 
 	return ctrl.Result{}, nil
@@ -151,11 +155,11 @@ func (r *GatewayListReconciler) reconcileGatewayList(ctx context.Context, list *
 			fmt.Sprintf("Creating Gateway List '%s' (type: %s, items: %d) in Cloudflare", params.Name, params.Type, len(items)))
 		result, err = apiClient.CreateGatewayList(params)
 		if err != nil {
-			r.Recorder.Event(list, corev1.EventTypeWarning, "CreateFailed",
-				fmt.Sprintf("Failed to create Gateway List: %v", err))
+			r.Recorder.Event(list, corev1.EventTypeWarning, controller.EventReasonCreateFailed,
+				fmt.Sprintf("Failed to create Gateway List: %s", cf.SanitizeErrorMessage(err)))
 			return r.updateStatusError(ctx, list, err)
 		}
-		r.Recorder.Event(list, corev1.EventTypeNormal, "Created",
+		r.Recorder.Event(list, corev1.EventTypeNormal, controller.EventReasonCreated,
 			fmt.Sprintf("Created Gateway List with ID '%s'", result.ID))
 	} else {
 		// Update existing gateway list
@@ -164,11 +168,11 @@ func (r *GatewayListReconciler) reconcileGatewayList(ctx context.Context, list *
 			fmt.Sprintf("Updating Gateway List '%s' (items: %d) in Cloudflare", list.Status.ListID, len(items)))
 		result, err = apiClient.UpdateGatewayList(list.Status.ListID, params)
 		if err != nil {
-			r.Recorder.Event(list, corev1.EventTypeWarning, "UpdateFailed",
-				fmt.Sprintf("Failed to update Gateway List: %v", err))
+			r.Recorder.Event(list, corev1.EventTypeWarning, controller.EventReasonUpdateFailed,
+				fmt.Sprintf("Failed to update Gateway List: %s", cf.SanitizeErrorMessage(err)))
 			return r.updateStatusError(ctx, list, err)
 		}
-		r.Recorder.Event(list, corev1.EventTypeNormal, "Updated",
+		r.Recorder.Event(list, corev1.EventTypeNormal, controller.EventReasonUpdated,
 			fmt.Sprintf("Updated Gateway List '%s'", result.ID))
 	}
 
@@ -234,6 +238,7 @@ func (r *GatewayListReconciler) updateStatusError(ctx context.Context, list *net
 		meta.SetStatusCondition(&list.Status.Conditions, metav1.Condition{
 			Type:               "Ready",
 			Status:             metav1.ConditionFalse,
+			ObservedGeneration: list.Generation,
 			Reason:             "ReconcileError",
 			Message:            cf.SanitizeErrorMessage(err),
 			LastTransitionTime: metav1.Now(),
@@ -258,6 +263,7 @@ func (r *GatewayListReconciler) updateStatusSuccess(ctx context.Context, list *n
 		meta.SetStatusCondition(&list.Status.Conditions, metav1.Condition{
 			Type:               "Ready",
 			Status:             metav1.ConditionTrue,
+			ObservedGeneration: list.Generation,
 			Reason:             "Reconciled",
 			Message:            "Gateway List successfully reconciled",
 			LastTransitionTime: metav1.Now(),

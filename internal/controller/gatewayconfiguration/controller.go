@@ -21,10 +21,12 @@ import (
 	"fmt"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -32,6 +34,7 @@ import (
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
+	"github.com/StringKe/cloudflare-operator/internal/controller"
 )
 
 const (
@@ -41,7 +44,8 @@ const (
 // GatewayConfigurationReconciler reconciles a GatewayConfiguration object
 type GatewayConfigurationReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=gatewayconfigurations,verbs=get;list;watch;create;update;patch;delete
@@ -89,14 +93,20 @@ func (r *GatewayConfigurationReconciler) initAPIClient(ctx context.Context, conf
 }
 
 func (r *GatewayConfigurationReconciler) handleDeletion(ctx context.Context, config *networkingv1alpha2.GatewayConfiguration) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
 	if controllerutil.ContainsFinalizer(config, FinalizerName) {
 		// Gateway configuration is account-level, we don't delete it
 		// Just remove the finalizer
 
-		controllerutil.RemoveFinalizer(config, FinalizerName)
-		if err := r.Update(ctx, config); err != nil {
+		// P0 FIX: Remove finalizer with retry logic to handle conflicts
+		if err := controller.UpdateWithConflictRetry(ctx, r.Client, config, func() {
+			controllerutil.RemoveFinalizer(config, FinalizerName)
+		}); err != nil {
+			logger.Error(err, "failed to remove finalizer")
 			return ctrl.Result{}, err
 		}
+		r.Recorder.Event(config, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
 	}
 
 	return ctrl.Result{}, nil
@@ -110,10 +120,14 @@ func (r *GatewayConfigurationReconciler) reconcileGatewayConfiguration(ctx conte
 
 	// Update gateway configuration (always an update, not create)
 	logger.Info("Updating Gateway Configuration")
+	r.Recorder.Event(config, corev1.EventTypeNormal, "Updating", "Updating Gateway Configuration in Cloudflare")
 	result, err := apiClient.UpdateGatewayConfiguration(params)
 	if err != nil {
+		r.Recorder.Event(config, corev1.EventTypeWarning, controller.EventReasonUpdateFailed,
+			fmt.Sprintf("Failed to update Gateway Configuration: %s", cf.SanitizeErrorMessage(err)))
 		return r.updateStatusError(ctx, config, err)
 	}
+	r.Recorder.Event(config, corev1.EventTypeNormal, controller.EventReasonUpdated, "Updated Gateway Configuration")
 
 	// Update status
 	return r.updateStatusSuccess(ctx, config, result)
@@ -239,17 +253,20 @@ func (r *GatewayConfigurationReconciler) buildConfigParams(settings networkingv1
 }
 
 func (r *GatewayConfigurationReconciler) updateStatusError(ctx context.Context, config *networkingv1alpha2.GatewayConfiguration, err error) (ctrl.Result, error) {
-	config.Status.State = "Error"
-	meta.SetStatusCondition(&config.Status.Conditions, metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionFalse,
-		Reason:             "ReconcileError",
-		Message:            err.Error(),
-		LastTransitionTime: metav1.Now(),
+	// P0 FIX: Use UpdateStatusWithConflictRetry for status updates
+	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, config, func() {
+		config.Status.State = "Error"
+		meta.SetStatusCondition(&config.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: config.Generation,
+			Reason:             "ReconcileError",
+			Message:            cf.SanitizeErrorMessage(err),
+			LastTransitionTime: metav1.Now(),
+		})
+		config.Status.ObservedGeneration = config.Generation
 	})
-	config.Status.ObservedGeneration = config.Generation
-
-	if updateErr := r.Status().Update(ctx, config); updateErr != nil {
+	if updateErr != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
 	}
 
@@ -257,25 +274,29 @@ func (r *GatewayConfigurationReconciler) updateStatusError(ctx context.Context, 
 }
 
 func (r *GatewayConfigurationReconciler) updateStatusSuccess(ctx context.Context, config *networkingv1alpha2.GatewayConfiguration, result *cf.GatewayConfigurationResult) (ctrl.Result, error) {
-	config.Status.AccountID = result.AccountID
-	config.Status.State = "Ready"
-	meta.SetStatusCondition(&config.Status.Conditions, metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionTrue,
-		Reason:             "Reconciled",
-		Message:            "Gateway Configuration successfully reconciled",
-		LastTransitionTime: metav1.Now(),
+	// P0 FIX: Use UpdateStatusWithConflictRetry for status updates
+	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, config, func() {
+		config.Status.AccountID = result.AccountID
+		config.Status.State = "Ready"
+		meta.SetStatusCondition(&config.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: config.Generation,
+			Reason:             "Reconciled",
+			Message:            "Gateway Configuration successfully reconciled",
+			LastTransitionTime: metav1.Now(),
+		})
+		config.Status.ObservedGeneration = config.Generation
 	})
-	config.Status.ObservedGeneration = config.Generation
-
-	if err := r.Status().Update(ctx, config); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
+	if updateErr != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
 	}
 
 	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 }
 
 func (r *GatewayConfigurationReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.Recorder = mgr.GetEventRecorderFor("gatewayconfiguration-controller")
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.GatewayConfiguration{}).
 		Complete(r)
