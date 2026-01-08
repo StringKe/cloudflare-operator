@@ -134,118 +134,75 @@ func (r *GatewayConfigurationReconciler) reconcileGatewayConfiguration(ctx conte
 }
 
 func (r *GatewayConfigurationReconciler) buildConfigParams(settings networkingv1alpha2.GatewaySettings) cf.GatewayConfigurationParams {
-	params := cf.GatewayConfigurationParams{
-		Settings: make(map[string]interface{}),
-	}
+	params := cf.GatewayConfigurationParams{}
 
 	if settings.TLSDecrypt != nil {
-		params.Settings["tls_decrypt"] = map[string]interface{}{
-			"enabled": settings.TLSDecrypt.Enabled,
+		params.TLSDecrypt = &cf.TLSDecryptSettings{
+			Enabled: settings.TLSDecrypt.Enabled,
 		}
 	}
 
 	if settings.ActivityLog != nil {
-		params.Settings["activity_log"] = map[string]interface{}{
-			"enabled": settings.ActivityLog.Enabled,
+		params.ActivityLog = &cf.ActivityLogSettings{
+			Enabled: settings.ActivityLog.Enabled,
 		}
 	}
 
 	if settings.AntiVirus != nil {
-		avMap := map[string]interface{}{
-			"enabled": settings.AntiVirus.Enabled,
-		}
-		if settings.AntiVirus.EnabledDownloadPhase {
-			avMap["enabled_download_phase"] = true
-		}
-		if settings.AntiVirus.EnabledUploadPhase {
-			avMap["enabled_upload_phase"] = true
-		}
-		if settings.AntiVirus.FailClosed {
-			avMap["fail_closed"] = true
+		av := &cf.AntiVirusSettings{
+			EnabledDownloadPhase: settings.AntiVirus.EnabledDownloadPhase,
+			EnabledUploadPhase:   settings.AntiVirus.EnabledUploadPhase,
+			FailClosed:           settings.AntiVirus.FailClosed,
 		}
 		if settings.AntiVirus.NotificationSettings != nil {
-			avMap["notification_settings"] = map[string]interface{}{
-				"enabled":     settings.AntiVirus.NotificationSettings.Enabled,
-				"msg":         settings.AntiVirus.NotificationSettings.Message,
-				"support_url": settings.AntiVirus.NotificationSettings.SupportURL,
+			av.NotificationSettings = &cf.NotificationSettings{
+				Enabled:    settings.AntiVirus.NotificationSettings.Enabled,
+				Message:    settings.AntiVirus.NotificationSettings.Message,
+				SupportURL: settings.AntiVirus.NotificationSettings.SupportURL,
 			}
 		}
-		params.Settings["antivirus"] = avMap
+		params.AntiVirus = av
 	}
 
 	if settings.BlockPage != nil {
-		bpMap := map[string]interface{}{
-			"enabled": settings.BlockPage.Enabled,
+		params.BlockPage = &cf.BlockPageSettings{
+			Enabled:         settings.BlockPage.Enabled,
+			FooterText:      settings.BlockPage.FooterText,
+			HeaderText:      settings.BlockPage.HeaderText,
+			LogoPath:        settings.BlockPage.LogoPath,
+			BackgroundColor: settings.BlockPage.BackgroundColor,
 		}
-		if settings.BlockPage.Name != "" {
-			bpMap["name"] = settings.BlockPage.Name
-		}
-		if settings.BlockPage.FooterText != "" {
-			bpMap["footer_text"] = settings.BlockPage.FooterText
-		}
-		if settings.BlockPage.HeaderText != "" {
-			bpMap["header_text"] = settings.BlockPage.HeaderText
-		}
-		if settings.BlockPage.LogoPath != "" {
-			bpMap["logo_path"] = settings.BlockPage.LogoPath
-		}
-		if settings.BlockPage.BackgroundColor != "" {
-			bpMap["background_color"] = settings.BlockPage.BackgroundColor
-		}
-		if settings.BlockPage.MailtoAddress != "" {
-			bpMap["mailto_address"] = settings.BlockPage.MailtoAddress
-		}
-		if settings.BlockPage.MailtoSubject != "" {
-			bpMap["mailto_subject"] = settings.BlockPage.MailtoSubject
-		}
-		if settings.BlockPage.SuppressFooter {
-			bpMap["suppress_footer"] = true
-		}
-		params.Settings["block_page"] = bpMap
 	}
 
 	if settings.BodyScanning != nil {
-		params.Settings["body_scanning"] = map[string]interface{}{
-			"inspection_mode": settings.BodyScanning.InspectionMode,
+		params.BodyScanning = &cf.BodyScanningSettings{
+			InspectionMode: settings.BodyScanning.InspectionMode,
 		}
 	}
 
 	if settings.BrowserIsolation != nil {
-		biMap := make(map[string]interface{})
-		if settings.BrowserIsolation.URLBrowserIsolationEnabled {
-			biMap["url_browser_isolation_enabled"] = true
+		params.BrowserIsolation = &cf.BrowserIsolationSettings{
+			URLBrowserIsolationEnabled: settings.BrowserIsolation.URLBrowserIsolationEnabled,
+			NonIdentityEnabled:         settings.BrowserIsolation.NonIdentityEnabled,
 		}
-		if settings.BrowserIsolation.NonIdentityEnabled {
-			biMap["non_identity_enabled"] = true
-		}
-		params.Settings["browser_isolation"] = biMap
 	}
 
 	if settings.FIPS != nil {
-		params.Settings["fips"] = map[string]interface{}{
-			"tls": settings.FIPS.TLS,
+		params.FIPS = &cf.FIPSSettings{
+			TLS: settings.FIPS.TLS,
 		}
 	}
 
 	if settings.ProtocolDetection != nil {
-		params.Settings["protocol_detection"] = map[string]interface{}{
-			"enabled": settings.ProtocolDetection.Enabled,
+		params.ProtocolDetection = &cf.ProtocolDetectionSettings{
+			Enabled: settings.ProtocolDetection.Enabled,
 		}
 	}
 
 	if settings.CustomCertificate != nil {
-		ccMap := map[string]interface{}{
-			"enabled": settings.CustomCertificate.Enabled,
-		}
-		if settings.CustomCertificate.ID != "" {
-			ccMap["id"] = settings.CustomCertificate.ID
-		}
-		params.Settings["custom_certificate"] = ccMap
-	}
-
-	if settings.NonIdentityBrowserIsolation != nil {
-		params.Settings["non_identity_browser_isolation"] = map[string]interface{}{
-			"enabled": settings.NonIdentityBrowserIsolation.Enabled,
+		params.CustomCertificate = &cf.CustomCertificateSettings{
+			Enabled: settings.CustomCertificate.Enabled,
+			ID:      settings.CustomCertificate.ID,
 		}
 	}
 

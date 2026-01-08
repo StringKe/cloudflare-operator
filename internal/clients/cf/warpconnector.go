@@ -126,7 +126,76 @@ func (c *API) DeleteWARPConnector(connectorID string) error {
 
 // GatewayConfigurationParams contains parameters for Gateway Configuration.
 type GatewayConfigurationParams struct {
-	Settings map[string]interface{}
+	TLSDecrypt        *TLSDecryptSettings
+	ActivityLog       *ActivityLogSettings
+	AntiVirus         *AntiVirusSettings
+	BlockPage         *BlockPageSettings
+	BodyScanning      *BodyScanningSettings
+	BrowserIsolation  *BrowserIsolationSettings
+	FIPS              *FIPSSettings
+	ProtocolDetection *ProtocolDetectionSettings
+	CustomCertificate *CustomCertificateSettings
+}
+
+// TLSDecryptSettings for TLS decryption.
+type TLSDecryptSettings struct {
+	Enabled bool
+}
+
+// ActivityLogSettings for activity logging.
+type ActivityLogSettings struct {
+	Enabled bool
+}
+
+// AntiVirusSettings for AV scanning.
+type AntiVirusSettings struct {
+	EnabledDownloadPhase bool
+	EnabledUploadPhase   bool
+	FailClosed           bool
+	NotificationSettings *NotificationSettings
+}
+
+// NotificationSettings for antivirus notifications.
+type NotificationSettings struct {
+	Enabled    bool
+	Message    string
+	SupportURL string
+}
+
+// BlockPageSettings for block page customization.
+type BlockPageSettings struct {
+	Enabled         bool
+	FooterText      string
+	HeaderText      string
+	LogoPath        string
+	BackgroundColor string
+}
+
+// BodyScanningSettings for body scanning.
+type BodyScanningSettings struct {
+	InspectionMode string
+}
+
+// BrowserIsolationSettings for browser isolation.
+type BrowserIsolationSettings struct {
+	URLBrowserIsolationEnabled bool
+	NonIdentityEnabled         bool
+}
+
+// FIPSSettings for FIPS compliance.
+type FIPSSettings struct {
+	TLS bool
+}
+
+// ProtocolDetectionSettings for protocol detection.
+type ProtocolDetectionSettings struct {
+	Enabled bool
+}
+
+// CustomCertificateSettings for custom CA.
+type CustomCertificateSettings struct {
+	Enabled bool
+	ID      string
 }
 
 // GatewayConfigurationResult contains the result of a Gateway Configuration operation.
@@ -143,124 +212,77 @@ func (c *API) UpdateGatewayConfiguration(params GatewayConfigurationParams) (*Ga
 
 	ctx := context.Background()
 
-	// Build the gateway settings from params
+	// Build the gateway settings from strongly-typed params
 	accountSettings := cloudflare.TeamsAccountSettings{}
 
-	// Parse TLS Decrypt
-	if tlsDecrypt, ok := params.Settings["tls_decrypt"].(map[string]any); ok {
-		if enabled, ok := tlsDecrypt["enabled"].(bool); ok {
-			accountSettings.TLSDecrypt = &cloudflare.TeamsTLSDecrypt{
-				Enabled: enabled,
-			}
+	if params.TLSDecrypt != nil {
+		accountSettings.TLSDecrypt = &cloudflare.TeamsTLSDecrypt{
+			Enabled: params.TLSDecrypt.Enabled,
 		}
 	}
 
-	// Parse Activity Log
-	if activityLog, ok := params.Settings["activity_log"].(map[string]any); ok {
-		if enabled, ok := activityLog["enabled"].(bool); ok {
-			accountSettings.ActivityLog = &cloudflare.TeamsActivityLog{
-				Enabled: enabled,
-			}
+	if params.ActivityLog != nil {
+		accountSettings.ActivityLog = &cloudflare.TeamsActivityLog{
+			Enabled: params.ActivityLog.Enabled,
 		}
 	}
 
-	// Parse AntiVirus
-	if antivirus, ok := params.Settings["antivirus"].(map[string]any); ok {
-		av := &cloudflare.TeamsAntivirus{}
-		if v, ok := antivirus["enabled_download_phase"].(bool); ok {
-			av.EnabledDownloadPhase = v
+	if params.AntiVirus != nil {
+		av := &cloudflare.TeamsAntivirus{
+			EnabledDownloadPhase: params.AntiVirus.EnabledDownloadPhase,
+			EnabledUploadPhase:   params.AntiVirus.EnabledUploadPhase,
+			FailClosed:           params.AntiVirus.FailClosed,
 		}
-		if v, ok := antivirus["enabled_upload_phase"].(bool); ok {
-			av.EnabledUploadPhase = v
-		}
-		if v, ok := antivirus["fail_closed"].(bool); ok {
-			av.FailClosed = v
-		}
-		if ns, ok := antivirus["notification_settings"].(map[string]any); ok {
-			av.NotificationSettings = &cloudflare.TeamsNotificationSettings{}
-			if v, ok := ns["enabled"].(bool); ok {
-				av.NotificationSettings.Enabled = &v
-			}
-			if v, ok := ns["msg"].(string); ok {
-				av.NotificationSettings.Message = v
-			}
-			if v, ok := ns["support_url"].(string); ok {
-				av.NotificationSettings.SupportURL = v
+		if params.AntiVirus.NotificationSettings != nil {
+			av.NotificationSettings = &cloudflare.TeamsNotificationSettings{
+				Enabled:    &params.AntiVirus.NotificationSettings.Enabled,
+				Message:    params.AntiVirus.NotificationSettings.Message,
+				SupportURL: params.AntiVirus.NotificationSettings.SupportURL,
 			}
 		}
 		accountSettings.Antivirus = av
 	}
 
-	// Parse Block Page
-	if blockPage, ok := params.Settings["block_page"].(map[string]any); ok {
-		bp := &cloudflare.TeamsBlockPage{}
-		if v, ok := blockPage["enabled"].(bool); ok {
-			bp.Enabled = &v
+	if params.BlockPage != nil {
+		accountSettings.BlockPage = &cloudflare.TeamsBlockPage{
+			Enabled:         &params.BlockPage.Enabled,
+			FooterText:      params.BlockPage.FooterText,
+			HeaderText:      params.BlockPage.HeaderText,
+			LogoPath:        params.BlockPage.LogoPath,
+			BackgroundColor: params.BlockPage.BackgroundColor,
 		}
-		if v, ok := blockPage["footer_text"].(string); ok {
-			bp.FooterText = v
-		}
-		if v, ok := blockPage["header_text"].(string); ok {
-			bp.HeaderText = v
-		}
-		if v, ok := blockPage["logo_path"].(string); ok {
-			bp.LogoPath = v
-		}
-		if v, ok := blockPage["background_color"].(string); ok {
-			bp.BackgroundColor = v
-		}
-		accountSettings.BlockPage = bp
 	}
 
-	// Parse Body Scanning
-	if bodyScanning, ok := params.Settings["body_scanning"].(map[string]any); ok {
-		bs := &cloudflare.TeamsBodyScanning{}
-		if v, ok := bodyScanning["inspection_mode"].(string); ok {
-			bs.InspectionMode = v
+	if params.BodyScanning != nil {
+		accountSettings.BodyScanning = &cloudflare.TeamsBodyScanning{
+			InspectionMode: params.BodyScanning.InspectionMode,
 		}
-		accountSettings.BodyScanning = bs
 	}
 
-	// Parse Browser Isolation
-	if browserIsolation, ok := params.Settings["browser_isolation"].(map[string]any); ok {
-		bi := &cloudflare.BrowserIsolation{}
-		if v, ok := browserIsolation["url_browser_isolation_enabled"].(bool); ok {
-			bi.UrlBrowserIsolationEnabled = &v
+	if params.BrowserIsolation != nil {
+		accountSettings.BrowserIsolation = &cloudflare.BrowserIsolation{
+			UrlBrowserIsolationEnabled: &params.BrowserIsolation.URLBrowserIsolationEnabled,
+			NonIdentityEnabled:         &params.BrowserIsolation.NonIdentityEnabled,
 		}
-		if v, ok := browserIsolation["non_identity_enabled"].(bool); ok {
-			bi.NonIdentityEnabled = &v
-		}
-		accountSettings.BrowserIsolation = bi
 	}
 
-	// Parse FIPS
-	if fips, ok := params.Settings["fips"].(map[string]any); ok {
-		f := &cloudflare.TeamsFIPS{}
-		if v, ok := fips["tls"].(bool); ok {
-			f.TLS = v
+	if params.FIPS != nil {
+		accountSettings.FIPS = &cloudflare.TeamsFIPS{
+			TLS: params.FIPS.TLS,
 		}
-		accountSettings.FIPS = f
 	}
 
-	// Parse Protocol Detection
-	if protocolDetection, ok := params.Settings["protocol_detection"].(map[string]any); ok {
-		pd := &cloudflare.TeamsProtocolDetection{}
-		if v, ok := protocolDetection["enabled"].(bool); ok {
-			pd.Enabled = v
+	if params.ProtocolDetection != nil {
+		accountSettings.ProtocolDetection = &cloudflare.TeamsProtocolDetection{
+			Enabled: params.ProtocolDetection.Enabled,
 		}
-		accountSettings.ProtocolDetection = pd
 	}
 
-	// Parse Custom Certificate
-	if customCertificate, ok := params.Settings["custom_certificate"].(map[string]any); ok {
-		cc := &cloudflare.TeamsCustomCertificate{}
-		if v, ok := customCertificate["enabled"].(bool); ok {
-			cc.Enabled = &v
+	if params.CustomCertificate != nil {
+		accountSettings.CustomCertificate = &cloudflare.TeamsCustomCertificate{
+			Enabled: &params.CustomCertificate.Enabled,
+			ID:      params.CustomCertificate.ID,
 		}
-		if v, ok := customCertificate["id"].(string); ok {
-			cc.ID = v
-		}
-		accountSettings.CustomCertificate = cc
 	}
 
 	// Build the final configuration
