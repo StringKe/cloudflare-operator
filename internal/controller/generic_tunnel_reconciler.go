@@ -427,6 +427,24 @@ func cleanupTunnel(r GenericTunnelReconciler) (ctrl.Result, bool, error) {
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, false, nil
 		}
 		if bypass || *cfDeployment.Spec.Replicas == 0 {
+			// P0 FIX: Delete all routes associated with this tunnel BEFORE deleting the tunnel
+			// This prevents the "Cannot delete tunnel because it has Warp routing configured" error
+			tunnelID := r.GetTunnel().GetStatus().TunnelId
+			if tunnelID != "" {
+				deletedCount, err := r.GetCfAPI().DeleteTunnelRoutesByTunnelID(tunnelID)
+				if err != nil {
+					r.GetLog().Error(err, "Failed to delete tunnel routes", "tunnelId", tunnelID)
+					r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning,
+						"FailedDeletingRoutes", fmt.Sprintf("Failed to delete tunnel routes: %v", cf.SanitizeErrorMessage(err)))
+					return ctrl.Result{RequeueAfter: 30 * time.Second}, false, err
+				}
+				if deletedCount > 0 {
+					r.GetLog().Info("Deleted tunnel routes before tunnel deletion", "tunnelId", tunnelID, "count", deletedCount)
+					r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal,
+						"RoutesDeleted", fmt.Sprintf("Deleted %d tunnel routes", deletedCount))
+				}
+			}
+
 			// P0 FIX: Improve deletion idempotency
 			// Handle case where tunnel is already deleted from Cloudflare
 			if err := r.GetCfAPI().DeleteTunnel(); err != nil {

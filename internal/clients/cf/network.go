@@ -342,3 +342,133 @@ func (c *API) DeleteTunnelRoute(network, virtualNetworkID string) error {
 	c.Log.Info("Tunnel Route deleted successfully", "network", network)
 	return nil
 }
+
+// ListTunnelRoutesByTunnelID lists all Tunnel Routes associated with a specific Tunnel.
+// This is used to clean up routes before deleting a tunnel.
+func (c *API) ListTunnelRoutesByTunnelID(tunnelID string) ([]TunnelRouteResult, error) {
+	if _, err := c.GetAccountId(); err != nil {
+		c.Log.Error(err, "error getting account ID")
+		return nil, err
+	}
+
+	ctx := context.Background()
+	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
+
+	params := cloudflare.TunnelRoutesListParams{
+		TunnelID: tunnelID,
+	}
+
+	routes, err := c.CloudflareClient.ListTunnelRoutes(ctx, rc, params)
+	if err != nil {
+		c.Log.Error(err, "error listing tunnel routes by tunnel ID", "tunnelId", tunnelID)
+		return nil, err
+	}
+
+	results := make([]TunnelRouteResult, 0, len(routes))
+	for _, route := range routes {
+		results = append(results, TunnelRouteResult{
+			Network:          route.Network,
+			TunnelID:         route.TunnelID,
+			TunnelName:       route.TunnelName,
+			VirtualNetworkID: route.VirtualNetworkID,
+			Comment:          route.Comment,
+		})
+	}
+
+	return results, nil
+}
+
+// ListTunnelRoutesByVirtualNetworkID lists all Tunnel Routes associated with a specific Virtual Network.
+// This is used to clean up routes before deleting a virtual network.
+func (c *API) ListTunnelRoutesByVirtualNetworkID(virtualNetworkID string) ([]TunnelRouteResult, error) {
+	if _, err := c.GetAccountId(); err != nil {
+		c.Log.Error(err, "error getting account ID")
+		return nil, err
+	}
+
+	ctx := context.Background()
+	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
+
+	params := cloudflare.TunnelRoutesListParams{
+		VirtualNetworkID: virtualNetworkID,
+	}
+
+	routes, err := c.CloudflareClient.ListTunnelRoutes(ctx, rc, params)
+	if err != nil {
+		c.Log.Error(err, "error listing tunnel routes by virtual network ID", "virtualNetworkId", virtualNetworkID)
+		return nil, err
+	}
+
+	results := make([]TunnelRouteResult, 0, len(routes))
+	for _, route := range routes {
+		results = append(results, TunnelRouteResult{
+			Network:          route.Network,
+			TunnelID:         route.TunnelID,
+			TunnelName:       route.TunnelName,
+			VirtualNetworkID: route.VirtualNetworkID,
+			Comment:          route.Comment,
+		})
+	}
+
+	return results, nil
+}
+
+// DeleteTunnelRoutesByTunnelID deletes all routes associated with a tunnel.
+// Returns the number of routes deleted and any error encountered.
+//
+//nolint:revive // cognitive complexity is acceptable for this cleanup function
+func (c *API) DeleteTunnelRoutesByTunnelID(tunnelID string) (int, error) {
+	routes, err := c.ListTunnelRoutesByTunnelID(tunnelID)
+	if err != nil {
+		return 0, err
+	}
+
+	deletedCount := 0
+	for _, route := range routes {
+		if err := c.DeleteTunnelRoute(route.Network, route.VirtualNetworkID); err != nil {
+			if !IsNotFoundError(err) {
+				c.Log.Error(err, "error deleting tunnel route during cleanup",
+					"network", route.Network, "tunnelId", tunnelID)
+				return deletedCount, err
+			}
+			// Route already deleted, continue
+		}
+		deletedCount++
+	}
+
+	if deletedCount > 0 {
+		c.Log.Info("Deleted tunnel routes", "tunnelId", tunnelID, "count", deletedCount)
+	}
+
+	return deletedCount, nil
+}
+
+// DeleteTunnelRoutesByVirtualNetworkID deletes all routes associated with a virtual network.
+// Returns the number of routes deleted and any error encountered.
+//
+//nolint:revive // cognitive complexity is acceptable for this cleanup function
+func (c *API) DeleteTunnelRoutesByVirtualNetworkID(virtualNetworkID string) (int, error) {
+	routes, err := c.ListTunnelRoutesByVirtualNetworkID(virtualNetworkID)
+	if err != nil {
+		return 0, err
+	}
+
+	deletedCount := 0
+	for _, route := range routes {
+		if err := c.DeleteTunnelRoute(route.Network, route.VirtualNetworkID); err != nil {
+			if !IsNotFoundError(err) {
+				c.Log.Error(err, "error deleting tunnel route during cleanup",
+					"network", route.Network, "virtualNetworkId", virtualNetworkID)
+				return deletedCount, err
+			}
+			// Route already deleted, continue
+		}
+		deletedCount++
+	}
+
+	if deletedCount > 0 {
+		c.Log.Info("Deleted tunnel routes", "virtualNetworkId", virtualNetworkID, "count", deletedCount)
+	}
+
+	return deletedCount, nil
+}

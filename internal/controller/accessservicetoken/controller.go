@@ -254,6 +254,14 @@ func (r *AccessServiceTokenReconciler) checkSecretExists(
 	return true, hasClientID && hasClientSecret
 }
 
+// getSecretFinalizerName returns a valid RFC 1123 compliant finalizer name for the secret.
+// For cluster-scoped AccessServiceToken, we use only the token name since there's no namespace.
+func getSecretFinalizerName(token *networkingv1alpha2.AccessServiceToken) string {
+	// AccessServiceToken is cluster-scoped, so token.Namespace is always empty.
+	// Use a format that is RFC 1123 compliant: lowercase alphanumeric, '-' or '.'
+	return fmt.Sprintf("accessservicetoken.%s.secret-protection", token.Name)
+}
+
 // ensureSecretFinalizer adds a finalizer to the secret to prevent accidental deletion
 func (r *AccessServiceTokenReconciler) ensureSecretFinalizer(ctx context.Context, token *networkingv1alpha2.AccessServiceToken) error {
 	secretName := token.Spec.SecretRef.Name
@@ -270,7 +278,7 @@ func (r *AccessServiceTokenReconciler) ensureSecretFinalizer(ctx context.Context
 		return err
 	}
 
-	finalizerName := fmt.Sprintf("accessservicetoken.%s.%s/secret-protection", token.Namespace, token.Name)
+	finalizerName := getSecretFinalizerName(token)
 	if !controllerutil.ContainsFinalizer(secret, finalizerName) {
 		controllerutil.AddFinalizer(secret, finalizerName)
 		return r.Update(ctx, secret)
@@ -298,7 +306,7 @@ func (r *AccessServiceTokenReconciler) removeSecretFinalizer(ctx context.Context
 		return err
 	}
 
-	finalizerName := fmt.Sprintf("accessservicetoken.%s.%s/secret-protection", token.Namespace, token.Name)
+	finalizerName := getSecretFinalizerName(token)
 	if controllerutil.ContainsFinalizer(secret, finalizerName) {
 		controllerutil.RemoveFinalizer(secret, finalizerName)
 		return r.Update(ctx, secret)

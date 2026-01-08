@@ -152,6 +152,21 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 
 	// Delete from Cloudflare if we have an ID
 	if vnetID != "" {
+		// P0 FIX: Delete all routes associated with this VirtualNetwork BEFORE deleting the VNet
+		// This prevents the "virtual network is used by IP Route(s)" error
+		deletedCount, err := r.cfAPI.DeleteTunnelRoutesByVirtualNetworkID(vnetID)
+		if err != nil {
+			r.log.Error(err, "failed to delete routes for VirtualNetwork", "id", vnetID)
+			r.Recorder.Event(r.vnet, corev1.EventTypeWarning,
+				"FailedDeletingRoutes", fmt.Sprintf("Failed to delete routes: %v", cf.SanitizeErrorMessage(err)))
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+		}
+		if deletedCount > 0 {
+			r.log.Info("Deleted routes before VirtualNetwork deletion", "vnetId", vnetID, "count", deletedCount)
+			r.Recorder.Event(r.vnet, corev1.EventTypeNormal,
+				"RoutesDeleted", fmt.Sprintf("Deleted %d routes", deletedCount))
+		}
+
 		if err := r.cfAPI.DeleteVirtualNetwork(vnetID); err != nil {
 			// P0 FIX: Check if resource is already deleted (NotFound error)
 			if !cf.IsNotFoundError(err) {
