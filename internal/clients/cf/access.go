@@ -664,8 +664,8 @@ type DevicePostureRuleParams struct {
 	Description string
 	Schedule    string
 	Expiration  string
-	Match       []map[string]interface{}
-	Input       map[string]interface{}
+	Match       []map[string]any
+	Input       map[string]any
 }
 
 // DevicePostureRuleResult contains the result of a Device Posture Rule operation.
@@ -675,6 +675,137 @@ type DevicePostureRuleResult struct {
 	Type        string
 	Description string
 	AccountID   string
+}
+
+// convertToDevicePostureRuleInput converts a map to cloudflare.DevicePostureRuleInput.
+// This function handles all supported input fields for device posture rules.
+func convertToDevicePostureRuleInput(input map[string]any) cloudflare.DevicePostureRuleInput {
+	result := cloudflare.DevicePostureRuleInput{}
+
+	if input == nil {
+		return result
+	}
+
+	// Apply all field conversions
+	applyStringFields(input, &result)
+	applyBoolFields(input, &result)
+	applyIntFields(input, &result)
+	applySliceFields(input, &result)
+
+	return result
+}
+
+// applyStringFields sets string fields on DevicePostureRuleInput from the input map.
+func applyStringFields(input map[string]any, result *cloudflare.DevicePostureRuleInput) {
+	stringFields := map[string]*string{
+		"id":                 &result.ID,
+		"path":               &result.Path,
+		"thumbprint":         &result.Thumbprint,
+		"sha256":             &result.Sha256,
+		"version":            &result.Version,
+		"version_operator":   &result.VersionOperator,
+		"overall":            &result.Overall,
+		"sensor_config":      &result.SensorConfig,
+		"os":                 &result.Os,
+		"os_distro_name":     &result.OsDistroName,
+		"os_distro_revision": &result.OsDistroRevision,
+		"os_version_extra":   &result.OSVersionExtra,
+		"operator":           &result.Operator,
+		"domain":             &result.Domain,
+		"compliance_status":  &result.ComplianceStatus,
+		"connection_id":      &result.ConnectionID,
+		"issue_count":        &result.IssueCount,
+		"count_operator":     &result.CountOperator,
+		"score_operator":     &result.ScoreOperator,
+		"certificate_id":     &result.CertificateID,
+		"common_name":        &result.CommonName,
+		"network_status":     &result.NetworkStatus,
+		"eid_last_seen":      &result.EidLastSeen,
+		"risk_level":         &result.RiskLevel,
+		"state":              &result.State,
+		"last_seen":          &result.LastSeen,
+	}
+
+	for key, target := range stringFields {
+		if v, ok := input[key].(string); ok {
+			*target = v
+		}
+	}
+
+	// String pointer field
+	if v, ok := input["operational_state"].(string); ok {
+		result.OperationalState = &v
+	}
+}
+
+// applyBoolFields sets bool pointer fields on DevicePostureRuleInput from the input map.
+func applyBoolFields(input map[string]any, result *cloudflare.DevicePostureRuleInput) {
+	if v, ok := input["exists"].(bool); ok {
+		result.Exists = &v
+	}
+	if v, ok := input["running"].(bool); ok {
+		result.Running = &v
+	}
+	if v, ok := input["require_all"].(bool); ok {
+		result.RequireAll = &v
+	}
+	if v, ok := input["enabled"].(bool); ok {
+		result.Enabled = &v
+	}
+	if v, ok := input["infected"].(bool); ok {
+		result.Infected = &v
+	}
+	if v, ok := input["is_active"].(bool); ok {
+		result.IsActive = &v
+	}
+	if v, ok := input["check_private_key"].(bool); ok {
+		result.CheckPrivateKey = &v
+	}
+}
+
+// applyIntFields sets integer fields on DevicePostureRuleInput from the input map.
+func applyIntFields(input map[string]any, result *cloudflare.DevicePostureRuleInput) {
+	intFields := map[string]*int{
+		"total_score":    &result.TotalScore,
+		"active_threats": &result.ActiveThreats,
+		"score":          &result.Score,
+	}
+
+	for key, target := range intFields {
+		if v, ok := input[key].(int); ok {
+			*target = v
+		} else if v, ok := input[key].(float64); ok {
+			*target = int(v)
+		}
+	}
+}
+
+// applySliceFields sets string slice fields on DevicePostureRuleInput from the input map.
+func applySliceFields(input map[string]any, result *cloudflare.DevicePostureRuleInput) {
+	// check_disks
+	if v, ok := input["check_disks"].([]string); ok {
+		result.CheckDisks = v
+	} else if v, ok := input["check_disks"].([]any); ok {
+		result.CheckDisks = toStringSlice(v)
+	}
+
+	// extended_key_usage
+	if v, ok := input["extended_key_usage"].([]string); ok {
+		result.ExtendedKeyUsage = v
+	} else if v, ok := input["extended_key_usage"].([]any); ok {
+		result.ExtendedKeyUsage = toStringSlice(v)
+	}
+}
+
+// toStringSlice converts []any to []string, filtering out non-string values.
+func toStringSlice(v []any) []string {
+	result := make([]string, 0, len(v))
+	for _, item := range v {
+		if s, ok := item.(string); ok {
+			result = append(result, s)
+		}
+	}
+	return result
 }
 
 // CreateDevicePostureRule creates a new Device Posture Rule.
@@ -695,11 +826,8 @@ func (c *API) CreateDevicePostureRule(params DevicePostureRuleParams) (*DevicePo
 		})
 	}
 
-	// Convert input to DevicePostureRuleInput
-	input := cloudflare.DevicePostureRuleInput{}
-	if id, ok := params.Input["id"].(string); ok {
-		input.ID = id
-	}
+	// Convert input to DevicePostureRuleInput using the helper function
+	input := convertToDevicePostureRuleInput(params.Input)
 
 	rule := cloudflare.DevicePostureRule{
 		Name:        params.Name,
@@ -770,11 +898,8 @@ func (c *API) UpdateDevicePostureRule(ruleID string, params DevicePostureRulePar
 		})
 	}
 
-	// Convert input to DevicePostureRuleInput
-	input := cloudflare.DevicePostureRuleInput{}
-	if id, ok := params.Input["id"].(string); ok {
-		input.ID = id
-	}
+	// Convert input to DevicePostureRuleInput using the helper function
+	input := convertToDevicePostureRuleInput(params.Input)
 
 	rule := cloudflare.DevicePostureRule{
 		ID:          ruleID,
