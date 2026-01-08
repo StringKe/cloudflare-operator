@@ -1,0 +1,21 @@
+# E2E Test: PrivateService
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PrivateService
+metadata:
+  name: nginx-private
+  namespace: e2e-test
+  labels:
+    app.kubernetes.io/part-of: e2e-test
+spec:
+  serviceRef:
+    name: nginx-test
+  tunnelRef:
+    kind: ClusterTunnel
+    name: test-cluster-tunnel
+  virtualNetworkRef:
+    name: test-vnet
+  comment: "E2E test private service - auto cleanup"
+  cloudflare:
+    accountId: "${CLOUDFLARE_ACCOUNT_ID}"
+    credentialsRef:
+      name: default

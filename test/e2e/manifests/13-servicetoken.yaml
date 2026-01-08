@@ -1,0 +1,17 @@
+# E2E Test: AccessServiceToken
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessServiceToken
+metadata:
+  name: test-token
+  namespace: e2e-test
+  labels:
+    app.kubernetes.io/part-of: e2e-test
+spec:
+  name: E2E Test Token
+  duration: "8760h"  # 1 year
+  secretRef:
+    name: test-service-token-secret
+  cloudflare:
+    accountId: "${CLOUDFLARE_ACCOUNT_ID}"
+    credentialsRef:
+      name: default

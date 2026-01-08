@@ -1,0 +1,16 @@
+# E2E Test: AccessGroup
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessGroup
+metadata:
+  name: test-group
+  labels:
+    app.kubernetes.io/part-of: e2e-test
+spec:
+  name: E2E Test Group
+  include:
+  - emailDomain:
+      domain: ${CLOUDFLARE_EMAIL_DOMAIN}
+  cloudflare:
+    accountId: "${CLOUDFLARE_ACCOUNT_ID}"
+    credentialsRef:
+      name: default

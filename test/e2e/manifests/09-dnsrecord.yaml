@@ -1,0 +1,19 @@
+# E2E Test: DNSRecord
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: DNSRecord
+metadata:
+  name: test-dns
+  namespace: e2e-test
+  labels:
+    app.kubernetes.io/part-of: e2e-test
+spec:
+  name: e2e-test-record.${CLOUDFLARE_DOMAIN}
+  type: A
+  content: 1.2.3.4
+  ttl: 300
+  proxied: false
+  comment: "E2E test DNS record - auto cleanup"
+  cloudflare:
+    accountId: "${CLOUDFLARE_ACCOUNT_ID}"
+    credentialsRef:
+      name: default

@@ -1,0 +1,15 @@
+# E2E Test: VirtualNetwork
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: VirtualNetwork
+metadata:
+  name: test-vnet
+  labels:
+    app.kubernetes.io/part-of: e2e-test
+spec:
+  name: e2e-test-network
+  comment: "E2E test virtual network - auto cleanup"
+  isDefaultNetwork: false
+  cloudflare:
+    accountId: "${CLOUDFLARE_ACCOUNT_ID}"
+    credentialsRef:
+      name: default

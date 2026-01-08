@@ -1,0 +1,16 @@
+# E2E Test: TunnelBinding
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: TunnelBinding
+metadata:
+  name: nginx-binding
+  namespace: e2e-test
+  labels:
+    app.kubernetes.io/part-of: e2e-test
+spec:
+  tunnelRef:
+    kind: Tunnel
+    name: test-tunnel
+  subjects:
+  - spec:
+      target: http://nginx-test.e2e-test.svc.cluster.local:80
+      fqdn: e2e-nginx.${CLOUDFLARE_DOMAIN}

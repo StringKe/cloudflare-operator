@@ -1,0 +1,46 @@
+# E2E Test: Test Application (nginx)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-test
+  namespace: e2e-test
+  labels:
+    app.kubernetes.io/part-of: e2e-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx-test
+  template:
+    metadata:
+      labels:
+        app: nginx-test
+        app.kubernetes.io/part-of: e2e-test
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 50m
+            memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-test
+  namespace: e2e-test
+  labels:
+    app.kubernetes.io/part-of: e2e-test
+spec:
+  selector:
+    app: nginx-test
+  ports:
+  - port: 80
+    targetPort: 80
+  type: ClusterIP

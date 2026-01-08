@@ -1,0 +1,19 @@
+# E2E Test: AccessApplication
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessApplication
+metadata:
+  name: test-app
+  namespace: e2e-test
+  labels:
+    app.kubernetes.io/part-of: e2e-test
+spec:
+  name: E2E Test Application
+  domain: e2e-test-app.${CLOUDFLARE_DOMAIN}
+  type: self_hosted
+  sessionDuration: "24h"
+  allowedIdpRefs:
+  - name: test-otp
+  cloudflare:
+    accountId: "${CLOUDFLARE_ACCOUNT_ID}"
+    credentialsRef:
+      name: default

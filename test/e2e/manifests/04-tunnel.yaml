@@ -1,0 +1,24 @@
+# E2E Test: Namespace + Tunnel
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-test
+  labels:
+    app.kubernetes.io/part-of: e2e-test
+---
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: Tunnel
+metadata:
+  name: test-tunnel
+  namespace: e2e-test
+  labels:
+    app.kubernetes.io/part-of: e2e-test
+spec:
+  newTunnel:
+    name: e2e-test-ns-tunnel
+  enableWarpRouting: true
+  cloudflare:
+    accountId: "${CLOUDFLARE_ACCOUNT_ID}"
+    domain: "${CLOUDFLARE_DOMAIN}"
+    credentialsRef:
+      name: default

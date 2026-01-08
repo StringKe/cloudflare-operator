@@ -1,0 +1,14 @@
+# E2E Test: AccessIdentityProvider (OTP - no external IdP needed)
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessIdentityProvider
+metadata:
+  name: test-otp
+  labels:
+    app.kubernetes.io/part-of: e2e-test
+spec:
+  name: E2E Test OTP
+  type: onetimepin
+  cloudflare:
+    accountId: "${CLOUDFLARE_ACCOUNT_ID}"
+    credentialsRef:
+      name: default

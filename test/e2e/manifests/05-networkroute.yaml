@@ -1,0 +1,19 @@
+# E2E Test: NetworkRoute
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: NetworkRoute
+metadata:
+  name: test-route
+  labels:
+    app.kubernetes.io/part-of: e2e-test
+spec:
+  network: 10.100.0.0/16
+  comment: "E2E test network route - auto cleanup"
+  tunnelRef:
+    kind: ClusterTunnel
+    name: test-cluster-tunnel
+  virtualNetworkRef:
+    name: test-vnet
+  cloudflare:
+    accountId: "${CLOUDFLARE_ACCOUNT_ID}"
+    credentialsRef:
+      name: default
