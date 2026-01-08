@@ -2,6 +2,8 @@
 # since it depends on service name and namespace that are out of this kustomize package.
 # It should be run by config/default
 resources:
+# Credentials CRD
+- bases/networking.cloudflare-operator.io_cloudflarecredentials.yaml
 # Core Tunnel CRDs
 - bases/networking.cloudflare-operator.io_tunnels.yaml
 - bases/networking.cloudflare-operator.io_clustertunnels.yaml
