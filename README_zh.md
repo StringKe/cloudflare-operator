@@ -23,11 +23,22 @@
   </p>
 </div>
 
+<div align="center">
+
 [![GitHub license](https://img.shields.io/github/license/StringKe/cloudflare-operator?color=brightgreen)](https://github.com/StringKe/cloudflare-operator/blob/main/LICENSE)
 [![GitHub release](https://img.shields.io/github/v/release/StringKe/cloudflare-operator)](https://github.com/StringKe/cloudflare-operator/releases)
 [![Go Report Card](https://goreportcard.com/badge/github.com/StringKe/cloudflare-operator)](https://goreportcard.com/report/github.com/StringKe/cloudflare-operator)
+[![CI](https://github.com/StringKe/cloudflare-operator/actions/workflows/release.yml/badge.svg)](https://github.com/StringKe/cloudflare-operator/actions/workflows/release.yml)
+[![Test](https://github.com/StringKe/cloudflare-operator/actions/workflows/test.yml/badge.svg)](https://github.com/StringKe/cloudflare-operator/actions/workflows/test.yml)
+[![Lint](https://github.com/StringKe/cloudflare-operator/actions/workflows/lint.yml/badge.svg)](https://github.com/StringKe/cloudflare-operator/actions/workflows/lint.yml)
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FStringKe%2Fcloudflare-operator.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2FStringKe%2Fcloudflare-operator)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/StringKe/cloudflare-operator/badge)](https://securityscorecards.dev/viewer/?uri=github.com/StringKe/cloudflare-operator)
+
+</div>
 
 > **注意**: 此项目目前处于 Alpha 阶段 (v0.17.x)
+>
+> 本项目 Fork 自 [adyanth/cloudflare-operator](https://github.com/adyanth/cloudflare-operator)，在原项目基础上扩展了完整的 Zero Trust 功能。
 
 ## 概述
 
@@ -240,9 +251,23 @@ tunnelRef:
 
 欢迎贡献！请查看 [CONTRIBUTING.md](CONTRIBUTING.md) 了解指南。
 
+## 致谢
+
+本项目 Fork 自 [adyanth/cloudflare-operator](https://github.com/adyanth/cloudflare-operator)。感谢 [@adyanth](https://github.com/adyanth) 及所有原始贡献者在初始实现上的出色工作。
+
+### 主要差异
+
+本 Fork 在原项目基础上扩展了：
+- 完整的 Zero Trust 资源支持（Access、Gateway、Device 管理）
+- v1alpha2 API 及改进的资源管理
+- 增强的错误处理和状态报告
+- 完善的文档和示例
+
 ## 许可证
 
 Apache License 2.0 - 详见 [LICENSE](LICENSE)。
+
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FStringKe%2Fcloudflare-operator.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2FStringKe%2Fcloudflare-operator)
 
 ---
 

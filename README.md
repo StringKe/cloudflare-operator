@@ -23,11 +23,22 @@
   </p>
 </div>
 
+<div align="center">
+
 [![GitHub license](https://img.shields.io/github/license/StringKe/cloudflare-operator?color=brightgreen)](https://github.com/StringKe/cloudflare-operator/blob/main/LICENSE)
 [![GitHub release](https://img.shields.io/github/v/release/StringKe/cloudflare-operator)](https://github.com/StringKe/cloudflare-operator/releases)
 [![Go Report Card](https://goreportcard.com/badge/github.com/StringKe/cloudflare-operator)](https://goreportcard.com/report/github.com/StringKe/cloudflare-operator)
+[![CI](https://github.com/StringKe/cloudflare-operator/actions/workflows/release.yml/badge.svg)](https://github.com/StringKe/cloudflare-operator/actions/workflows/release.yml)
+[![Test](https://github.com/StringKe/cloudflare-operator/actions/workflows/test.yml/badge.svg)](https://github.com/StringKe/cloudflare-operator/actions/workflows/test.yml)
+[![Lint](https://github.com/StringKe/cloudflare-operator/actions/workflows/lint.yml/badge.svg)](https://github.com/StringKe/cloudflare-operator/actions/workflows/lint.yml)
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FStringKe%2Fcloudflare-operator.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2FStringKe%2Fcloudflare-operator)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/StringKe/cloudflare-operator/badge)](https://securityscorecards.dev/viewer/?uri=github.com/StringKe/cloudflare-operator)
+
+</div>
 
 > **Note**: This project is currently in Alpha (v0.17.x)
+>
+> This project is a fork of [adyanth/cloudflare-operator](https://github.com/adyanth/cloudflare-operator) with extended Zero Trust features and improvements.
 
 ## Overview
 
@@ -240,9 +251,23 @@ Documentation includes:
 
 Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
+## Acknowledgements
+
+This project is forked from [adyanth/cloudflare-operator](https://github.com/adyanth/cloudflare-operator). We extend our gratitude to [@adyanth](https://github.com/adyanth) and all original contributors for their excellent work on the initial implementation.
+
+### What's Different
+
+This fork extends the original project with:
+- Complete Zero Trust resource support (Access, Gateway, Device management)
+- v1alpha2 API with improved resource management
+- Enhanced error handling and status reporting
+- Comprehensive documentation and examples
+
 ## License
 
 Apache License 2.0 - See [LICENSE](LICENSE) for details.
+
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FStringKe%2Fcloudflare-operator.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2FStringKe%2Fcloudflare-operator)
 
 ---
 
