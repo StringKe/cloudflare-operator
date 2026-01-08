@@ -302,6 +302,11 @@ spec:
               tunnelId:
                 description: TunnelID is the underlying tunnel ID.
                 type: string
+              virtualNetworkId:
+                description: |-
+                  VirtualNetworkID is the Cloudflare VirtualNetwork ID used for routes.
+                  This is saved to enable proper route deletion during cleanup.
+                type: string
             type: object
         type: object
     served: true

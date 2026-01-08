@@ -534,8 +534,9 @@ func (c *API) CreateAccessServiceToken(name string, duration string) (*AccessSer
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	createParams := cloudflare.CreateAccessServiceTokenParams{
-		Name:     name,
-		Duration: duration,
+		Name:                name,
+		Duration:            duration,
+		ClientSecretVersion: 1, // Required: minimum version is 1
 	}
 
 	token, err := c.CloudflareClient.CreateAccessServiceToken(ctx, rc, createParams)

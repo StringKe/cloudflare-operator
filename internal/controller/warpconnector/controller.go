@@ -116,11 +116,13 @@ func (r *WARPConnectorReconciler) handleDeletion(ctx context.Context, connector 
 
 		// P1 FIX: Delete routes from Cloudflare with error aggregation
 		// All routes must be successfully deleted before removing finalizer
+		// Use saved VirtualNetworkID from status for proper route deletion
 		if connector.Status.TunnelID != "" {
 			var routeErrors []error
+			vnetID := connector.Status.VirtualNetworkID // Use saved VirtualNetworkID
 			for _, route := range connector.Spec.Routes {
-				logger.Info("Deleting route", "network", route.Network)
-				if err := apiClient.DeleteTunnelRoute(route.Network, ""); err != nil {
+				logger.Info("Deleting route", "network", route.Network, "virtualNetworkId", vnetID)
+				if err := apiClient.DeleteTunnelRoute(route.Network, vnetID); err != nil {
 					// P0 FIX: Check if route is already deleted (NotFound error)
 					if cf.IsNotFoundError(err) {
 						logger.Info("Route already deleted from Cloudflare", "network", route.Network)
@@ -247,7 +249,7 @@ func (r *WARPConnectorReconciler) reconcileWARPConnector(ctx context.Context, co
 	}
 
 	// Update status
-	return r.updateStatusSuccess(ctx, connector, connectorID, tunnelID, deployment.Status.ReadyReplicas, routesConfigured)
+	return r.updateStatusSuccess(ctx, connector, connectorID, tunnelID, vnetID, deployment.Status.ReadyReplicas, routesConfigured)
 }
 
 func (r *WARPConnectorReconciler) reconcileSecret(ctx context.Context, connector *networkingv1alpha2.WARPConnector, token string) error {
@@ -405,11 +407,18 @@ func (r *WARPConnectorReconciler) updateStatusError(ctx context.Context, connect
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
-func (r *WARPConnectorReconciler) updateStatusSuccess(ctx context.Context, connector *networkingv1alpha2.WARPConnector, connectorID, tunnelID string, readyReplicas int32, routesConfigured int) (ctrl.Result, error) {
+func (r *WARPConnectorReconciler) updateStatusSuccess(
+	ctx context.Context,
+	connector *networkingv1alpha2.WARPConnector,
+	connectorID, tunnelID, virtualNetworkID string,
+	readyReplicas int32,
+	routesConfigured int,
+) (ctrl.Result, error) {
 	// Use retry logic for status updates to handle conflicts
 	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, connector, func() {
 		connector.Status.ConnectorID = connectorID
 		connector.Status.TunnelID = tunnelID
+		connector.Status.VirtualNetworkID = virtualNetworkID // Save for deletion
 		connector.Status.ReadyReplicas = readyReplicas
 		connector.Status.RoutesConfigured = routesConfigured
 		connector.Status.State = "Ready"

@@ -125,6 +125,11 @@ type WARPConnectorStatus struct {
 	// +kubebuilder:validation:Optional
 	TunnelID string `json:"tunnelId,omitempty"`
 
+	// VirtualNetworkID is the Cloudflare VirtualNetwork ID used for routes.
+	// This is saved to enable proper route deletion during cleanup.
+	// +kubebuilder:validation:Optional
+	VirtualNetworkID string `json:"virtualNetworkId,omitempty"`
+
 	// AccountID is the Cloudflare Account ID.
 	// +kubebuilder:validation:Optional
 	AccountID string `json:"accountId,omitempty"`

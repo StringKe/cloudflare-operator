@@ -143,20 +143,133 @@ func (c *API) UpdateGatewayConfiguration(params GatewayConfigurationParams) (*Ga
 
 	ctx := context.Background()
 
-	// Build the gateway settings
-	settings := cloudflare.TeamsConfiguration{}
+	// Build the gateway settings from params
+	accountSettings := cloudflare.TeamsAccountSettings{}
 
-	// Apply settings from params - using simplified approach
-	// The actual configuration will be handled by the TeamsAccountUpdateConfiguration API
-	_ = params // Settings will be applied through Cloudflare Dashboard or API directly
+	// Parse TLS Decrypt
+	if tlsDecrypt, ok := params.Settings["tls_decrypt"].(map[string]any); ok {
+		if enabled, ok := tlsDecrypt["enabled"].(bool); ok {
+			accountSettings.TLSDecrypt = &cloudflare.TeamsTLSDecrypt{
+				Enabled: enabled,
+			}
+		}
+	}
 
-	_, err := c.CloudflareClient.TeamsAccountConfiguration(ctx, c.ValidAccountId)
-	if err != nil {
-		c.Log.Error(err, "error getting current gateway configuration")
+	// Parse Activity Log
+	if activityLog, ok := params.Settings["activity_log"].(map[string]any); ok {
+		if enabled, ok := activityLog["enabled"].(bool); ok {
+			accountSettings.ActivityLog = &cloudflare.TeamsActivityLog{
+				Enabled: enabled,
+			}
+		}
+	}
+
+	// Parse AntiVirus
+	if antivirus, ok := params.Settings["antivirus"].(map[string]any); ok {
+		av := &cloudflare.TeamsAntivirus{}
+		if v, ok := antivirus["enabled_download_phase"].(bool); ok {
+			av.EnabledDownloadPhase = v
+		}
+		if v, ok := antivirus["enabled_upload_phase"].(bool); ok {
+			av.EnabledUploadPhase = v
+		}
+		if v, ok := antivirus["fail_closed"].(bool); ok {
+			av.FailClosed = v
+		}
+		if ns, ok := antivirus["notification_settings"].(map[string]any); ok {
+			av.NotificationSettings = &cloudflare.TeamsNotificationSettings{}
+			if v, ok := ns["enabled"].(bool); ok {
+				av.NotificationSettings.Enabled = &v
+			}
+			if v, ok := ns["msg"].(string); ok {
+				av.NotificationSettings.Message = v
+			}
+			if v, ok := ns["support_url"].(string); ok {
+				av.NotificationSettings.SupportURL = v
+			}
+		}
+		accountSettings.Antivirus = av
+	}
+
+	// Parse Block Page
+	if blockPage, ok := params.Settings["block_page"].(map[string]any); ok {
+		bp := &cloudflare.TeamsBlockPage{}
+		if v, ok := blockPage["enabled"].(bool); ok {
+			bp.Enabled = &v
+		}
+		if v, ok := blockPage["footer_text"].(string); ok {
+			bp.FooterText = v
+		}
+		if v, ok := blockPage["header_text"].(string); ok {
+			bp.HeaderText = v
+		}
+		if v, ok := blockPage["logo_path"].(string); ok {
+			bp.LogoPath = v
+		}
+		if v, ok := blockPage["background_color"].(string); ok {
+			bp.BackgroundColor = v
+		}
+		accountSettings.BlockPage = bp
+	}
+
+	// Parse Body Scanning
+	if bodyScanning, ok := params.Settings["body_scanning"].(map[string]any); ok {
+		bs := &cloudflare.TeamsBodyScanning{}
+		if v, ok := bodyScanning["inspection_mode"].(string); ok {
+			bs.InspectionMode = v
+		}
+		accountSettings.BodyScanning = bs
+	}
+
+	// Parse Browser Isolation
+	if browserIsolation, ok := params.Settings["browser_isolation"].(map[string]any); ok {
+		bi := &cloudflare.BrowserIsolation{}
+		if v, ok := browserIsolation["url_browser_isolation_enabled"].(bool); ok {
+			bi.UrlBrowserIsolationEnabled = &v
+		}
+		if v, ok := browserIsolation["non_identity_enabled"].(bool); ok {
+			bi.NonIdentityEnabled = &v
+		}
+		accountSettings.BrowserIsolation = bi
+	}
+
+	// Parse FIPS
+	if fips, ok := params.Settings["fips"].(map[string]any); ok {
+		f := &cloudflare.TeamsFIPS{}
+		if v, ok := fips["tls"].(bool); ok {
+			f.TLS = v
+		}
+		accountSettings.FIPS = f
+	}
+
+	// Parse Protocol Detection
+	if protocolDetection, ok := params.Settings["protocol_detection"].(map[string]any); ok {
+		pd := &cloudflare.TeamsProtocolDetection{}
+		if v, ok := protocolDetection["enabled"].(bool); ok {
+			pd.Enabled = v
+		}
+		accountSettings.ProtocolDetection = pd
+	}
+
+	// Parse Custom Certificate
+	if customCertificate, ok := params.Settings["custom_certificate"].(map[string]any); ok {
+		cc := &cloudflare.TeamsCustomCertificate{}
+		if v, ok := customCertificate["enabled"].(bool); ok {
+			cc.Enabled = &v
+		}
+		if v, ok := customCertificate["id"].(string); ok {
+			cc.ID = v
+		}
+		accountSettings.CustomCertificate = cc
+	}
+
+	// Build the final configuration
+	settings := cloudflare.TeamsConfiguration{
+		Settings: accountSettings,
 	}
 
 	// Update the configuration
-	_, err = c.CloudflareClient.TeamsAccountUpdateConfiguration(ctx, c.ValidAccountId, settings)
+	_, err := c.CloudflareClient.TeamsAccountUpdateConfiguration(ctx, c.ValidAccountId, settings)
 	if err != nil {
 		c.Log.Error(err, "error updating gateway configuration")
 		return nil, err
