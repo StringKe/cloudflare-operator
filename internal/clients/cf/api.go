@@ -92,8 +92,13 @@ func (c *API) CreateTunnel() (string, string, error) {
 
 // DeleteTunnel deletes a Cloudflare Tunnel
 func (c *API) DeleteTunnel() error {
-	if err := c.ValidateAll(); err != nil {
-		c.Log.Error(err, "Error in validation")
+	// Only validate Account and Tunnel - Zone/Domain is NOT required for deletion
+	if _, err := c.GetAccountId(); err != nil {
+		c.Log.Error(err, "Error validating account ID for deletion")
+		return err
+	}
+	if _, err := c.GetTunnelId(); err != nil {
+		c.Log.Error(err, "Error validating tunnel ID for deletion")
 		return err
 	}
 
