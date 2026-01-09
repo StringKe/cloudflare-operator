@@ -10,9 +10,23 @@ spec:
   autoRedirectToIdentity: false
   appLauncherVisible: true
   policies:
+    # Option 1: Reference a Kubernetes AccessGroup resource by name
     - name: accessgroup-sample
       decision: allow
       precedence: 1
+
+    # Option 2: Reference an existing Cloudflare Access Group by UUID
+    # Useful when Access Groups are managed externally (e.g., Terraform)
+    # - groupId: "12345678-1234-1234-1234-123456789abc"
+    #   decision: allow
+    #   precedence: 2
+
+    # Option 3: Reference an existing Cloudflare Access Group by display name
+    # The controller will look up the group by name via the Cloudflare API
+    # - cloudflareGroupName: "Infrastructure Users"
+    #   decision: allow
+    #   precedence: 3
+    #   sessionDuration: "1h"  # Optional: override session duration for this policy
   cloudflare:
     accountId: "<Cloudflare account ID>"
     domain: example.com

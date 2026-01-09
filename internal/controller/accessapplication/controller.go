@@ -18,6 +18,9 @@ package accessapplication
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"sort"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -187,7 +190,21 @@ func (r *Reconciler) reconcileApplication() error {
 	existing, err := r.cfAPI.ListAccessApplicationsByName(appName)
 	if err == nil && existing != nil {
 		r.log.Info("Found existing AccessApplication, adopting", "id", existing.ID)
-		return r.updateStatus(existing)
+
+		// Adopt the application and reconcile policies
+		if err := r.updateStatus(existing, nil); err != nil {
+			return err
+		}
+
+		// Reconcile policies for adopted application
+		resolvedPolicies, policyErr := r.reconcilePolicies(existing.ID)
+		if policyErr != nil {
+			r.log.Error(policyErr, "failed to reconcile policies after adopting application")
+			r.Recorder.Event(r.app, corev1.EventTypeWarning, "PolicyReconcileFailed",
+				fmt.Sprintf("Policy reconciliation failed: %s", cf.SanitizeErrorMessage(policyErr)))
+		}
+
+		return r.updateStatus(existing, resolvedPolicies)
 	}
 
 	return r.createApplication(params)
@@ -203,7 +220,23 @@ func (r *Reconciler) createApplication(params cf.AccessApplicationParams) error 
 	}
 
 	r.Recorder.Event(r.app, corev1.EventTypeNormal, controller.EventReasonCreated, "Created AccessApplication")
-	return r.updateStatus(result)
+
+	// Update status first to get ApplicationID
+	if err := r.updateStatus(result, nil); err != nil {
+		return err
+	}
+
+	// Now reconcile policies
+	resolvedPolicies, err := r.reconcilePolicies(result.ID)
+	if err != nil {
+		r.log.Error(err, "failed to reconcile policies after creating application")
+		r.Recorder.Event(r.app, corev1.EventTypeWarning, "PolicyReconcileFailed",
+			fmt.Sprintf("Policy reconciliation failed: %s", cf.SanitizeErrorMessage(err)))
+		// Don't fail the entire reconcile, policies can be retried
+	}
+
+	// Update status again with policy information
+	return r.updateStatus(result, resolvedPolicies)
 }
 
 func (r *Reconciler) updateApplication(params cf.AccessApplicationParams) error {
@@ -214,10 +247,20 @@ func (r *Reconciler) updateApplication(params cf.AccessApplicationParams) error 
 	}
 
 	r.Recorder.Event(r.app, corev1.EventTypeNormal, controller.EventReasonUpdated, "Updated AccessApplication")
-	return r.updateStatus(result)
+
+	// Reconcile policies
+	resolvedPolicies, err := r.reconcilePolicies(r.app.Status.ApplicationID)
+	if err != nil {
+		r.log.Error(err, "failed to reconcile policies after updating application")
+		r.Recorder.Event(r.app, corev1.EventTypeWarning, "PolicyReconcileFailed",
+			fmt.Sprintf("Policy reconciliation failed: %s", cf.SanitizeErrorMessage(err)))
+		// Don't fail the entire reconcile, policies can be retried
+	}
+
+	return r.updateStatus(result, resolvedPolicies)
 }
 
-func (r *Reconciler) updateStatus(result *cf.AccessApplicationResult) error {
+func (r *Reconciler) updateStatus(result *cf.AccessApplicationResult, resolvedPolicies []networkingv1alpha2.ResolvedPolicyStatus) error {
 	// Use retry logic for status updates to handle conflicts
 	return controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.app, func() {
 		r.app.Status.ApplicationID = result.ID
@@ -226,6 +269,7 @@ func (r *Reconciler) updateStatus(result *cf.AccessApplicationResult) error {
 		r.app.Status.Domain = result.Domain
 		r.app.Status.State = "active"
 		r.app.Status.ObservedGeneration = r.app.Generation
+		r.app.Status.ResolvedPolicies = resolvedPolicies
 
 		r.setCondition(metav1.ConditionTrue, controller.EventReasonReconciled, "Reconciled successfully")
 	})
@@ -242,10 +286,267 @@ func (r *Reconciler) setCondition(status metav1.ConditionStatus, reason, message
 	})
 }
 
+// resolvedPolicy contains the resolved information for a single policy.
+type resolvedPolicy struct {
+	ref       networkingv1alpha2.AccessPolicyRef
+	groupID   string
+	groupName string
+	source    string // k8s, groupId, cloudflareGroupName
+}
+
+// getPolicyName returns the policy name for Cloudflare.
+func (p *resolvedPolicy) getPolicyName(appName string, precedence int) string {
+	if p.ref.PolicyName != "" {
+		return p.ref.PolicyName
+	}
+	return fmt.Sprintf("%s-policy-%d", appName, precedence)
+}
+
+// ErrNoGroupReference is returned when no group reference is specified in a policy.
+var ErrNoGroupReference = errors.New("no group reference specified in policy (must specify one of: name, groupId, cloudflareGroupName)")
+
+// resolveAccessGroupID resolves the group ID from various reference types.
+// Priority: groupId > cloudflareGroupName > name
+// Returns: (groupID, groupName, source, error)
+//
+//nolint:revive // cognitive complexity is acceptable for this decision tree
+func (r *Reconciler) resolveAccessGroupID(ref networkingv1alpha2.AccessPolicyRef) (string, string, string, error) {
+	switch {
+	case ref.GroupID != "":
+		return r.resolveByGroupID(ref.GroupID)
+	case ref.CloudflareGroupName != "":
+		return r.resolveByCloudflareGroupName(ref.CloudflareGroupName)
+	case ref.Name != "":
+		return r.resolveByK8sAccessGroup(ref.Name)
+	default:
+		return "", "", "", ErrNoGroupReference
+	}
+}
+
+// resolveByGroupID validates and resolves a direct Cloudflare group ID.
+//
+//nolint:revive // 4 return values are needed to match resolveAccessGroupID signature
+func (r *Reconciler) resolveByGroupID(groupID string) (resolvedGroupID, resolvedGroupName, source string, err error) {
+	group, err := r.cfAPI.GetAccessGroup(groupID)
+	if err != nil {
+		if cf.IsNotFoundError(err) {
+			return "", "", "", fmt.Errorf("cloudflare access group not found: %s", groupID)
+		}
+		return "", "", "", fmt.Errorf("failed to validate cloudflare group: %w", err)
+	}
+	return groupID, group.Name, "groupId", nil
+}
+
+// resolveByCloudflareGroupName looks up a Cloudflare group by its display name.
+//
+//nolint:revive // 4 return values are needed to match resolveAccessGroupID signature
+func (r *Reconciler) resolveByCloudflareGroupName(groupName string) (resolvedGroupID, resolvedGroupName, source string, err error) {
+	group, err := r.cfAPI.ListAccessGroupsByName(groupName)
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to lookup cloudflare group by name: %w", err)
+	}
+	if group == nil {
+		return "", "", "", fmt.Errorf("cloudflare access group not found by name: %s", groupName)
+	}
+	return group.ID, group.Name, "cloudflareGroupName", nil
+}
+
+// resolveByK8sAccessGroup looks up a Kubernetes AccessGroup resource.
+//
+//nolint:revive // 4 return values are needed to match resolveAccessGroupID signature
+func (r *Reconciler) resolveByK8sAccessGroup(name string) (resolvedGroupID, resolvedGroupName, source string, err error) {
+	accessGroup := &networkingv1alpha2.AccessGroup{}
+	if err := r.Get(r.ctx, apitypes.NamespacedName{Name: name}, accessGroup); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", "", "", fmt.Errorf("kubernetes AccessGroup resource not found: %s", name)
+		}
+		return "", "", "", fmt.Errorf("failed to get AccessGroup resource: %w", err)
+	}
+	if accessGroup.Status.GroupID == "" {
+		return "", "", "", fmt.Errorf("AccessGroup %s not yet ready (no GroupID in status)", name)
+	}
+	return accessGroup.Status.GroupID, accessGroup.GetAccessGroupName(), "k8s", nil
+}
+
+// reconcilePolicies manages the Access Policies for an application.
+//
+//nolint:revive // cognitive complexity is acceptable for this reconciliation logic
+func (r *Reconciler) reconcilePolicies(applicationID string) ([]networkingv1alpha2.ResolvedPolicyStatus, error) {
+	if len(r.app.Spec.Policies) == 0 {
+		// No policies specified, clean up any existing policies
+		if err := r.cleanupAllPolicies(applicationID); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+
+	// Resolve all policies
+	desiredPolicies := make(map[int]resolvedPolicy)
+	resolvedStatuses := make([]networkingv1alpha2.ResolvedPolicyStatus, 0, len(r.app.Spec.Policies))
+
+	for i, policyRef := range r.app.Spec.Policies {
+		precedence := policyRef.Precedence
+		if precedence == 0 {
+			precedence = i + 1 // Auto-assign precedence based on order
+		}
+
+		groupID, groupName, source, err := r.resolveAccessGroupID(policyRef)
+		if err != nil {
+			r.log.Error(err, "failed to resolve access group",
+				"policyIndex", i, "precedence", precedence)
+			r.Recorder.Event(r.app, corev1.EventTypeWarning, "PolicyResolutionFailed",
+				fmt.Sprintf("Failed to resolve policy at precedence %d: %s", precedence, cf.SanitizeErrorMessage(err)))
+			// Continue with other policies but record this failure
+			continue
+		}
+
+		desiredPolicies[precedence] = resolvedPolicy{
+			ref:       policyRef,
+			groupID:   groupID,
+			groupName: groupName,
+			source:    source,
+		}
+	}
+
+	// Sync policies to Cloudflare
+	policyStatuses, err := r.syncPolicies(applicationID, desiredPolicies)
+	if err != nil {
+		return nil, err
+	}
+
+	resolvedStatuses = append(resolvedStatuses, policyStatuses...)
+
+	// Sort by precedence for consistent status
+	sort.Slice(resolvedStatuses, func(i, j int) bool {
+		return resolvedStatuses[i].Precedence < resolvedStatuses[j].Precedence
+	})
+
+	return resolvedStatuses, nil
+}
+
+// syncPolicies ensures the Cloudflare policies match the desired state.
+//
+//nolint:revive // cognitive complexity is acceptable for this sync logic
+func (r *Reconciler) syncPolicies(applicationID string, desired map[int]resolvedPolicy) ([]networkingv1alpha2.ResolvedPolicyStatus, error) {
+	// Get existing policies
+	existing, err := r.cfAPI.ListAccessPolicies(applicationID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list existing policies: %w", err)
+	}
+
+	existingMap := make(map[int]*cf.AccessPolicyResult)
+	for i := range existing {
+		existingMap[existing[i].Precedence] = &existing[i]
+	}
+
+	resolvedStatuses := make([]networkingv1alpha2.ResolvedPolicyStatus, 0, len(desired))
+
+	// Create or update policies
+	for precedence, policy := range desired {
+		decision := policy.ref.Decision
+		if decision == "" {
+			decision = "allow"
+		}
+
+		params := cf.AccessPolicyParams{
+			ApplicationID: applicationID,
+			Name:          policy.getPolicyName(r.app.GetAccessApplicationName(), precedence),
+			Decision:      decision,
+			Precedence:    precedence,
+			Include:       []interface{}{cf.BuildGroupIncludeRule(policy.groupID)},
+		}
+
+		if policy.ref.SessionDuration != "" {
+			params.SessionDuration = &policy.ref.SessionDuration
+		}
+
+		var policyID string
+		if existingPolicy, ok := existingMap[precedence]; ok {
+			// Update existing policy
+			result, err := r.cfAPI.UpdateAccessPolicy(existingPolicy.ID, params)
+			if err != nil {
+				r.log.Error(err, "failed to update policy", "precedence", precedence)
+				r.Recorder.Event(r.app, corev1.EventTypeWarning, "PolicyUpdateFailed",
+					fmt.Sprintf("Failed to update policy at precedence %d: %s", precedence, cf.SanitizeErrorMessage(err)))
+				continue
+			}
+			policyID = result.ID
+			delete(existingMap, precedence) // Mark as processed
+		} else {
+			// Create new policy
+			result, err := r.cfAPI.CreateAccessPolicy(params)
+			if err != nil {
+				r.log.Error(err, "failed to create policy", "precedence", precedence)
+				r.Recorder.Event(r.app, corev1.EventTypeWarning, "PolicyCreateFailed",
+					fmt.Sprintf("Failed to create policy at precedence %d: %s", precedence, cf.SanitizeErrorMessage(err)))
+				continue
+			}
+			policyID = result.ID
+		}
+
+		resolvedStatuses = append(resolvedStatuses, networkingv1alpha2.ResolvedPolicyStatus{
+			Precedence: precedence,
+			PolicyID:   policyID,
+			GroupID:    policy.groupID,
+			GroupName:  policy.groupName,
+			Source:     policy.source,
+			Decision:   decision,
+		})
+	}
+
+	// Delete orphaned policies (policies that exist in Cloudflare but not in desired)
+	for precedence, orphan := range existingMap {
+		if err := r.cfAPI.DeleteAccessPolicy(applicationID, orphan.ID); err != nil {
+			if !cf.IsNotFoundError(err) {
+				r.log.Error(err, "failed to delete orphaned policy",
+					"policyId", orphan.ID, "precedence", precedence)
+			}
+		} else {
+			r.log.Info("Deleted orphaned policy", "policyId", orphan.ID, "precedence", precedence)
+		}
+	}
+
+	return resolvedStatuses, nil
+}
+
+// cleanupAllPolicies removes all policies for an application.
+//
+//nolint:revive // cognitive complexity is acceptable for cleanup logic
+func (r *Reconciler) cleanupAllPolicies(applicationID string) error {
+	policies, err := r.cfAPI.ListAccessPolicies(applicationID)
+	if err != nil {
+		if cf.IsNotFoundError(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to list policies for cleanup: %w", err)
+	}
+
+	for _, policy := range policies {
+		if err := r.cfAPI.DeleteAccessPolicy(applicationID, policy.ID); err != nil {
+			if !cf.IsNotFoundError(err) {
+				r.log.Error(err, "failed to delete policy during cleanup", "policyId", policy.ID)
+			}
+		}
+	}
+
+	return nil
+}
+
 // appReferencesIDP checks if an AccessApplication references the given AccessIdentityProvider.
 func appReferencesIDP(app *networkingv1alpha2.AccessApplication, idpName string) bool {
 	for _, ref := range app.Spec.AllowedIdpRefs {
 		if ref.Name == idpName {
+			return true
+		}
+	}
+	return false
+}
+
+// appReferencesAccessGroup checks if an AccessApplication references the given AccessGroup
+// via the K8s resource name field in policies.
+func appReferencesAccessGroup(app *networkingv1alpha2.AccessApplication, groupName string) bool {
+	for _, policy := range app.Spec.Policies {
+		if policy.Name == groupName {
 			return true
 		}
 	}
@@ -290,14 +591,56 @@ func (r *Reconciler) findAccessApplicationsForIdentityProvider(ctx context.Conte
 	return requests
 }
 
+// findAccessApplicationsForAccessGroup returns a list of reconcile requests for AccessApplications
+// that reference the given AccessGroup via the name field in policies.
+func (r *Reconciler) findAccessApplicationsForAccessGroup(ctx context.Context, obj client.Object) []reconcile.Request {
+	accessGroup, ok := obj.(*networkingv1alpha2.AccessGroup)
+	if !ok {
+		return nil
+	}
+	logger := ctrllog.FromContext(ctx)
+
+	// Find all AccessApplications that reference this AccessGroup
+	appList := &networkingv1alpha2.AccessApplicationList{}
+	if err := r.List(ctx, appList); err != nil {
+		logger.Error(err, "Failed to list AccessApplications for AccessGroup watch")
+		return nil
+	}
+
+	requests := make([]reconcile.Request, 0)
+	for i := range appList.Items {
+		app := &appList.Items[i]
+		if !appReferencesAccessGroup(app, accessGroup.Name) {
+			continue
+		}
+
+		logger.Info("AccessGroup changed, triggering AccessApplication reconcile",
+			"accessgroup", accessGroup.Name,
+			"accessapplication", app.Name)
+		requests = append(requests, reconcile.Request{
+			NamespacedName: apitypes.NamespacedName{
+				Name:      app.Name,
+				Namespace: app.Namespace,
+			},
+		})
+	}
+
+	return requests
+}
+
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("accessapplication-controller")
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.AccessApplication{}).
-		// P1 FIX: Watch AccessIdentityProvider changes for IdP reference updates
+		// Watch AccessIdentityProvider changes for IdP reference updates
 		Watches(
 			&networkingv1alpha2.AccessIdentityProvider{},
 			handler.EnqueueRequestsFromMapFunc(r.findAccessApplicationsForIdentityProvider),
+		).
+		// Watch AccessGroup changes for policy reference updates
+		Watches(
+			&networkingv1alpha2.AccessGroup{},
+			handler.EnqueueRequestsFromMapFunc(r.findAccessApplicationsForAccessGroup),
 		).
 		Complete(r)
 }

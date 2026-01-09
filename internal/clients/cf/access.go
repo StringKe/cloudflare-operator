@@ -230,6 +230,205 @@ func (c *API) DeleteAccessApplication(applicationID string) error {
 	return nil
 }
 
+// AccessPolicyParams contains parameters for creating/updating an Access Policy.
+type AccessPolicyParams struct {
+	ApplicationID   string  // Required: The Application ID this policy belongs to
+	Name            string  // Policy name
+	Decision        string  // allow, deny, bypass, non_identity
+	Precedence      int     // Order of evaluation (lower = higher priority)
+	Include         []any   // Include rules (e.g., group references)
+	Exclude         []any   // Exclude rules
+	Require         []any   // Require rules
+	SessionDuration *string // Optional session duration override
+}
+
+// AccessPolicyResult contains the result of an Access Policy operation.
+type AccessPolicyResult struct {
+	ID         string
+	Name       string
+	Decision   string
+	Precedence int
+}
+
+// CreateAccessPolicy creates a new Access Policy for an application.
+func (c *API) CreateAccessPolicy(params AccessPolicyParams) (*AccessPolicyResult, error) {
+	if _, err := c.GetAccountId(); err != nil {
+		c.Log.Error(err, "error getting account ID")
+		return nil, err
+	}
+
+	ctx := context.Background()
+	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
+
+	createParams := cloudflare.CreateAccessPolicyParams{
+		ApplicationID: params.ApplicationID,
+		Name:          params.Name,
+		Decision:      params.Decision,
+		Precedence:    params.Precedence,
+		Include:       params.Include,
+		Exclude:       params.Exclude,
+		Require:       params.Require,
+	}
+
+	if params.SessionDuration != nil {
+		createParams.SessionDuration = params.SessionDuration
+	}
+
+	policy, err := c.CloudflareClient.CreateAccessPolicy(ctx, rc, createParams)
+	if err != nil {
+		c.Log.Error(err, "error creating access policy",
+			"applicationId", params.ApplicationID, "name", params.Name)
+		return nil, err
+	}
+
+	c.Log.Info("Access Policy created",
+		"id", policy.ID, "name", policy.Name, "applicationId", params.ApplicationID)
+
+	return &AccessPolicyResult{
+		ID:         policy.ID,
+		Name:       policy.Name,
+		Decision:   policy.Decision,
+		Precedence: policy.Precedence,
+	}, nil
+}
+
+// GetAccessPolicy retrieves an Access Policy by ID.
+func (c *API) GetAccessPolicy(applicationID, policyID string) (*AccessPolicyResult, error) {
+	if _, err := c.GetAccountId(); err != nil {
+		c.Log.Error(err, "error getting account ID")
+		return nil, err
+	}
+
+	ctx := context.Background()
+	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
+
+	policy, err := c.CloudflareClient.GetAccessPolicy(ctx, rc, cloudflare.GetAccessPolicyParams{
+		ApplicationID: applicationID,
+		PolicyID:      policyID,
+	})
+	if err != nil {
+		c.Log.Error(err, "error getting access policy",
+			"applicationId", applicationID, "policyId", policyID)
+		return nil, err
+	}
+
+	return &AccessPolicyResult{
+		ID:         policy.ID,
+		Name:       policy.Name,
+		Decision:   policy.Decision,
+		Precedence: policy.Precedence,
+	}, nil
+}
+
+// UpdateAccessPolicy updates an existing Access Policy.
+func (c *API) UpdateAccessPolicy(policyID string, params AccessPolicyParams) (*AccessPolicyResult, error) {
+	if _, err := c.GetAccountId(); err != nil {
+		c.Log.Error(err, "error getting account ID")
+		return nil, err
+	}
+
+	ctx := context.Background()
+	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
+
+	updateParams := cloudflare.UpdateAccessPolicyParams{
+		ApplicationID: params.ApplicationID,
+		PolicyID:      policyID,
+		Name:          params.Name,
+		Decision:      params.Decision,
+		Precedence:    params.Precedence,
+		Include:       params.Include,
+		Exclude:       params.Exclude,
+		Require:       params.Require,
+	}
+
+	if params.SessionDuration != nil {
+		updateParams.SessionDuration = params.SessionDuration
+	}
+
+	policy, err := c.CloudflareClient.UpdateAccessPolicy(ctx, rc, updateParams)
+	if err != nil {
+		c.Log.Error(err, "error updating access policy",
+			"applicationId", params.ApplicationID, "policyId", policyID)
+		return nil, err
+	}
+
+	c.Log.Info("Access Policy updated",
+		"id", policy.ID, "name", policy.Name, "applicationId", params.ApplicationID)
+
+	return &AccessPolicyResult{
+		ID:         policy.ID,
+		Name:       policy.Name,
+		Decision:   policy.Decision,
+		Precedence: policy.Precedence,
+	}, nil
+}
+
+// DeleteAccessPolicy deletes an Access Policy.
+func (c *API) DeleteAccessPolicy(applicationID, policyID string) error {
+	if _, err := c.GetAccountId(); err != nil {
+		c.Log.Error(err, "error getting account ID")
+		return err
+	}
+
+	ctx := context.Background()
+	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
+
+	err := c.CloudflareClient.DeleteAccessPolicy(ctx, rc, cloudflare.DeleteAccessPolicyParams{
+		ApplicationID: applicationID,
+		PolicyID:      policyID,
+	})
+	if err != nil {
+		c.Log.Error(err, "error deleting access policy",
+			"applicationId", applicationID, "policyId", policyID)
+		return err
+	}
+
+	c.Log.Info("Access Policy deleted",
+		"applicationId", applicationID, "policyId", policyID)
+	return nil
+}
+
+// ListAccessPolicies lists all Access Policies for an application.
+func (c *API) ListAccessPolicies(applicationID string) ([]AccessPolicyResult, error) {
+	if _, err := c.GetAccountId(); err != nil {
+		c.Log.Error(err, "error getting account ID")
+		return nil, err
+	}
+
+	ctx := context.Background()
+	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
+
+	policies, _, err := c.CloudflareClient.ListAccessPolicies(ctx, rc, cloudflare.ListAccessPoliciesParams{
+		ApplicationID: applicationID,
+	})
+	if err != nil {
+		c.Log.Error(err, "error listing access policies", "applicationId", applicationID)
+		return nil, err
+	}
+
+	results := make([]AccessPolicyResult, 0, len(policies))
+	for _, p := range policies {
+		results = append(results, AccessPolicyResult{
+			ID:         p.ID,
+			Name:       p.Name,
+			Decision:   p.Decision,
+			Precedence: p.Precedence,
+		})
+	}
+
+	return results, nil
+}
+
+// BuildGroupIncludeRule constructs an include rule that references an Access Group.
+// This uses the "group" rule type with the group's UUID.
+func BuildGroupIncludeRule(groupID string) map[string]any {
+	return map[string]any{
+		"group": map[string]string{
+			"id": groupID,
+		},
+	}
+}
+
 // AccessGroupParams contains parameters for creating/updating an Access Group.
 type AccessGroupParams struct {
 	Name    string

@@ -85,6 +85,21 @@ func (mr *MockCloudflareClientMockRecorder) CreateAccessIdentityProvider(params 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateAccessIdentityProvider", reflect.TypeOf((*MockCloudflareClient)(nil).CreateAccessIdentityProvider), params)
 }
 
+// CreateAccessPolicy mocks base method.
+func (m *MockCloudflareClient) CreateAccessPolicy(params cf.AccessPolicyParams) (*cf.AccessPolicyResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CreateAccessPolicy", params)
+	ret0, _ := ret[0].(*cf.AccessPolicyResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CreateAccessPolicy indicates an expected call of CreateAccessPolicy.
+func (mr *MockCloudflareClientMockRecorder) CreateAccessPolicy(params any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateAccessPolicy", reflect.TypeOf((*MockCloudflareClient)(nil).CreateAccessPolicy), params)
+}
+
 // CreateAccessServiceToken mocks base method.
 func (m *MockCloudflareClient) CreateAccessServiceToken(name, duration string) (*cf.AccessServiceTokenResult, error) {
 	m.ctrl.T.Helper()
@@ -261,6 +276,20 @@ func (m *MockCloudflareClient) DeleteAccessIdentityProvider(idpID string) error 
 func (mr *MockCloudflareClientMockRecorder) DeleteAccessIdentityProvider(idpID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteAccessIdentityProvider", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteAccessIdentityProvider), idpID)
+}
+
+// DeleteAccessPolicy mocks base method.
+func (m *MockCloudflareClient) DeleteAccessPolicy(applicationID, policyID string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteAccessPolicy", applicationID, policyID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// DeleteAccessPolicy indicates an expected call of DeleteAccessPolicy.
+func (mr *MockCloudflareClientMockRecorder) DeleteAccessPolicy(applicationID, policyID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteAccessPolicy", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteAccessPolicy), applicationID, policyID)
 }
 
 // DeleteAccessServiceToken mocks base method.
@@ -446,6 +475,21 @@ func (m *MockCloudflareClient) GetAccessIdentityProvider(idpID string) (*cf.Acce
 func (mr *MockCloudflareClientMockRecorder) GetAccessIdentityProvider(idpID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAccessIdentityProvider", reflect.TypeOf((*MockCloudflareClient)(nil).GetAccessIdentityProvider), idpID)
+}
+
+// GetAccessPolicy mocks base method.
+func (m *MockCloudflareClient) GetAccessPolicy(applicationID, policyID string) (*cf.AccessPolicyResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetAccessPolicy", applicationID, policyID)
+	ret0, _ := ret[0].(*cf.AccessPolicyResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetAccessPolicy indicates an expected call of GetAccessPolicy.
+func (mr *MockCloudflareClientMockRecorder) GetAccessPolicy(applicationID, policyID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAccessPolicy", reflect.TypeOf((*MockCloudflareClient)(nil).GetAccessPolicy), applicationID, policyID)
 }
 
 // GetAccessServiceTokenByName mocks base method.
@@ -794,6 +838,21 @@ func (mr *MockCloudflareClientMockRecorder) ListAccessIdentityProvidersByName(na
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAccessIdentityProvidersByName", reflect.TypeOf((*MockCloudflareClient)(nil).ListAccessIdentityProvidersByName), name)
 }
 
+// ListAccessPolicies mocks base method.
+func (m *MockCloudflareClient) ListAccessPolicies(applicationID string) ([]cf.AccessPolicyResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListAccessPolicies", applicationID)
+	ret0, _ := ret[0].([]cf.AccessPolicyResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListAccessPolicies indicates an expected call of ListAccessPolicies.
+func (mr *MockCloudflareClientMockRecorder) ListAccessPolicies(applicationID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAccessPolicies", reflect.TypeOf((*MockCloudflareClient)(nil).ListAccessPolicies), applicationID)
+}
+
 // ListDevicePostureRulesByName mocks base method.
 func (m *MockCloudflareClient) ListDevicePostureRulesByName(name string) (*cf.DevicePostureRuleResult, error) {
 	m.ctrl.T.Helper()
@@ -897,6 +956,21 @@ func (m *MockCloudflareClient) UpdateAccessIdentityProvider(idpID string, params
 func (mr *MockCloudflareClientMockRecorder) UpdateAccessIdentityProvider(idpID, params any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateAccessIdentityProvider", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateAccessIdentityProvider), idpID, params)
+}
+
+// UpdateAccessPolicy mocks base method.
+func (m *MockCloudflareClient) UpdateAccessPolicy(policyID string, params cf.AccessPolicyParams) (*cf.AccessPolicyResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateAccessPolicy", policyID, params)
+	ret0, _ := ret[0].(*cf.AccessPolicyResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UpdateAccessPolicy indicates an expected call of UpdateAccessPolicy.
+func (mr *MockCloudflareClientMockRecorder) UpdateAccessPolicy(policyID, params any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateAccessPolicy", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateAccessPolicy), policyID, params)
 }
 
 // UpdateAccessServiceToken mocks base method.

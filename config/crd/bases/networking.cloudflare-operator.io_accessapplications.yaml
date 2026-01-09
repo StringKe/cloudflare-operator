@@ -186,9 +186,19 @@ spec:
               policies:
                 description: Policies defines the access policies for this application.
                 items:
-                  description: AccessPolicyRef references an access policy or defines
-                    an inline policy.
+                  description: |-
+                    AccessPolicyRef references an access policy or defines an inline policy.
+                    Exactly one of name, groupId, or cloudflareGroupName must be specified.
                   properties:
+                    cloudflareGroupName:
+                      description: |-
+                        CloudflareGroupName is the display name of an existing Cloudflare Access Group.
+                        The controller will resolve this name to a GroupID via the Cloudflare API.
+                        Use this when you want to reference a Cloudflare Access Group by name
+                        (e.g., groups created via Terraform or the Cloudflare dashboard).
+                        Mutually exclusive with name and groupId.
+                      maxLength: 255
+                      type: string
                     decision:
                       default: allow
                       description: Decision is the policy decision (allow, deny, bypass,
@@ -199,14 +209,36 @@ spec:
                       - bypass
                       - non_identity
                       type: string
+                    groupId:
+                      description: |-
+                        GroupID is the UUID of an existing Cloudflare Access Group.
+                        Use this to directly reference a Cloudflare-managed Access Group
+                        without creating a corresponding Kubernetes AccessGroup resource.
+                        Mutually exclusive with name and cloudflareGroupName.
+                      pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                      type: string
                     name:
-                      description: Name is the name of an AccessGroup resource to
-                        use as a policy.
+                      description: |-
+                        Name is the name of an AccessGroup resource (Kubernetes) to use as a policy.
+                        If specified, the controller will look up the AccessGroup CR and use its GroupID.
+                        Mutually exclusive with groupId and cloudflareGroupName.
+                      maxLength: 253
+                      type: string
+                    policyName:
+                      description: |-
+                        PolicyName is the name for this policy in Cloudflare.
+                        If not specified, a name will be auto-generated based on the AccessApplication name and precedence.
+                      maxLength: 255
                       type: string
                     precedence:
-                      description: Precedence is the order of evaluation.
+                      description: Precedence is the order of evaluation. Lower numbers
+                        are evaluated first.
                       minimum: 1
                       type: integer
+                    sessionDuration:
+                      description: SessionDuration overrides the application's session
+                        duration for this policy.
+                      type: string
                   type: object
                 type: array
               sameSiteCookieAttribute:
@@ -332,6 +364,48 @@ spec:
                 description: ObservedGeneration is the most recent generation observed.
                 format: int64
                 type: integer
+              resolvedPolicies:
+                description: |-
+                  ResolvedPolicies contains the resolved policy information for each policy.
+                  This helps with debugging and understanding policy state.
+                items:
+                  description: ResolvedPolicyStatus contains resolved policy information
+                    for debugging and status tracking.
+                  properties:
+                    decision:
+                      description: Decision is the policy decision (allow, deny, bypass,
+                        non_identity).
+                      type: string
+                    groupId:
+                      description: GroupID is the resolved Cloudflare Access Group
+                        ID.
+                      type: string
+                    groupName:
+                      description: GroupName is the name of the Access Group (for
+                        display purposes).
+                      type: string
+                    policyId:
+                      description: PolicyID is the Cloudflare policy ID.
+                      type: string
+                    precedence:
+                      description: Precedence is the policy precedence (order of evaluation).
+                      type: integer
+                    source:
+                      description: |-
+                        Source indicates how the group was resolved.
+                        Possible values: k8s, groupId, cloudflareGroupName
+                      enum:
+                      - k8s
+                      - groupId
+                      - cloudflareGroupName
+                      type: string
+                  required:
+                  - precedence
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - precedence
+                x-kubernetes-list-type: map
               state:
                 description: State indicates the current state of the application.
                 type: string

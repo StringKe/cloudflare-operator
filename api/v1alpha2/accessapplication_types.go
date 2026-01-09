@@ -120,10 +120,31 @@ type AccessIdentityProviderRef struct {
 }
 
 // AccessPolicyRef references an access policy or defines an inline policy.
+// Exactly one of name, groupId, or cloudflareGroupName must be specified.
 type AccessPolicyRef struct {
-	// Name is the name of an AccessGroup resource to use as a policy.
+	// Name is the name of an AccessGroup resource (Kubernetes) to use as a policy.
+	// If specified, the controller will look up the AccessGroup CR and use its GroupID.
+	// Mutually exclusive with groupId and cloudflareGroupName.
 	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name,omitempty"`
+
+	// GroupID is the UUID of an existing Cloudflare Access Group.
+	// Use this to directly reference a Cloudflare-managed Access Group
+	// without creating a corresponding Kubernetes AccessGroup resource.
+	// Mutually exclusive with name and cloudflareGroupName.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`
+	GroupID string `json:"groupId,omitempty"`
+
+	// CloudflareGroupName is the display name of an existing Cloudflare Access Group.
+	// The controller will resolve this name to a GroupID via the Cloudflare API.
+	// Use this when you want to reference a Cloudflare Access Group by name
+	// (e.g., groups created via Terraform or the Cloudflare dashboard).
+	// Mutually exclusive with name and groupId.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=255
+	CloudflareGroupName string `json:"cloudflareGroupName,omitempty"`
 
 	// Decision is the policy decision (allow, deny, bypass, non_identity).
 	// +kubebuilder:validation:Optional
@@ -131,10 +152,48 @@ type AccessPolicyRef struct {
 	// +kubebuilder:default=allow
 	Decision string `json:"decision,omitempty"`
 
-	// Precedence is the order of evaluation.
+	// Precedence is the order of evaluation. Lower numbers are evaluated first.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Minimum=1
 	Precedence int `json:"precedence,omitempty"`
+
+	// PolicyName is the name for this policy in Cloudflare.
+	// If not specified, a name will be auto-generated based on the AccessApplication name and precedence.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=255
+	PolicyName string `json:"policyName,omitempty"`
+
+	// SessionDuration overrides the application's session duration for this policy.
+	// +kubebuilder:validation:Optional
+	SessionDuration string `json:"sessionDuration,omitempty"`
+}
+
+// ResolvedPolicyStatus contains resolved policy information for debugging and status tracking.
+type ResolvedPolicyStatus struct {
+	// Precedence is the policy precedence (order of evaluation).
+	Precedence int `json:"precedence"`
+
+	// PolicyID is the Cloudflare policy ID.
+	// +kubebuilder:validation:Optional
+	PolicyID string `json:"policyId,omitempty"`
+
+	// GroupID is the resolved Cloudflare Access Group ID.
+	// +kubebuilder:validation:Optional
+	GroupID string `json:"groupId,omitempty"`
+
+	// GroupName is the name of the Access Group (for display purposes).
+	// +kubebuilder:validation:Optional
+	GroupName string `json:"groupName,omitempty"`
+
+	// Source indicates how the group was resolved.
+	// Possible values: k8s, groupId, cloudflareGroupName
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=k8s;groupId;cloudflareGroupName
+	Source string `json:"source,omitempty"`
+
+	// Decision is the policy decision (allow, deny, bypass, non_identity).
+	// +kubebuilder:validation:Optional
+	Decision string `json:"decision,omitempty"`
 }
 
 // AccessApplicationStatus defines the observed state of AccessApplication
@@ -158,6 +217,13 @@ type AccessApplicationStatus struct {
 	// State indicates the current state of the application.
 	// +kubebuilder:validation:Optional
 	State string `json:"state,omitempty"`
+
+	// ResolvedPolicies contains the resolved policy information for each policy.
+	// This helps with debugging and understanding policy state.
+	// +kubebuilder:validation:Optional
+	// +listType=map
+	// +listMapKey=precedence
+	ResolvedPolicies []ResolvedPolicyStatus `json:"resolvedPolicies,omitempty"`
 
 	// Conditions represent the latest available observations.
 	// +kubebuilder:validation:Optional

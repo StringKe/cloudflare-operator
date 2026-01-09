@@ -66,6 +66,13 @@ type CloudflareClient interface {
 	DeleteAccessApplication(applicationID string) error
 	ListAccessApplicationsByName(name string) (*AccessApplicationResult, error)
 
+	// Access Policy operations
+	CreateAccessPolicy(params AccessPolicyParams) (*AccessPolicyResult, error)
+	GetAccessPolicy(applicationID, policyID string) (*AccessPolicyResult, error)
+	UpdateAccessPolicy(policyID string, params AccessPolicyParams) (*AccessPolicyResult, error)
+	DeleteAccessPolicy(applicationID, policyID string) error
+	ListAccessPolicies(applicationID string) ([]AccessPolicyResult, error)
+
 	// Access Group operations
 	CreateAccessGroup(params AccessGroupParams) (*AccessGroupResult, error)
 	GetAccessGroup(groupID string) (*AccessGroupResult, error)
