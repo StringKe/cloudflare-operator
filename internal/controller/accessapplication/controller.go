@@ -98,8 +98,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 }
 
 func (r *Reconciler) initAPIClient() error {
-	// Use the unified API client initialization
-	api, err := cf.NewAPIClientFromDetails(r.ctx, r.Client, "", r.app.Spec.Cloudflare)
+	// AccessApplication is cluster-scoped, use operator namespace for legacy inline secrets
+	api, err := cf.NewAPIClientFromDetails(r.ctx, r.Client, controller.OperatorNamespace, r.app.Spec.Cloudflare)
 	if err != nil {
 		r.log.Error(err, "failed to initialize API client")
 		return err

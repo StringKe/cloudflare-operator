@@ -29,11 +29,11 @@
 | | ClusterTunnel | Cluster | ✅ 完成 |
 | | VirtualNetwork | Cluster | ✅ 完成 |
 | | NetworkRoute | Cluster | ✅ 完成 |
-| | WARPConnector | Cluster | ⚠️ 框架完成 |
+| | WARPConnector | Namespaced | ⚠️ 框架完成 |
 | **服务层** | TunnelBinding | Namespaced | ✅ 完成 |
 | | PrivateService | Namespaced | ✅ 完成 |
 | | DNSRecord | Namespaced | ✅ 完成 |
-| **身份层** | AccessApplication | Namespaced | ✅ 完成 |
+| **身份层** | AccessApplication | Cluster | ✅ 完成 |
 | | AccessGroup | Cluster | ✅ 完成 |
 | | AccessServiceToken | Cluster | ✅ 完成 |
 | | AccessIdentityProvider | Cluster | ✅ 完成 |
@@ -43,6 +43,11 @@
 | **网关层** | GatewayRule | Cluster | ⚠️ 框架完成 |
 | | GatewayList | Cluster | ⚠️ 框架完成 |
 | | GatewayConfiguration | Cluster | ✅ 完成 |
+
+### Secret 位置说明
+
+- **Namespaced 资源** (Tunnel, TunnelBinding, DNSRecord 等)：Secret 在资源所在的命名空间
+- **Cluster 资源** (ClusterTunnel, VirtualNetwork, NetworkRoute, AccessGroup 等)：Secret 必须在 `cloudflare-operator-system` 命名空间
 
 ---
 

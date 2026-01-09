@@ -105,10 +105,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 }
 
 // initAPIClient initializes the Cloudflare API client.
-// Uses the new CloudflareCredentials reference or falls back to legacy inline secrets.
+// For cluster-scoped resources like VirtualNetwork, credentials are loaded from:
+// 1. credentialsRef (recommended) - references CloudflareCredentials resource
+// 2. inline secret (legacy) - must be in cloudflare-operator-system namespace
+// 3. default CloudflareCredentials - if no credentials specified
 func (r *Reconciler) initAPIClient() error {
-	// VirtualNetwork is cluster-scoped, use empty namespace (will default to cloudflare-operator-system)
-	api, err := cf.NewAPIClientFromDetails(r.ctx, r.Client, "", r.vnet.Spec.Cloudflare)
+	// VirtualNetwork is cluster-scoped, use operator namespace for legacy inline secrets
+	api, err := cf.NewAPIClientFromDetails(r.ctx, r.Client, controller.OperatorNamespace, r.vnet.Spec.Cloudflare)
 	if err != nil {
 		r.log.Error(err, "failed to initialize API client")
 		r.Recorder.Event(r.vnet, corev1.EventTypeWarning, controller.EventReasonAPIError, "Failed to initialize API client: "+err.Error())

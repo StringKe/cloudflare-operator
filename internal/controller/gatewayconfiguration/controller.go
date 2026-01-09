@@ -89,7 +89,8 @@ func (r *GatewayConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 }
 
 func (r *GatewayConfigurationReconciler) initAPIClient(ctx context.Context, config *networkingv1alpha2.GatewayConfiguration) (*cf.API, error) {
-	return cf.NewAPIClientFromDetails(ctx, r.Client, "", config.Spec.Cloudflare)
+	// GatewayConfiguration is cluster-scoped, use operator namespace for legacy inline secrets
+	return cf.NewAPIClientFromDetails(ctx, r.Client, controller.OperatorNamespace, config.Spec.Cloudflare)
 }
 
 func (r *GatewayConfigurationReconciler) handleDeletion(ctx context.Context, config *networkingv1alpha2.GatewayConfiguration) (ctrl.Result, error) {

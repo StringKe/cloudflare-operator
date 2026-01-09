@@ -66,7 +66,8 @@ func (r *AccessServiceTokenReconciler) Reconcile(ctx context.Context, req ctrl.R
 	}
 
 	// Initialize API client
-	apiClient, err := cf.NewAPIClientFromDetails(ctx, r.Client, token.Namespace, token.Spec.Cloudflare)
+	// AccessServiceToken is cluster-scoped, use operator namespace for legacy inline secrets
+	apiClient, err := cf.NewAPIClientFromDetails(ctx, r.Client, controller.OperatorNamespace, token.Spec.Cloudflare)
 	if err != nil {
 		logger.Error(err, "Failed to initialize Cloudflare API client")
 		return r.updateStatusError(ctx, token, err)

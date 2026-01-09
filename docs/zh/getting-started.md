@@ -180,6 +180,88 @@ dig hello.example.com
 curl https://hello.example.com
 ```
 
+## 高级配置
+
+### 扩展隧道副本数
+
+使用 `deployPatch` 字段来自定义 cloudflared deployment。这是一个应用到 deployment spec 的 JSON 补丁。
+
+**设置副本数：**
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: Tunnel
+metadata:
+  name: my-tunnel
+  namespace: default
+spec:
+  newTunnel:
+    name: my-k8s-tunnel
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: example.com
+    secret: cloudflare-credentials
+  deployPatch: '{"spec":{"replicas":3}}'
+```
+
+**设置资源和节点选择器：**
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: Tunnel
+metadata:
+  name: my-tunnel
+  namespace: default
+spec:
+  newTunnel:
+    name: my-k8s-tunnel
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: example.com
+    secret: cloudflare-credentials
+  deployPatch: |
+    {
+      "spec": {
+        "replicas": 2,
+        "template": {
+          "spec": {
+            "nodeSelector": {
+              "node-role.kubernetes.io/edge": "true"
+            },
+            "containers": [{
+              "name": "cloudflared",
+              "resources": {
+                "requests": {"cpu": "100m", "memory": "128Mi"},
+                "limits": {"cpu": "500m", "memory": "512Mi"}
+              }
+            }]
+          }
+        }
+      }
+    }
+```
+
+### 使用 ClusterTunnel
+
+对于集群范围的隧道（可从任何命名空间访问），使用 ClusterTunnel：
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: ClusterTunnel
+metadata:
+  name: shared-tunnel
+spec:
+  newTunnel:
+    name: shared-k8s-tunnel
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: example.com
+    secret: cloudflare-credentials  # 必须在 cloudflare-operator-system 命名空间
+  deployPatch: '{"spec":{"replicas":2}}'
+```
+
+> **注意：** 对于 ClusterTunnel 和其他集群范围的资源，Secret 必须位于 `cloudflare-operator-system` 命名空间。
+
 ## 下一步
 
 - [配置 API Token 权限](configuration.md)

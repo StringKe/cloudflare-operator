@@ -65,7 +65,8 @@ func (r *AccessGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	// Initialize API client
-	apiClient, err := cf.NewAPIClientFromDetails(ctx, r.Client, "", accessGroup.Spec.Cloudflare)
+	// AccessGroup is cluster-scoped, use operator namespace for legacy inline secrets
+	apiClient, err := cf.NewAPIClientFromDetails(ctx, r.Client, controller.OperatorNamespace, accessGroup.Spec.Cloudflare)
 	if err != nil {
 		logger.Error(err, "Failed to initialize Cloudflare API client")
 		return r.updateStatusError(ctx, accessGroup, err)

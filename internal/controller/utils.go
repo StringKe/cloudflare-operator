@@ -59,6 +59,9 @@ var tunnelValidProtoMap = map[string]bool{
 // getAPIDetails loads Cloudflare API credentials and returns an API client.
 // It supports both new CloudflareCredentials references and legacy inline secrets.
 // For tunnel controllers, it also returns the secret for tunnel credential file access.
+//
+// For cluster-scoped resources (ClusterTunnel), pass empty string as namespace.
+// The function will default to OperatorNamespace for legacy inline secret lookups.
 func getAPIDetails(
 	ctx context.Context,
 	c client.Client,
@@ -71,11 +74,17 @@ func getAPIDetails(
 	*corev1.Secret,
 	error,
 ) {
+	// For cluster-scoped resources (empty namespace), use operator namespace for legacy secrets
+	secretNamespace := namespace
+	if secretNamespace == "" {
+		secretNamespace = OperatorNamespace
+	}
+
 	// Create credentials loader
 	loader := credentials.NewLoader(c, log)
 
 	// Load credentials using the unified loader
-	creds, err := loader.LoadFromCloudflareDetails(ctx, &tunnelSpec.Cloudflare, namespace)
+	creds, err := loader.LoadFromCloudflareDetails(ctx, &tunnelSpec.Cloudflare, secretNamespace)
 	if err != nil {
 		log.Error(err, "failed to load credentials")
 		return nil, nil, err
@@ -114,7 +123,8 @@ func getAPIDetails(
 	cfSecret := &corev1.Secret{}
 	if tunnelSpec.Cloudflare.Secret != "" {
 		// Legacy mode: secret is specified in spec
-		if err := c.Get(ctx, apitypes.NamespacedName{Name: tunnelSpec.Cloudflare.Secret, Namespace: namespace}, cfSecret); err != nil {
+		// Use secretNamespace which defaults to OperatorNamespace for cluster-scoped resources
+		if err := c.Get(ctx, apitypes.NamespacedName{Name: tunnelSpec.Cloudflare.Secret, Namespace: secretNamespace}, cfSecret); err != nil {
 			log.V(1).Info("tunnel credential secret not found, this is fine for new tunnels", "secret", tunnelSpec.Cloudflare.Secret)
 			// Don't return error here - secret might not be needed for new tunnels
 		}
@@ -122,13 +132,13 @@ func getAPIDetails(
 		// New mode: get the secret from CloudflareCredentials
 		credsResource := &networkingv1alpha2.CloudflareCredentials{}
 		if err := c.Get(ctx, apitypes.NamespacedName{Name: tunnelSpec.Cloudflare.CredentialsRef.Name}, credsResource); err == nil {
-			secretNamespace := credsResource.Spec.SecretRef.Namespace
-			if secretNamespace == "" {
-				secretNamespace = "cloudflare-operator-system"
+			credsSecretNamespace := credsResource.Spec.SecretRef.Namespace
+			if credsSecretNamespace == "" {
+				credsSecretNamespace = OperatorNamespace
 			}
 			if err := c.Get(ctx, apitypes.NamespacedName{
 				Name:      credsResource.Spec.SecretRef.Name,
-				Namespace: secretNamespace,
+				Namespace: credsSecretNamespace,
 			}, cfSecret); err != nil {
 				log.V(1).Info("credentials secret not found", "secret", credsResource.Spec.SecretRef.Name)
 			}

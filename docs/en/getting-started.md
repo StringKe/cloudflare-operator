@@ -180,6 +180,88 @@ dig hello.example.com
 curl https://hello.example.com
 ```
 
+## Advanced Configuration
+
+### Scaling Tunnel Replicas
+
+Use the `deployPatch` field to customize the cloudflared deployment. This is a JSON patch applied to the deployment spec.
+
+**Set replica count:**
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: Tunnel
+metadata:
+  name: my-tunnel
+  namespace: default
+spec:
+  newTunnel:
+    name: my-k8s-tunnel
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: example.com
+    secret: cloudflare-credentials
+  deployPatch: '{"spec":{"replicas":3}}'
+```
+
+**Set resources and node selector:**
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: Tunnel
+metadata:
+  name: my-tunnel
+  namespace: default
+spec:
+  newTunnel:
+    name: my-k8s-tunnel
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: example.com
+    secret: cloudflare-credentials
+  deployPatch: |
+    {
+      "spec": {
+        "replicas": 2,
+        "template": {
+          "spec": {
+            "nodeSelector": {
+              "node-role.kubernetes.io/edge": "true"
+            },
+            "containers": [{
+              "name": "cloudflared",
+              "resources": {
+                "requests": {"cpu": "100m", "memory": "128Mi"},
+                "limits": {"cpu": "500m", "memory": "512Mi"}
+              }
+            }]
+          }
+        }
+      }
+    }
+```
+
+### Using ClusterTunnel
+
+For cluster-wide tunnels (accessible from any namespace), use ClusterTunnel:
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: ClusterTunnel
+metadata:
+  name: shared-tunnel
+spec:
+  newTunnel:
+    name: shared-k8s-tunnel
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: example.com
+    secret: cloudflare-credentials  # Must be in cloudflare-operator-system namespace
+  deployPatch: '{"spec":{"replicas":2}}'
+```
+
+> **Note:** For ClusterTunnel and other cluster-scoped resources, the secret must be in the `cloudflare-operator-system` namespace.
+
 ## What's Next?
 
 - [Configure API Token Permissions](configuration.md)

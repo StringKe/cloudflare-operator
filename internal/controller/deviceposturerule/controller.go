@@ -65,7 +65,8 @@ func (r *DevicePostureRuleReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	// Initialize API client
-	apiClient, err := cf.NewAPIClientFromDetails(ctx, r.Client, "", rule.Spec.Cloudflare)
+	// DevicePostureRule is cluster-scoped, use operator namespace for legacy inline secrets
+	apiClient, err := cf.NewAPIClientFromDetails(ctx, r.Client, controller.OperatorNamespace, rule.Spec.Cloudflare)
 	if err != nil {
 		logger.Error(err, "Failed to initialize Cloudflare API client")
 		return r.updateStatusError(ctx, rule, err)

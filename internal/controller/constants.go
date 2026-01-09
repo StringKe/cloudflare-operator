@@ -16,6 +16,14 @@ limitations under the License.
 
 package controller
 
+// Operator namespace constant
+// Cluster-scoped resources should use this namespace for loading secrets when using legacy inline secret references.
+const (
+	// OperatorNamespace is the namespace where the operator is deployed.
+	// Used for cluster-scoped resources to locate secrets.
+	OperatorNamespace = "cloudflare-operator-system"
+)
+
 // New cloudflare.com API Group constants
 // These will be used for new CRDs (VirtualNetwork, NetworkRoute, etc.)
 const (

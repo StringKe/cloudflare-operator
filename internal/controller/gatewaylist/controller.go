@@ -69,7 +69,8 @@ func (r *GatewayListReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	// Initialize API client
-	apiClient, err := cf.NewAPIClientFromDetails(ctx, r.Client, "", list.Spec.Cloudflare)
+	// GatewayList is cluster-scoped, use operator namespace for legacy inline secrets
+	apiClient, err := cf.NewAPIClientFromDetails(ctx, r.Client, controller.OperatorNamespace, list.Spec.Cloudflare)
 	if err != nil {
 		logger.Error(err, "Failed to initialize Cloudflare API client")
 		return r.updateStatusError(ctx, list, err)

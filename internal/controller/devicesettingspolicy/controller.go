@@ -109,9 +109,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 }
 
 // initAPIClient initializes the Cloudflare API client using the unified credential loader.
+// DeviceSettingsPolicy is cluster-scoped, use operator namespace for legacy inline secrets.
 func (r *Reconciler) initAPIClient() error {
-	// Use the unified API client initialization
-	api, err := cf.NewAPIClientFromDetails(r.ctx, r.Client, "", r.policy.Spec.Cloudflare)
+	api, err := cf.NewAPIClientFromDetails(r.ctx, r.Client, controller.OperatorNamespace, r.policy.Spec.Cloudflare)
 	if err != nil {
 		r.log.Error(err, "failed to initialize API client")
 		r.Recorder.Event(r.policy, corev1.EventTypeWarning, controller.EventReasonAPIError, "Failed to initialize API client")
