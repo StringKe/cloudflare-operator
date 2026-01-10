@@ -487,8 +487,13 @@ func (r *Reconciler) initAPIClient(
 //   - "api.example.com" belongs to "example.com" → true
 //   - "api.staging.example.com" belongs to "example.com" → true
 //   - "example.com" belongs to "example.com" → true
+//   - "_acm.api.test.example.com." belongs to "example.com" → true (trailing dot)
 //   - "api.other.com" does NOT belong to "example.com" → false
 func hostnameBelongsToDomain(hostname, domain string) bool {
+	// Normalize: remove trailing dots (FQDN format)
+	hostname = strings.TrimSuffix(hostname, ".")
+	domain = strings.TrimSuffix(domain, ".")
+
 	// Exact match
 	if hostname == domain {
 		return true

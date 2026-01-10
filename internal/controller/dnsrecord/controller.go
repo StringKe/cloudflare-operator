@@ -436,9 +436,14 @@ func (r *DNSRecordReconciler) findDNSRecordsForDomain(ctx context.Context, obj c
 //   - "api.example.com" belongs to "example.com" ✓
 //   - "api.staging.example.com" belongs to "example.com" ✓
 //   - "example.com" belongs to "example.com" ✓
+//   - "_acm.api.test.example.com." belongs to "example.com" ✓ (trailing dot)
 //   - "api.other.com" does NOT belong to "example.com" ✗
 //   - "notexample.com" does NOT belong to "example.com" ✗
 func validateRecordBelongsToDomain(recordName, domainName string) error {
+	// Normalize: remove trailing dots (FQDN format)
+	recordName = strings.TrimSuffix(recordName, ".")
+	domainName = strings.TrimSuffix(domainName, ".")
+
 	// Exact match
 	if recordName == domainName {
 		return nil
