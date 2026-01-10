@@ -36,7 +36,7 @@
 
 </div>
 
-> **Note**: This project is currently in Alpha (v0.17.x)
+> **Note**: This project is currently in Alpha (v0.18.x)
 >
 > This project is a fork of [adyanth/cloudflare-operator](https://github.com/adyanth/cloudflare-operator) with extended Zero Trust features and improvements.
 
@@ -54,6 +54,7 @@ The Cloudflare Zero Trust Operator provides Kubernetes-native management of Clou
 | **Gateway & Security** | Gateway Rules (DNS/HTTP/L4), Gateway Lists, Browser Isolation |
 | **Device Management** | Split Tunnel configuration, Fallback Domains, Device Posture Rules |
 | **DNS & Connectivity** | DNS Record management, WARP Connectors for site-to-site |
+| **Kubernetes Integration** | Native Ingress support, Gateway API support (Gateway, HTTPRoute, TCPRoute, UDPRoute) |
 
 ## Architecture
 
@@ -76,6 +77,11 @@ flowchart TB
             Route["NetworkRoute"]
         end
 
+        subgraph K8sNative["Kubernetes Native"]
+            Ingress["Ingress"]
+            Gateway["Gateway API"]
+        end
+
         subgraph Operator["Cloudflare Operator"]
             Controller["Controller Manager"]
         end
@@ -93,6 +99,7 @@ flowchart TB
     end
 
     CRDs -.->|watches| Controller
+    K8sNative -.->|watches| Controller
     Controller -->|creates| Managed
     Controller -->|API calls| API
     Managed -->|proxy| Service
@@ -213,6 +220,15 @@ tunnelRef:
 | DNSRecord | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | DNS record management |
 | WARPConnector | `networking.cloudflare-operator.io/v1alpha2` | **Cluster** | WARP connector deployment |
 
+### Kubernetes Integration
+
+| CRD | API Version | Scope | Description |
+|-----|-------------|-------|-------------|
+| TunnelIngressClassConfig | `networking.cloudflare-operator.io/v1alpha2` | Cluster | Config for Ingress integration |
+| TunnelGatewayClassConfig | `networking.cloudflare-operator.io/v1alpha2` | Cluster | Config for Gateway API integration |
+
+> **Note**: The operator also supports native Kubernetes `Ingress` and Gateway API (`Gateway`, `HTTPRoute`, `TCPRoute`, `UDPRoute`) resources when configured with the appropriate IngressClass or GatewayClass.
+
 ## Examples
 
 See the [examples](examples/) directory for comprehensive usage examples:
@@ -260,6 +276,7 @@ This project is forked from [adyanth/cloudflare-operator](https://github.com/ady
 This fork extends the original project with:
 - Complete Zero Trust resource support (Access, Gateway, Device management)
 - v1alpha2 API with improved resource management
+- Native Kubernetes Ingress and Gateway API integration
 - Enhanced error handling and status reporting
 - Comprehensive documentation and examples
 

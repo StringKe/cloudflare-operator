@@ -36,7 +36,7 @@
 
 </div>
 
-> **注意**: 此项目目前处于 Alpha 阶段 (v0.17.x)
+> **注意**: 此项目目前处于 Alpha 阶段 (v0.18.x)
 >
 > 本项目 Fork 自 [adyanth/cloudflare-operator](https://github.com/adyanth/cloudflare-operator)，在原项目基础上扩展了完整的 Zero Trust 功能。
 
@@ -54,6 +54,7 @@ Cloudflare Zero Trust Operator 提供 Kubernetes 原生的 Cloudflare Zero Trust
 | **网关与安全** | 网关规则 (DNS/HTTP/L4)、网关列表、浏览器隔离 |
 | **设备管理** | Split Tunnel 配置、回退域、设备态势规则 |
 | **DNS 与连接** | DNS 记录管理、WARP Connector 站点连接 |
+| **Kubernetes 集成** | 原生 Ingress 支持、Gateway API 支持 (Gateway, HTTPRoute, TCPRoute, UDPRoute) |
 
 ## 架构
 
@@ -76,6 +77,11 @@ flowchart TB
             Route["NetworkRoute"]
         end
 
+        subgraph K8sNative["Kubernetes 原生"]
+            Ingress["Ingress"]
+            Gateway["Gateway API"]
+        end
+
         subgraph Operator["Cloudflare Operator"]
             Controller["控制器管理器"]
         end
@@ -93,6 +99,7 @@ flowchart TB
     end
 
     CRDs -.->|监听| Controller
+    K8sNative -.->|监听| Controller
     Controller -->|创建| Managed
     Controller -->|API 调用| API
     Managed -->|代理| Service
@@ -213,6 +220,15 @@ tunnelRef:
 | DNSRecord | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | DNS 记录管理 |
 | WARPConnector | `networking.cloudflare-operator.io/v1alpha2` | **Cluster** | WARP Connector 部署 |
 
+### Kubernetes 集成
+
+| CRD | API 版本 | 作用域 | 说明 |
+|-----|---------|--------|------|
+| TunnelIngressClassConfig | `networking.cloudflare-operator.io/v1alpha2` | Cluster | Ingress 集成配置 |
+| TunnelGatewayClassConfig | `networking.cloudflare-operator.io/v1alpha2` | Cluster | Gateway API 集成配置 |
+
+> **说明**: Operator 还支持原生 Kubernetes `Ingress` 和 Gateway API (`Gateway`, `HTTPRoute`, `TCPRoute`, `UDPRoute`) 资源，需配置相应的 IngressClass 或 GatewayClass。
+
 ## 示例
 
 查看 [examples](examples/) 目录获取完整的使用示例：
@@ -260,6 +276,7 @@ tunnelRef:
 本 Fork 在原项目基础上扩展了：
 - 完整的 Zero Trust 资源支持（Access、Gateway、Device 管理）
 - v1alpha2 API 及改进的资源管理
+- 原生 Kubernetes Ingress 和 Gateway API 集成
 - 增强的错误处理和状态报告
 - 完善的文档和示例
 

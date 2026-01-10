@@ -20,7 +20,7 @@
 - **Group**: `networking.cloudflare-operator.io`
 - **版本**: v1alpha1 (deprecated), v1alpha2 (storage version)
 
-### 已实现的 CRD (19个)
+### 已实现的 CRD (21个)
 
 | 类别 | CRD | 作用域 | 状态 |
 |------|-----|--------|------|
@@ -43,6 +43,8 @@
 | **网关层** | GatewayRule | Cluster | ⚠️ 框架完成 |
 | | GatewayList | Cluster | ⚠️ 框架完成 |
 | | GatewayConfiguration | Cluster | ✅ 完成 |
+| **K8s 集成** | TunnelIngressClassConfig | Cluster | ⚠️ 框架完成 |
+| | TunnelGatewayClassConfig | Cluster | ⚠️ 框架完成 |
 
 ### Secret 位置说明
 
@@ -252,12 +254,17 @@ api/
     ├── networkroute_types.go
     ├── privateservice_types.go
     ├── accessapplication_types.go
+    ├── tunnelingressclassconfig_types.go   # Ingress 集成
+    ├── tunnelgatewayclassconfig_types.go   # Gateway API 集成
     └── ...
 
 internal/
 ├── controller/
 │   ├── status.go             # 状态更新辅助函数
 │   ├── constants.go          # 常量定义
+│   ├── finalizer.go          # Finalizer 管理辅助
+│   ├── event.go              # 事件记录辅助
+│   ├── deletion.go           # 删除处理模板
 │   ├── management.go         # 资源管理标记
 │   ├── adoption.go           # 资源采用逻辑
 │   ├── generic_tunnel_reconciler.go  # Tunnel 共享逻辑
@@ -266,6 +273,10 @@ internal/
 │   ├── virtualnetwork/controller.go
 │   ├── networkroute/controller.go
 │   ├── privateservice/controller.go
+│   ├── ingress/              # Kubernetes Ingress 控制器
+│   ├── gateway/              # Gateway API 控制器
+│   ├── route/                # 路由构建辅助
+│   ├── tunnel/               # Tunnel 解析辅助
 │   └── ...
 ├── clients/
 │   └── cf/                   # Cloudflare API 客户端
@@ -318,6 +329,41 @@ controller.UpdateWithConflictRetry(ctx, client, obj, updateFn)
 controller.SetCondition(conditions, type, status, reason, message)
 controller.SetSuccessCondition(conditions, message)
 controller.SetErrorCondition(conditions, err)
+```
+
+### finalizer.go
+
+```go
+// Finalizer 管理辅助
+controller.EnsureFinalizer(ctx, client, obj, finalizerName)      // 确保 finalizer 存在
+controller.RemoveFinalizerSafely(ctx, client, obj, finalizerName) // 安全移除 finalizer
+controller.HasFinalizer(obj, finalizerName)                       // 检查 finalizer 是否存在
+controller.IsBeingDeleted(obj)                                    // 检查是否正在删除
+controller.ShouldReconcileDeletion(obj, finalizerName)            // 判断是否需要处理删除
+```
+
+### event.go
+
+```go
+// 事件记录组合辅助
+controller.RecordEventAndSetCondition(recorder, obj, conditions, eventType, reason, message, conditionStatus)
+controller.RecordSuccessEventAndCondition(recorder, obj, conditions, reason, message)
+controller.RecordWarningEventAndCondition(recorder, obj, conditions, reason, message)
+controller.RecordErrorEventAndCondition(recorder, obj, conditions, reason, err)  // 自动清理敏感信息
+controller.RecordError(recorder, obj, reason, err)   // 仅记录事件
+controller.RecordSuccess(recorder, obj, reason, msg) // 仅记录事件
+```
+
+### deletion.go
+
+```go
+// 删除处理模板
+handler := controller.NewDeletionHandler(client, log, recorder, finalizerName)
+result, requeue, err := handler.HandleDeletion(ctx, obj, deleteFn)
+result, requeue, err := handler.HandleDeletionWithMultipleResources(ctx, obj, deleteFns)
+
+// 快捷函数
+result, requeue, err := controller.QuickHandleDeletion(ctx, client, log, recorder, obj, finalizerName, deleteFn)
 ```
 
 ### cf/errors.go
