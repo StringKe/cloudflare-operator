@@ -92,13 +92,30 @@ func (r *DNSRecordReconciler) initAPIClient(ctx context.Context, record *network
 
 	// Determine Zone ID using priority:
 	// 1. Explicit ZoneId in spec.cloudflare.zoneId
-	// 2. Use DomainResolver to find CloudflareDomain matching the record name
-	// 3. Use existing apiClient.ValidZoneId (from domain lookup)
+	// 2. Explicit Domain in spec.cloudflare.domain -> resolve via CloudflareDomain
+	// 3. Use DomainResolver to find CloudflareDomain matching the record name
+	// 4. Use existing apiClient.ValidZoneId (from domain lookup)
 	zoneID := record.Spec.Cloudflare.ZoneId
 	var resolvedDomain string
 
+	if zoneID == "" && record.Spec.Cloudflare.Domain != "" {
+		// Priority 2: Use explicit domain from spec to find CloudflareDomain
+		domainInfo, err := r.domainResolver.Resolve(ctx, record.Spec.Cloudflare.Domain)
+		if err != nil {
+			logger.Error(err, "Failed to resolve explicit domain", "domain", record.Spec.Cloudflare.Domain)
+		} else if domainInfo != nil {
+			zoneID = domainInfo.ZoneID
+			resolvedDomain = domainInfo.Domain
+			logger.V(1).Info("Resolved Zone ID via explicit spec.cloudflare.domain",
+				"name", record.Spec.Name,
+				"specDomain", record.Spec.Cloudflare.Domain,
+				"resolvedDomain", domainInfo.Domain,
+				"zoneId", zoneID)
+		}
+	}
+
 	if zoneID == "" {
-		// Try DomainResolver
+		// Priority 3: Try DomainResolver using record name suffix matching
 		domainInfo, err := r.domainResolver.Resolve(ctx, record.Spec.Name)
 		if err != nil {
 			logger.Error(err, "Failed to resolve domain for DNS record", "name", record.Spec.Name)
@@ -106,14 +123,14 @@ func (r *DNSRecordReconciler) initAPIClient(ctx context.Context, record *network
 		} else if domainInfo != nil {
 			zoneID = domainInfo.ZoneID
 			resolvedDomain = domainInfo.Domain
-			logger.V(1).Info("Resolved Zone ID via CloudflareDomain",
+			logger.V(1).Info("Resolved Zone ID via CloudflareDomain (name suffix match)",
 				"name", record.Spec.Name,
 				"domain", domainInfo.Domain,
 				"zoneId", zoneID)
 		}
 	}
 
-	// Use API client's ValidZoneId as final fallback
+	// Priority 4: Use API client's ValidZoneId as final fallback
 	if zoneID == "" {
 		zoneID = apiClient.ValidZoneId
 		resolvedDomain = apiClient.ValidDomainName
