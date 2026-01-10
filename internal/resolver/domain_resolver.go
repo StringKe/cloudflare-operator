@@ -78,8 +78,10 @@ func (r *DomainResolver) Resolve(ctx context.Context, hostname string) (*DomainI
 			defaultDomain = domain
 		}
 
-		// Skip domains that are not ready
-		if domain.Status.State != networkingv1alpha2.CloudflareDomainStateReady {
+		// Skip domains that don't have a valid ZoneID
+		// We allow Verifying state if ZoneID is already set (periodic re-verification)
+		// This prevents race conditions during CloudflareDomain reconciliation
+		if domain.Status.ZoneID == "" {
 			continue
 		}
 
@@ -104,7 +106,7 @@ func (r *DomainResolver) Resolve(ctx context.Context, hostname string) (*DomainI
 	}
 
 	// Use default domain as fallback if no match found
-	if bestMatch == nil && defaultDomain != nil && defaultDomain.Status.State == networkingv1alpha2.CloudflareDomainStateReady {
+	if bestMatch == nil && defaultDomain != nil && defaultDomain.Status.ZoneID != "" {
 		r.log.V(1).Info("Using default domain as fallback",
 			"hostname", hostname,
 			"domain", defaultDomain.Spec.Domain)
@@ -167,7 +169,8 @@ func (r *DomainResolver) resolveFromCache(hostname string) (*DomainInfo, error) 
 			defaultDomain = domain
 		}
 
-		if domain.Status.State != networkingv1alpha2.CloudflareDomainStateReady {
+		// Skip domains without a valid ZoneID
+		if domain.Status.ZoneID == "" {
 			continue
 		}
 
@@ -187,7 +190,7 @@ func (r *DomainResolver) resolveFromCache(hostname string) (*DomainInfo, error) 
 		}
 	}
 
-	if bestMatch == nil && defaultDomain != nil && defaultDomain.Status.State == networkingv1alpha2.CloudflareDomainStateReady {
+	if bestMatch == nil && defaultDomain != nil && defaultDomain.Status.ZoneID != "" {
 		bestMatch = defaultDomain
 	}
 
@@ -277,7 +280,7 @@ func (r *DomainResolver) GetDefaultDomain(ctx context.Context) (*DomainInfo, err
 
 	for i := range r.domains {
 		domain := &r.domains[i]
-		if domain.Spec.IsDefault && domain.Status.State == networkingv1alpha2.CloudflareDomainStateReady {
+		if domain.Spec.IsDefault && domain.Status.ZoneID != "" {
 			return &DomainInfo{
 				Domain:               domain.Spec.Domain,
 				ZoneID:               domain.Status.ZoneID,

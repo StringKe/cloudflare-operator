@@ -74,8 +74,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 	}
 
-	// Set state to Verifying
-	r.updateState(networkingv1alpha2.CloudflareDomainStateVerifying, "Verifying domain with Cloudflare API")
+	// Only set Verifying state if this is a new domain or was in error state
+	// This prevents race conditions where DomainResolver skips the domain
+	// during periodic re-verification
+	needsFullVerification := r.domain.Status.ZoneID == "" ||
+		r.domain.Status.State == networkingv1alpha2.CloudflareDomainStateError ||
+		r.domain.Status.State == networkingv1alpha2.CloudflareDomainStatePending ||
+		r.domain.Status.State == ""
+
+	if needsFullVerification {
+		r.updateState(networkingv1alpha2.CloudflareDomainStateVerifying, "Verifying domain with Cloudflare API")
+	}
 
 	// Get credentials
 	creds, err := r.getCredentials()
