@@ -48,6 +48,12 @@ type CloudflareDetails struct {
 	Domain string `json:"domain,omitempty"`
 
 	// +kubebuilder:validation:Optional
+	// ZoneId is the Cloudflare Zone ID for DNS operations.
+	// If not specified, it will be looked up via CloudflareDomain or the domain field.
+	// Specifying this directly is useful for multi-zone scenarios.
+	ZoneId string `json:"zoneId,omitempty"`
+
+	// +kubebuilder:validation:Optional
 	// Secret containing Cloudflare API key/token (legacy, use credentialsRef instead)
 	Secret string `json:"secret,omitempty"`
 

@@ -370,8 +370,16 @@ func (r *TunnelBindingReconciler) createDNSLogic(hostname string) error {
 		return err
 	}
 	existingId, err := r.cfAPI.GetDNSCNameId(hostname)
-	// Check if a DNS record exists
-	if err == nil || existingId != "" {
+	if err != nil {
+		// Real API error (not "record not found" which now returns "", nil)
+		r.log.Error(err, "Failed to check existing DNS record", "hostname", hostname)
+		r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedCheckingDns",
+			fmt.Sprintf("Failed to check existing DNS record: %s", cf.SanitizeErrorMessage(err)))
+		return err
+	}
+
+	// Check if a DNS record exists (existingId != "" means record found)
+	if existingId != "" {
 		// without a managed TXT record when we are not supposed to overwrite it
 		if !r.OverwriteUnmanaged && txtId == "" {
 			err := fmt.Errorf("unmanaged FQDN present")

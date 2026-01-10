@@ -418,7 +418,9 @@ func (c *API) DeleteDNSId(fqdn, dnsId string, created bool) error {
 	return nil
 }
 
-// GetDNSCNameId returns the ID of the CNAME record requested
+// GetDNSCNameId returns the ID of the CNAME record requested.
+// Returns empty string and nil error if the record does not exist (this is not an error condition).
+// Returns empty string and error if there was an actual API error or multiple records found.
 func (c *API) GetDNSCNameId(fqdn string) (string, error) {
 	if _, err := c.GetZoneId(); err != nil {
 		c.Log.Error(err, "error in getting Zone ID")
@@ -439,14 +441,15 @@ func (c *API) GetDNSCNameId(fqdn string) (string, error) {
 
 	switch len(records) {
 	case 0:
-		err := fmt.Errorf("no records returned")
-		c.Log.Info("no records returned for fqdn", "fqdn", fqdn)
-		return "", err
+		// No record found - this is a valid result, not an error
+		// The caller should check for empty string to determine if record exists
+		c.Log.V(1).Info("no DNS record found for fqdn", "fqdn", fqdn)
+		return "", nil
 	case 1:
 		return records[0].ID, nil
 	default:
-		err := fmt.Errorf("multiple records returned")
-		c.Log.Error(err, "multiple records returned for fqdn", "fqdn", fqdn)
+		err := fmt.Errorf("multiple CNAME records found for %s: %w", fqdn, ErrMultipleResourcesFound)
+		c.Log.Error(err, "multiple records returned for fqdn", "fqdn", fqdn, "count", len(records))
 		return "", err
 	}
 }

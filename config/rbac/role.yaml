@@ -92,6 +92,7 @@ rules:
   - accessservicetokens
   - accesstunnels
   - cloudflarecredentials
+  - cloudflaredomains
   - clustertunnels
   - deviceposturerules
   - devicesettingspolicies
@@ -121,6 +122,7 @@ rules:
   - accessidentityproviders/finalizers
   - accessservicetokens/finalizers
   - cloudflarecredentials/finalizers
+  - cloudflaredomains/finalizers
   - clustertunnels/finalizers
   - deviceposturerules/finalizers
   - devicesettingspolicies/finalizers
@@ -145,6 +147,7 @@ rules:
   - accessservicetokens/status
   - accesstunnels/status
   - cloudflarecredentials/status
+  - cloudflaredomains/status
   - clustertunnels/status
   - deviceposturerules/status
   - devicesettingspolicies/status

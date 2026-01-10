@@ -111,10 +111,30 @@ func (r *Reconciler) reconcileDNSAutomatic(
 		proxied = p
 	}
 
+	// Resolve Zone IDs for all hostnames using DomainResolver
+	hostnameZones, err := r.domainResolver.ResolveMultiple(ctx, hostnames)
+	if err != nil {
+		logger.Error(err, "Failed to resolve domains for hostnames")
+		// Fall back to using apiClient.ValidZoneId for all hostnames
+	}
+
 	// Create/update DNS for each hostname with error aggregation
 	var errs []error
 	for _, hostname := range hostnames {
-		if err := r.createOrUpdateDNSAutomatic(ctx, apiClient, hostname, tunnelID, proxied); err != nil {
+		// Determine Zone ID for this hostname
+		zoneID := apiClient.ValidZoneId
+		if domainInfo, ok := hostnameZones[hostname]; ok && domainInfo != nil {
+			zoneID = domainInfo.ZoneID
+			logger.V(1).Info("Using CloudflareDomain Zone ID for hostname",
+				"hostname", hostname, "domain", domainInfo.Domain, "zoneId", zoneID)
+		}
+
+		if zoneID == "" {
+			errs = append(errs, fmt.Errorf("no Zone ID found for hostname %s", hostname))
+			continue
+		}
+
+		if err := r.createOrUpdateDNSAutomaticInZone(ctx, apiClient, hostname, tunnelID, zoneID, proxied); err != nil {
 			logger.Error(err, "Failed to create/update DNS record", "hostname", hostname)
 			errs = append(errs, fmt.Errorf("DNS record %s: %w", hostname, err))
 		}
@@ -126,7 +146,39 @@ func (r *Reconciler) reconcileDNSAutomatic(
 	return nil
 }
 
-// createOrUpdateDNSAutomatic creates or updates a DNS CNAME record via Cloudflare API
+// createOrUpdateDNSAutomaticInZone creates or updates a DNS CNAME record in a specific zone
+func (*Reconciler) createOrUpdateDNSAutomaticInZone(ctx context.Context, apiClient *cf.API, hostname, tunnelID, zoneID string, proxied bool) error {
+	logger := log.FromContext(ctx)
+
+	// Target is the tunnel hostname
+	target := fmt.Sprintf("%s.cfargotunnel.com", tunnelID)
+
+	// Try to get existing DNS record using InZone method
+	existingID, err := apiClient.GetDNSCNameIdInZone(zoneID, hostname)
+	if err != nil {
+		// This is a real error (API failure or multiple records found)
+		return fmt.Errorf("failed to check existing DNS record: %w", err)
+	}
+
+	// Use InsertOrUpdateCNameInZone for zone-specific operations
+	_, err = apiClient.InsertOrUpdateCNameInZone(zoneID, hostname, existingID, tunnelID, proxied)
+	if err != nil {
+		if existingID != "" {
+			return fmt.Errorf("failed to update DNS record: %w", err)
+		}
+		return fmt.Errorf("failed to create DNS record: %w", err)
+	}
+
+	if existingID != "" {
+		logger.Info("DNS record updated", "hostname", hostname, "target", target, "zoneId", zoneID)
+	} else {
+		logger.Info("DNS record created", "hostname", hostname, "target", target, "zoneId", zoneID)
+	}
+
+	return nil
+}
+
+// createOrUpdateDNSAutomatic creates or updates a DNS CNAME record via Cloudflare API (legacy, uses ValidZoneId)
 func (*Reconciler) createOrUpdateDNSAutomatic(ctx context.Context, apiClient *cf.API, hostname, tunnelID string, _ bool) error {
 	logger := log.FromContext(ctx)
 
@@ -134,8 +186,10 @@ func (*Reconciler) createOrUpdateDNSAutomatic(ctx context.Context, apiClient *cf
 	target := fmt.Sprintf("%s.cfargotunnel.com", tunnelID)
 
 	// Try to get existing DNS record
+	// GetDNSCNameId returns ("", nil) if record doesn't exist, which is not an error
 	existingID, err := apiClient.GetDNSCNameId(hostname)
-	if err != nil && !cf.IsNotFoundError(err) {
+	if err != nil {
+		// This is a real error (API failure or multiple records found)
 		return fmt.Errorf("failed to check existing DNS record: %w", err)
 	}
 
@@ -147,7 +201,7 @@ func (*Reconciler) createOrUpdateDNSAutomatic(ctx context.Context, apiClient *cf
 		}
 		logger.Info("DNS record updated", "hostname", hostname, "target", target)
 	} else {
-		// Create new record
+		// Create new record (existingID is empty, meaning record doesn't exist)
 		_, err = apiClient.InsertOrUpdateCName(hostname, "")
 		if err != nil {
 			return fmt.Errorf("failed to create DNS record: %w", err)
@@ -328,11 +382,29 @@ func (r *Reconciler) cleanupDNSAutomatic(
 		return fmt.Errorf("failed to initialize API client: %w", err)
 	}
 
+	// Resolve Zone IDs for all hostnames using DomainResolver
+	hostnameZones, err := r.domainResolver.ResolveMultiple(ctx, hostnames)
+	if err != nil {
+		logger.Error(err, "Failed to resolve domains for hostnames")
+		// Fall back to using apiClient.ValidZoneId for all hostnames
+	}
+
 	// Delete DNS for each hostname with error aggregation
 	var errs []error
 	for _, hostname := range hostnames {
-		// Get DNS record ID
-		recordID, err := apiClient.GetDNSCNameId(hostname)
+		// Determine Zone ID for this hostname
+		zoneID := apiClient.ValidZoneId
+		if domainInfo, ok := hostnameZones[hostname]; ok && domainInfo != nil {
+			zoneID = domainInfo.ZoneID
+		}
+
+		if zoneID == "" {
+			logger.Info("No Zone ID found, skipping DNS cleanup", "hostname", hostname)
+			continue
+		}
+
+		// Get DNS record ID using InZone method
+		recordID, err := apiClient.GetDNSCNameIdInZone(zoneID, hostname)
 		if err != nil {
 			if cf.IsNotFoundError(err) {
 				logger.Info("DNS record not found, skipping deletion", "hostname", hostname)
@@ -347,12 +419,12 @@ func (r *Reconciler) cleanupDNSAutomatic(
 			continue
 		}
 
-		// Delete the record
-		if err := apiClient.DeleteDNSId(hostname, recordID, true); err != nil {
-			logger.Error(err, "Failed to delete DNS record", "hostname", hostname)
+		// Delete the record using InZone method
+		if err := apiClient.DeleteDNSRecordInZone(zoneID, recordID); err != nil {
+			logger.Error(err, "Failed to delete DNS record", "hostname", hostname, "zoneId", zoneID)
 			errs = append(errs, fmt.Errorf("delete DNS record %s: %w", hostname, err))
 		} else {
-			logger.Info("DNS record deleted", "hostname", hostname)
+			logger.Info("DNS record deleted", "hostname", hostname, "zoneId", zoneID)
 		}
 	}
 

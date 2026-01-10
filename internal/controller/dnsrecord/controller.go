@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -17,11 +18,14 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
+	"github.com/StringKe/cloudflare-operator/internal/resolver"
 )
 
 const (
@@ -31,8 +35,9 @@ const (
 // DNSRecordReconciler reconciles a DNSRecord object
 type DNSRecordReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Scheme         *runtime.Scheme
+	Recorder       record.EventRecorder
+	domainResolver *resolver.DomainResolver
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=dnsrecords,verbs=get;list;watch;create;update;patch;delete
@@ -51,8 +56,8 @@ func (r *DNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, err
 	}
 
-	// Initialize API client
-	apiClient, err := r.initAPIClient(ctx, record)
+	// Initialize API client and resolve Zone ID
+	apiClient, zoneID, err := r.initAPIClient(ctx, record)
 	if err != nil {
 		logger.Error(err, "Failed to initialize Cloudflare API client")
 		return r.updateStatusError(ctx, record, err)
@@ -60,7 +65,7 @@ func (r *DNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// Handle deletion
 	if !record.DeletionTimestamp.IsZero() {
-		return r.handleDeletion(ctx, record, apiClient)
+		return r.handleDeletion(ctx, record, apiClient, zoneID)
 	}
 
 	// Add finalizer if not present
@@ -72,21 +77,63 @@ func (r *DNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	// Reconcile the DNS record
-	return r.reconcileDNSRecord(ctx, record, apiClient)
+	return r.reconcileDNSRecord(ctx, record, apiClient, zoneID)
 }
 
-func (r *DNSRecordReconciler) initAPIClient(ctx context.Context, record *networkingv1alpha2.DNSRecord) (*cf.API, error) {
-	return cf.NewAPIClientFromDetails(ctx, r.Client, record.Namespace, record.Spec.Cloudflare)
+func (r *DNSRecordReconciler) initAPIClient(ctx context.Context, record *networkingv1alpha2.DNSRecord) (*cf.API, string, error) {
+	logger := log.FromContext(ctx)
+
+	// Create API client
+	apiClient, err := cf.NewAPIClientFromDetails(ctx, r.Client, record.Namespace, record.Spec.Cloudflare)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Determine Zone ID using priority:
+	// 1. Explicit ZoneId in spec.cloudflare.zoneId
+	// 2. Use DomainResolver to find CloudflareDomain matching the record name
+	// 3. Use existing apiClient.ValidZoneId (from domain lookup)
+	zoneID := record.Spec.Cloudflare.ZoneId
+	if zoneID == "" {
+		// Try DomainResolver
+		domainInfo, err := r.domainResolver.Resolve(ctx, record.Spec.Name)
+		if err != nil {
+			logger.Error(err, "Failed to resolve domain for DNS record", "name", record.Spec.Name)
+			// Fall back to existing Zone ID from API client
+		} else if domainInfo != nil {
+			zoneID = domainInfo.ZoneID
+			logger.V(1).Info("Resolved Zone ID via CloudflareDomain",
+				"name", record.Spec.Name,
+				"domain", domainInfo.Domain,
+				"zoneId", zoneID)
+		}
+	}
+
+	// Use API client's ValidZoneId as final fallback
+	if zoneID == "" {
+		zoneID = apiClient.ValidZoneId
+	}
+
+	if zoneID == "" {
+		return nil, "", fmt.Errorf("unable to determine Zone ID for DNS record %s: specify cloudflare.zoneId or create a CloudflareDomain resource", record.Spec.Name)
+	}
+
+	return apiClient, zoneID, nil
 }
 
-func (r *DNSRecordReconciler) handleDeletion(ctx context.Context, record *networkingv1alpha2.DNSRecord, apiClient *cf.API) (ctrl.Result, error) {
+func (r *DNSRecordReconciler) handleDeletion(ctx context.Context, record *networkingv1alpha2.DNSRecord, apiClient *cf.API, zoneID string) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	if controllerutil.ContainsFinalizer(record, FinalizerName) {
-		// Delete from Cloudflare
-		if record.Status.RecordID != "" && record.Status.ZoneID != "" {
-			logger.Info("Deleting DNS Record from Cloudflare", "recordId", record.Status.RecordID)
-			if err := apiClient.DeleteDNSRecord(record.Status.ZoneID, record.Status.RecordID); err != nil {
+		// Delete from Cloudflare - use stored ZoneID from status or resolved zoneID
+		effectiveZoneID := record.Status.ZoneID
+		if effectiveZoneID == "" {
+			effectiveZoneID = zoneID
+		}
+
+		if record.Status.RecordID != "" && effectiveZoneID != "" {
+			logger.Info("Deleting DNS Record from Cloudflare", "recordId", record.Status.RecordID, "zoneId", effectiveZoneID)
+			if err := apiClient.DeleteDNSRecordInZone(effectiveZoneID, record.Status.RecordID); err != nil {
 				// P0 FIX: Check if resource already deleted
 				if !cf.IsNotFoundError(err) {
 					logger.Error(err, "Failed to delete DNS Record from Cloudflare")
@@ -114,7 +161,7 @@ func (r *DNSRecordReconciler) handleDeletion(ctx context.Context, record *networ
 	return ctrl.Result{}, nil
 }
 
-func (r *DNSRecordReconciler) reconcileDNSRecord(ctx context.Context, record *networkingv1alpha2.DNSRecord, apiClient *cf.API) (ctrl.Result, error) {
+func (r *DNSRecordReconciler) reconcileDNSRecord(ctx context.Context, record *networkingv1alpha2.DNSRecord, apiClient *cf.API, zoneID string) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	// Build DNS record params
@@ -141,11 +188,11 @@ func (r *DNSRecordReconciler) reconcileDNSRecord(ctx context.Context, record *ne
 	var err error
 
 	if record.Status.RecordID == "" {
-		// Create new DNS record
-		logger.Info("Creating DNS Record", "name", params.Name, "type", params.Type)
+		// Create new DNS record using InZone method
+		logger.Info("Creating DNS Record", "name", params.Name, "type", params.Type, "zoneId", zoneID)
 		r.Recorder.Event(record, corev1.EventTypeNormal, "Creating",
 			fmt.Sprintf("Creating DNS Record '%s' (type: %s) in Cloudflare", params.Name, params.Type))
-		result, err = apiClient.CreateDNSRecord(params)
+		result, err = apiClient.CreateDNSRecordInZone(zoneID, params)
 		if err != nil {
 			r.Recorder.Event(record, corev1.EventTypeWarning, controller.EventReasonCreateFailed,
 				fmt.Sprintf("Failed to create DNS Record: %s", cf.SanitizeErrorMessage(err)))
@@ -154,11 +201,17 @@ func (r *DNSRecordReconciler) reconcileDNSRecord(ctx context.Context, record *ne
 		r.Recorder.Event(record, corev1.EventTypeNormal, controller.EventReasonCreated,
 			fmt.Sprintf("Created DNS Record with ID '%s'", result.ID))
 	} else {
-		// Update existing DNS record
-		logger.Info("Updating DNS Record", "recordId", record.Status.RecordID)
+		// Update existing DNS record using InZone method
+		// Use stored ZoneID from status if available, otherwise use resolved zoneID
+		effectiveZoneID := record.Status.ZoneID
+		if effectiveZoneID == "" {
+			effectiveZoneID = zoneID
+		}
+
+		logger.Info("Updating DNS Record", "recordId", record.Status.RecordID, "zoneId", effectiveZoneID)
 		r.Recorder.Event(record, corev1.EventTypeNormal, "Updating",
 			fmt.Sprintf("Updating DNS Record '%s' in Cloudflare", record.Status.RecordID))
-		result, err = apiClient.UpdateDNSRecord(record.Status.ZoneID, record.Status.RecordID, params)
+		result, err = apiClient.UpdateDNSRecordInZone(effectiveZoneID, record.Status.RecordID, params)
 		if err != nil {
 			r.Recorder.Event(record, corev1.EventTypeWarning, controller.EventReasonUpdateFailed,
 				fmt.Sprintf("Failed to update DNS Record: %s", cf.SanitizeErrorMessage(err)))
@@ -316,9 +369,44 @@ func (r *DNSRecordReconciler) updateStatusSuccess(ctx context.Context, record *n
 	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 }
 
+// findDNSRecordsForDomain returns DNSRecords that may need reconciliation when a CloudflareDomain changes
+func (r *DNSRecordReconciler) findDNSRecordsForDomain(ctx context.Context, obj client.Object) []reconcile.Request {
+	domain, ok := obj.(*networkingv1alpha2.CloudflareDomain)
+	if !ok {
+		return nil
+	}
+
+	// List all DNSRecords
+	recordList := &networkingv1alpha2.DNSRecordList{}
+	if err := r.List(ctx, recordList); err != nil {
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, record := range recordList.Items {
+		// Check if this record's name is a suffix of the domain or equals the domain
+		// This is a simple heuristic - records ending with ".domain" or equal to "domain" may be affected
+		if record.Spec.Name == domain.Spec.Domain ||
+			len(record.Spec.Name) > len(domain.Spec.Domain) &&
+				record.Spec.Name[len(record.Spec.Name)-len(domain.Spec.Domain)-1:] == "."+domain.Spec.Domain {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: client.ObjectKeyFromObject(&record),
+			})
+		}
+	}
+
+	return requests
+}
+
 func (r *DNSRecordReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("dnsrecord-controller")
+
+	// Initialize DomainResolver
+	r.domainResolver = resolver.NewDomainResolver(mgr.GetClient(), logr.Discard())
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.DNSRecord{}).
+		Watches(&networkingv1alpha2.CloudflareDomain{},
+			handler.EnqueueRequestsFromMapFunc(r.findDNSRecordsForDomain)).
 		Complete(r)
 }

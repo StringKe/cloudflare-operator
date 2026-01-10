@@ -120,6 +120,12 @@ spec:
                     description: Secret containing Cloudflare API key/token (legacy,
                       use credentialsRef instead)
                     type: string
+                  zoneId:
+                    description: |-
+                      ZoneId is the Cloudflare Zone ID for DNS operations.
+                      If not specified, it will be looked up via CloudflareDomain or the domain field.
+                      Specifying this directly is useful for multi-zone scenarios.
+                    type: string
                 type: object
               comment:
                 description: Comment is an optional comment.

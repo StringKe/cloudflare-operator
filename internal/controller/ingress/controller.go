@@ -26,6 +26,7 @@ import (
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
+	"github.com/StringKe/cloudflare-operator/internal/resolver"
 )
 
 const (
@@ -53,6 +54,9 @@ type Reconciler struct {
 
 	// OperatorNamespace is the namespace where the operator runs (for cluster-scoped resources)
 	OperatorNamespace string
+
+	// domainResolver resolves hostnames to CloudflareDomain resources
+	domainResolver *resolver.DomainResolver
 }
 
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;update;patch
@@ -611,6 +615,9 @@ func (r *Reconciler) updateConfigStatus(ctx context.Context, config *networkingv
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("cloudflare-ingress-controller")
 
+	// Initialize DomainResolver for multi-zone DNS support
+	r.domainResolver = resolver.NewDomainResolver(mgr.GetClient(), ctrl.Log.WithName("ingress-domain-resolver"))
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1.Ingress{}).
 		// Watch IngressClass changes
@@ -638,7 +645,49 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&corev1.Service{},
 			handler.EnqueueRequestsFromMapFunc(r.findIngressesForService),
 		).
+		// Watch CloudflareDomain changes
+		Watches(
+			&networkingv1alpha2.CloudflareDomain{},
+			handler.EnqueueRequestsFromMapFunc(r.findIngressesForDomain),
+		).
 		Complete(r)
+}
+
+// findIngressesForDomain returns Ingresses that may be affected by a CloudflareDomain change
+func (r *Reconciler) findIngressesForDomain(ctx context.Context, obj client.Object) []reconcile.Request {
+	domain, ok := obj.(*networkingv1alpha2.CloudflareDomain)
+	if !ok {
+		return nil
+	}
+
+	// List all Ingresses managed by our controller
+	ingressList := &networkingv1.IngressList{}
+	if err := r.List(ctx, ingressList); err != nil {
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, ingress := range ingressList.Items {
+		// Skip ingresses not managed by our controller
+		if !r.isOurIngress(ctx, &ingress) {
+			continue
+		}
+
+		// Check if any hostname in the ingress matches this domain
+		for _, rule := range ingress.Spec.Rules {
+			hostname := rule.Host
+			if hostname == domain.Spec.Domain ||
+				(len(hostname) > len(domain.Spec.Domain) &&
+					hostname[len(hostname)-len(domain.Spec.Domain)-1:] == "."+domain.Spec.Domain) {
+				requests = append(requests, reconcile.Request{
+					NamespacedName: client.ObjectKeyFromObject(&ingress),
+				})
+				break // Only add each ingress once
+			}
+		}
+	}
+
+	return requests
 }
 
 // findIngressesForIngressClass returns Ingresses that use the given IngressClass
