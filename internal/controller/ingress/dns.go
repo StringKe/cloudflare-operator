@@ -1,18 +1,5 @@
-/*
-Copyright 2025 Adyanth H.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025-2026 The Cloudflare Operator Authors
 
 package ingress
 
@@ -375,13 +362,16 @@ func (r *Reconciler) cleanupDNSAutomatic(
 	return nil
 }
 
-// initAPIClient initializes the Cloudflare API client for a tunnel
+// initAPIClient initializes the Cloudflare API client for a tunnel.
+// This function properly sets ValidTunnelId, ValidTunnelName, ValidZoneId, and ValidAccountId
+// from the tunnel's status, which are required for DNS operations like InsertOrUpdateCName.
 func (r *Reconciler) initAPIClient(
 	ctx context.Context,
 	tunnel TunnelInterface,
 	_ *networkingv1alpha2.TunnelIngressClassConfig,
 ) (*cf.API, error) {
 	spec := tunnel.GetSpec()
+	status := tunnel.GetStatus()
 
 	// Determine namespace for secret lookup
 	secretNamespace := tunnel.GetNamespace()
@@ -393,5 +383,19 @@ func (r *Reconciler) initAPIClient(
 	// - CloudflareCredentials reference
 	// - Legacy inline secret
 	// - Default CloudflareCredentials
-	return cf.NewAPIClientFromDetails(ctx, r.Client, secretNamespace, spec.Cloudflare)
+	apiClient, err := cf.NewAPIClientFromDetails(ctx, r.Client, secretNamespace, spec.Cloudflare)
+	if err != nil {
+		return nil, err
+	}
+
+	// CRITICAL FIX: Set ValidTunnelId, ValidTunnelName, ValidZoneId, and ValidAccountId from tunnel status.
+	// These fields are required by InsertOrUpdateCName and other DNS operations.
+	// Without them, InsertOrUpdateCName generates invalid CNAME content like ".cfargotunnel.com"
+	// instead of "<tunnel-id>.cfargotunnel.com", causing Cloudflare API error 9007.
+	apiClient.ValidTunnelId = status.TunnelId
+	apiClient.ValidTunnelName = status.TunnelName
+	apiClient.ValidZoneId = status.ZoneId
+	apiClient.ValidAccountId = status.AccountId
+
+	return apiClient, nil
 }

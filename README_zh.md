@@ -31,12 +31,11 @@
 [![CI](https://github.com/StringKe/cloudflare-operator/actions/workflows/release.yml/badge.svg)](https://github.com/StringKe/cloudflare-operator/actions/workflows/release.yml)
 [![Test](https://github.com/StringKe/cloudflare-operator/actions/workflows/test.yml/badge.svg)](https://github.com/StringKe/cloudflare-operator/actions/workflows/test.yml)
 [![Lint](https://github.com/StringKe/cloudflare-operator/actions/workflows/lint.yml/badge.svg)](https://github.com/StringKe/cloudflare-operator/actions/workflows/lint.yml)
-[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FStringKe%2Fcloudflare-operator.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2FStringKe%2Fcloudflare-operator)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/StringKe/cloudflare-operator/badge)](https://securityscorecards.dev/viewer/?uri=github.com/StringKe/cloudflare-operator)
 
 </div>
 
-> **注意**: 此项目目前处于 Alpha 阶段 (v0.18.x)
+> **注意**: 此项目目前处于 Alpha 阶段 (v0.18.x)。这**不是** Cloudflare 官方产品，它使用 [Cloudflare API](https://api.cloudflare.com/) 和 [cloudflared](https://github.com/cloudflare/cloudflared) 在 Kubernetes 上自动化 Zero Trust 配置。
 >
 > 本项目 Fork 自 [adyanth/cloudflare-operator](https://github.com/adyanth/cloudflare-operator)，在原项目基础上扩展了完整的 Zero Trust 功能。
 
@@ -283,9 +282,3 @@ tunnelRef:
 ## 许可证
 
 Apache License 2.0 - 详见 [LICENSE](LICENSE)。
-
-[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FStringKe%2Fcloudflare-operator.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2FStringKe%2Fcloudflare-operator)
-
----
-
-> **声明**: 这**不是** Cloudflare 官方产品。它使用 [Cloudflare API](https://api.cloudflare.com/) 和 [cloudflared](https://github.com/cloudflare/cloudflared) 在 Kubernetes 上自动化 Zero Trust 配置。

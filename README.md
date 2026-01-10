@@ -31,12 +31,11 @@
 [![CI](https://github.com/StringKe/cloudflare-operator/actions/workflows/release.yml/badge.svg)](https://github.com/StringKe/cloudflare-operator/actions/workflows/release.yml)
 [![Test](https://github.com/StringKe/cloudflare-operator/actions/workflows/test.yml/badge.svg)](https://github.com/StringKe/cloudflare-operator/actions/workflows/test.yml)
 [![Lint](https://github.com/StringKe/cloudflare-operator/actions/workflows/lint.yml/badge.svg)](https://github.com/StringKe/cloudflare-operator/actions/workflows/lint.yml)
-[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FStringKe%2Fcloudflare-operator.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2FStringKe%2Fcloudflare-operator)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/StringKe/cloudflare-operator/badge)](https://securityscorecards.dev/viewer/?uri=github.com/StringKe/cloudflare-operator)
 
 </div>
 
-> **Note**: This project is currently in Alpha (v0.18.x)
+> **Note**: This project is currently in Alpha (v0.18.x). This is **NOT** an official Cloudflare product. It uses the [Cloudflare API](https://api.cloudflare.com/) and [cloudflared](https://github.com/cloudflare/cloudflared) to automate Zero Trust configuration on Kubernetes.
 >
 > This project is a fork of [adyanth/cloudflare-operator](https://github.com/adyanth/cloudflare-operator) with extended Zero Trust features and improvements.
 
@@ -283,9 +282,3 @@ This fork extends the original project with:
 ## License
 
 Apache License 2.0 - See [LICENSE](LICENSE) for details.
-
-[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FStringKe%2Fcloudflare-operator.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2FStringKe%2Fcloudflare-operator)
-
----
-
-> **Disclaimer**: This is **NOT** an official Cloudflare product. It uses the [Cloudflare API](https://api.cloudflare.com/) and [cloudflared](https://github.com/cloudflare/cloudflared) to automate Zero Trust configuration on Kubernetes.

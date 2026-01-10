@@ -13,7 +13,7 @@ jobs:
     name: DCO Check
     runs-on: ubuntu-latest
     # Skip DCO check for bot users
-    if: github.actor != 'dependabot[bot]' && github.actor != 'fossabot'
+    if: github.actor != 'dependabot[bot]'
     steps:
       - name: Check DCO
         uses: dcoapp/app@v1
