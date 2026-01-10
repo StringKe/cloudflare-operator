@@ -75,14 +75,13 @@ func ProtocolFromGatewayProtocol(protocol gatewayv1.ProtocolType) string {
 	switch protocol {
 	case gatewayv1.HTTPProtocolType:
 		return ProtocolHTTP
-	case gatewayv1.HTTPSProtocolType:
+	case gatewayv1.HTTPSProtocolType, gatewayv1.TLSProtocolType:
+		// Both HTTPS and TLS map to https protocol in Cloudflare
 		return ProtocolHTTPS
 	case gatewayv1.TCPProtocolType:
 		return ProtocolTCP
 	case gatewayv1.UDPProtocolType:
 		return ProtocolUDP
-	case gatewayv1.TLSProtocolType:
-		return ProtocolHTTPS
 	default:
 		return ProtocolHTTP
 	}
