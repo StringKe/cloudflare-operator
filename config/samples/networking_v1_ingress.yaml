@@ -1,0 +1,121 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  labels:
+    app.kubernetes.io/name: cloudflare-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: example-app
+  namespace: default
+spec:
+  # Reference the Cloudflare Tunnel IngressClass
+  ingressClassName: cloudflare-tunnel
+  rules:
+    - host: app.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: example-service
+                port:
+                  number: 8080
+---
+# Example with HTTPS backend and TLS
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  labels:
+    app.kubernetes.io/name: cloudflare-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: secure-app
+  namespace: default
+  annotations:
+    # Override protocol for HTTPS backend
+    cloudflare.com/protocol: "https"
+    # Skip TLS verification (use with caution)
+    cloudflare.com/no-tls-verify: "false"
+    # Enable HTTP/2 to origin
+    cloudflare.com/http2-origin: "true"
+spec:
+  ingressClassName: cloudflare-tunnel
+  tls:
+    - hosts:
+        - secure.example.com
+  rules:
+    - host: secure.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: secure-service
+                port:
+                  number: 443
+---
+# Example with multiple paths
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  labels:
+    app.kubernetes.io/name: cloudflare-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: api-gateway
+  namespace: default
+spec:
+  ingressClassName: cloudflare-tunnel
+  rules:
+    - host: api.example.com
+      http:
+        paths:
+          - path: /v1
+            pathType: Prefix
+            backend:
+              service:
+                name: api-v1
+                port:
+                  number: 8080
+          - path: /v2
+            pathType: Prefix
+            backend:
+              service:
+                name: api-v2
+                port:
+                  number: 8080
+          - path: /health
+            pathType: Exact
+            backend:
+              service:
+                name: health-check
+                port:
+                  number: 8080
+---
+# Example with DNS disabled (for external-dns integration)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  labels:
+    app.kubernetes.io/name: cloudflare-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: external-dns-app
+  namespace: default
+  annotations:
+    # Disable DNS management by the operator
+    cloudflare.com/disable-dns: "true"
+    # external-dns annotations
+    external-dns.alpha.kubernetes.io/hostname: external.example.com
+    external-dns.alpha.kubernetes.io/cloudflare-proxied: "true"
+spec:
+  ingressClassName: cloudflare-tunnel
+  rules:
+    - host: external.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: external-service
+                port:
+                  number: 8080

@@ -27,3 +27,6 @@ testbin/*
 # used for development
 secrets
 dist
+
+# Claude Code skills (local only)
+.claude/skills/

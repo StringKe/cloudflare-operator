@@ -172,6 +172,12 @@ func (r *TunnelBindingReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, err
 	}
 
+	// Emit deprecation warning for TunnelBinding
+	r.log.Info("WARNING: TunnelBinding is deprecated and will be removed in a future release. " +
+		"Please migrate to Ingress with TunnelIngressClassConfig or Gateway API (HTTPRoute, TCPRoute, UDPRoute).")
+	r.Recorder.Event(tunnelBinding, corev1.EventTypeWarning, "Deprecated",
+		"TunnelBinding is deprecated. Please migrate to Ingress with TunnelIngressClassConfig or Gateway API.")
+
 	if err := r.initStruct(ctx, tunnelBinding); err != nil {
 		r.log.Error(err, "initialization failed")
 		return ctrl.Result{}, err

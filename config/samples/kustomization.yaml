@@ -5,11 +5,10 @@ resources:
 - v1_secret.yaml
 - apps_v1_deployment.yaml
 - v1_service.yaml
-# v1alpha1 CRDs (legacy)
+# v1alpha1 CRDs (legacy/deprecated)
 - networking_v1alpha1_tunnel.yaml
 - networking_v1alpha1_clustertunnel.yaml
 - networking_v1alpha1_tunnelbinding.yaml
-- networking_v1alpha1_access.yaml
 - networking_v1alpha1_accesstunnel.yaml
 # v1alpha2 Tunnel CRDs
 - networking_v1alpha2_tunnel.yaml
@@ -33,4 +32,17 @@ resources:
 - networking_v1alpha2_deviceposturerule.yaml
 # v1alpha2 DNS CRD
 - networking_v1alpha2_dnsrecord.yaml
+# v1alpha2 Ingress Controller CRDs
+- networking_v1alpha2_tunnelingressclassconfig.yaml
+# v1alpha2 Gateway API Controller CRDs
+- networking_v1alpha2_tunnelgatewayclassconfig.yaml
+# Kubernetes Networking Resources
+- networking_v1_ingressclass.yaml
+- networking_v1_ingress.yaml
+# Gateway API Resources
+- gateway_v1_gatewayclass.yaml
+- gateway_v1_gateway.yaml
+- gateway_v1_httproute.yaml
+- gateway_v1alpha2_tcproute.yaml
+- gateway_v1alpha2_udproute.yaml
 #+kubebuilder:scaffold:manifestskustomizesamples

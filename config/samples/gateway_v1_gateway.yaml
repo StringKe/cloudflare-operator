@@ -1,0 +1,65 @@
+# Gateway defines a logical ingress point for traffic routing.
+# Routes attach to this Gateway to define how traffic should be routed.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: production
+  namespace: default
+  annotations:
+    # Optional: Override DNS proxied setting for all routes attached to this Gateway
+    # cloudflare-operator.io/dns-proxied: "true"
+spec:
+  # Reference to GatewayClass
+  gatewayClassName: cloudflare-tunnel
+  # Listeners define the ports/protocols this Gateway accepts
+  listeners:
+    # HTTP listener for web traffic
+    - name: http
+      port: 80
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: Same
+    # HTTPS listener for secure web traffic
+    - name: https
+      port: 443
+      protocol: HTTPS
+      allowedRoutes:
+        namespaces:
+          from: Same
+    # TCP listener for SSH access (for TCPRoute)
+    - name: tcp-ssh
+      port: 22
+      protocol: TCP
+      allowedRoutes:
+        namespaces:
+          from: Same
+    # UDP listener for DNS (for UDPRoute)
+    - name: udp-dns
+      port: 53
+      protocol: UDP
+      allowedRoutes:
+        namespaces:
+          from: Same
+---
+# Gateway allowing routes from all namespaces
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: shared-gateway
+  namespace: cloudflare-operator-system
+spec:
+  gatewayClassName: cloudflare-tunnel
+  listeners:
+    - name: http
+      port: 80
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: All
+    - name: https
+      port: 443
+      protocol: HTTPS
+      allowedRoutes:
+        namespaces:
+          from: All

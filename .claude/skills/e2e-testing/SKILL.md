@@ -1,48 +1,48 @@
 ---
 name: e2e-testing
-description: End-to-end testing for cloudflare-operator. Guides testing CRDs against real Cloudflare API. Use when testing operator functionality, validating CRDs, or running integration tests.
+description: cloudflare-operator 端到端测试。指导针对真实 Cloudflare API 测试 CRD。适用于测试 Operator 功能、验证 CRD 或运行集成测试。
 allowed-tools: Read, Write, Bash, Glob, Grep
 user-invocable: true
 ---
 
-# E2E Testing Guide
+# 端到端测试指南
 
-## Overview
+## 概述
 
-This skill guides end-to-end testing of cloudflare-operator against real Cloudflare API.
+此技能指导 cloudflare-operator 针对真实 Cloudflare API 的端到端测试。
 
-## Prerequisites
+## 前置条件
 
-### Required Credentials
-- Cloudflare API Token or Global API Key
+### 必需凭证
+- Cloudflare API Token 或 Global API Key
 - Cloudflare Account ID
-- Cloudflare Domain (for DNS-related tests)
+- Cloudflare Domain（用于 DNS 相关测试）
 
-### Required Permissions
+### 必需权限
 
-| Feature | Permission | Scope |
-|---------|------------|-------|
+| 功能 | 权限 | 范围 |
+|------|------|------|
 | Tunnel | `Account:Cloudflare Tunnel:Edit` | Account |
 | DNS | `Zone:DNS:Edit` | Zone |
 | Access | `Account:Access: Apps and Policies:Edit` | Account |
 | Zero Trust | `Account:Zero Trust:Edit` | Account |
 
-## Setup
+## 设置
 
-### 1. Deploy Operator
+### 1. 部署 Operator
 
 ```bash
-# Install CRDs
+# 安装 CRD
 kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator.crds.yaml
 
-# Install Operator
+# 安装 Operator
 kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator.yaml
 
-# Verify
+# 验证
 kubectl get pods -n cloudflare-operator-system
 ```
 
-### 2. Create Credentials Secret
+### 2. 创建凭证 Secret
 
 ```yaml
 apiVersion: v1
@@ -53,12 +53,12 @@ metadata:
 type: Opaque
 stringData:
   CLOUDFLARE_API_TOKEN: "${CLOUDFLARE_API_TOKEN}"
-  # Or use Global API Key:
+  # 或使用 Global API Key：
   # CLOUDFLARE_API_KEY: "${CLOUDFLARE_API_KEY}"
   # CLOUDFLARE_API_EMAIL: "${CLOUDFLARE_EMAIL}"
 ```
 
-### 3. Create CloudflareCredentials Resource
+### 3. 创建 CloudflareCredentials 资源
 
 ```yaml
 apiVersion: networking.cloudflare-operator.io/v1alpha2
@@ -72,35 +72,35 @@ spec:
     namespace: cloudflare-operator-system
 ```
 
-## Test Order
+## 测试顺序
 
-Test CRDs in dependency order:
+按依赖顺序测试 CRD：
 
-### Phase 1: Infrastructure
+### 第一阶段：基础设施
 1. CloudflareCredentials
 2. ClusterTunnel / Tunnel
 3. VirtualNetwork
 
-### Phase 2: Networking
-4. NetworkRoute (depends on Tunnel + VirtualNetwork)
-5. TunnelBinding (depends on Tunnel)
+### 第二阶段：网络
+4. NetworkRoute（依赖 Tunnel + VirtualNetwork）
+5. TunnelBinding（依赖 Tunnel）
 6. DNSRecord
 7. PrivateService
 
-### Phase 3: Access Control
+### 第三阶段：访问控制
 8. AccessGroup
 9. AccessIdentityProvider
 10. AccessServiceToken
 11. AccessApplication
 
-### Phase 4: Zero Trust
+### 第四阶段：Zero Trust
 12. GatewayConfiguration
 13. GatewayList
 14. GatewayRule
 15. DevicePostureRule
 16. DeviceSettingsPolicy
 
-## Test Manifests
+## 测试清单
 
 ### ClusterTunnel
 
@@ -129,7 +129,7 @@ metadata:
   name: test-vnet
 spec:
   name: e2e-test-vnet
-  comment: "E2E test virtual network"
+  comment: "E2E 测试虚拟网络"
   cloudflare:
     accountId: "${CLOUDFLARE_ACCOUNT_ID}"
     credentialsRef:
@@ -145,7 +145,7 @@ metadata:
   name: test-route
 spec:
   network: "10.200.0.0/24"
-  comment: "E2E test route"
+  comment: "E2E 测试路由"
   tunnelRef:
     kind: ClusterTunnel
     name: test-tunnel
@@ -157,65 +157,65 @@ spec:
       name: default-credentials
 ```
 
-## Validation Commands
+## 验证命令
 
 ```bash
-# Check resource status
-kubectl get <resource> -o wide
+# 检查资源状态
+kubectl get <资源类型> -o wide
 
-# Check conditions
-kubectl get <resource> -o jsonpath='{.status.conditions}'
+# 检查条件
+kubectl get <资源类型> -o jsonpath='{.status.conditions}'
 
-# Check operator logs
+# 检查 Operator 日志
 kubectl logs -n cloudflare-operator-system deployment/cloudflare-operator-controller-manager -f
 
-# Describe resource for events
-kubectl describe <resource> <name>
+# 描述资源查看事件
+kubectl describe <资源类型> <名称>
 ```
 
-## Common Issues
+## 常见问题
 
 ### "secret not found"
-- Ensure secret is in correct namespace
-- For cluster-scoped resources: `cloudflare-operator-system`
-- For namespaced resources: same namespace as resource
+- 确保 Secret 在正确的命名空间
+- 集群作用域资源：`cloudflare-operator-system`
+- 命名空间资源：与资源相同的命名空间
 
 ### "authentication error"
-- Verify API token permissions
-- Check account ID is correct
-- Ensure token hasn't expired
+- 验证 API Token 权限
+- 检查 Account ID 是否正确
+- 确保 Token 未过期
 
 ### "resource already exists"
-- Check if resource exists in Cloudflare Dashboard
-- Use `existingTunnel` instead of `newTunnel` for adoption
+- 检查资源是否存在于 Cloudflare 控制台
+- 使用 `existingTunnel` 而非 `newTunnel` 进行采用
 
-### Stuck in "Terminating"
+### 卡在 "Terminating"
 ```bash
-# Check finalizers
-kubectl get <resource> <name> -o jsonpath='{.metadata.finalizers}'
+# 检查 finalizers
+kubectl get <资源类型> <名称> -o jsonpath='{.metadata.finalizers}'
 
-# Force delete (caution: may leave orphaned resources)
-kubectl patch <resource> <name> -p '{"metadata":{"finalizers":null}}' --type=merge
+# 强制删除（注意：可能留下孤立资源）
+kubectl patch <资源类型> <名称> -p '{"metadata":{"finalizers":null}}' --type=merge
 ```
 
-## Cleanup
+## 清理
 
-Delete in reverse order:
+按相反顺序删除：
 
 ```bash
-# Phase 4
+# 第四阶段
 kubectl delete gatewayrule,gatewaylist,gatewayconfiguration --all
 kubectl delete deviceposturerule,devicesettingspolicy --all
 
-# Phase 3
+# 第三阶段
 kubectl delete accessapplication,accessservicetoken --all
 kubectl delete accessidentityprovider,accessgroup --all
 
-# Phase 2
+# 第二阶段
 kubectl delete privateservice,dnsrecord,tunnelbinding --all
 kubectl delete networkroute --all
 
-# Phase 1
+# 第一阶段
 kubectl delete virtualnetwork --all
 kubectl delete clustertunnel,tunnel --all
 kubectl delete cloudflarecredentials --all
@@ -224,28 +224,28 @@ kubectl delete cloudflarecredentials --all
 kubectl delete secret cloudflare-credentials -n cloudflare-operator-system
 ```
 
-## Test Report Template
+## 测试报告模板
 
 ```markdown
-## E2E Test Report
+## E2E 测试报告
 
-**Date:** YYYY-MM-DD
-**Version:** v0.17.X
-**Cluster:** cluster-name
+**日期：** YYYY-MM-DD
+**版本：** v0.17.X
+**集群：** cluster-name
 
-### Results
+### 结果
 
-| CRD | Create | Update | Delete | Status |
-|-----|--------|--------|--------|--------|
-| CloudflareCredentials | ✅ | ✅ | ✅ | PASS |
-| ClusterTunnel | ✅ | ✅ | ✅ | PASS |
-| VirtualNetwork | ✅ | ✅ | ✅ | PASS |
-| NetworkRoute | ✅ | ✅ | ✅ | PASS |
+| CRD | 创建 | 更新 | 删除 | 状态 |
+|-----|------|------|------|------|
+| CloudflareCredentials | ✅ | ✅ | ✅ | 通过 |
+| ClusterTunnel | ✅ | ✅ | ✅ | 通过 |
+| VirtualNetwork | ✅ | ✅ | ✅ | 通过 |
+| NetworkRoute | ✅ | ✅ | ✅ | 通过 |
 | ... | | | | |
 
-### Issues Found
-- Issue description
+### 发现的问题
+- 问题描述
 
-### Notes
-- Additional observations
+### 备注
+- 其他观察结果
 ```

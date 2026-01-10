@@ -1,0 +1,49 @@
+# UDPRoute defines routing rules for UDP traffic.
+# This enables exposing UDP services through Cloudflare Tunnels.
+# Note: UDPRoute is in v1alpha2 of the Gateway API.
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: UDPRoute
+metadata:
+  name: dns-route
+  namespace: default
+spec:
+  # Attach to the production Gateway's UDP listener
+  parentRefs:
+    - name: production
+      namespace: default
+      sectionName: udp-dns
+  # Routing rules
+  rules:
+    - backendRefs:
+        - name: coredns
+          port: 53
+---
+# Game server UDP route
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: UDPRoute
+metadata:
+  name: game-server-route
+  namespace: default
+spec:
+  parentRefs:
+    - name: production
+      namespace: default
+  rules:
+    - backendRefs:
+        - name: game-server
+          port: 27015
+---
+# VoIP server UDP route
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: UDPRoute
+metadata:
+  name: voip-route
+  namespace: default
+spec:
+  parentRefs:
+    - name: production
+      namespace: default
+  rules:
+    - backendRefs:
+        - name: voip-server
+          port: 5060

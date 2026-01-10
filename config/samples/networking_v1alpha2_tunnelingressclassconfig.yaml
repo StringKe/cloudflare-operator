@@ -1,0 +1,32 @@
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: TunnelIngressClassConfig
+metadata:
+  labels:
+    app.kubernetes.io/name: cloudflare-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: default
+  namespace: cloudflare-operator-system
+spec:
+  # Reference to the Tunnel or ClusterTunnel that handles traffic
+  tunnelRef:
+    kind: ClusterTunnel
+    name: production-tunnel
+
+  # DNS management mode:
+  # - Automatic: Operator creates DNS records via Cloudflare API
+  # - Manual: User manages DNS (compatible with external-dns)
+  # - DNSRecord: Operator creates DNSRecord CRD resources
+  dnsManagement: Automatic
+
+  # Whether DNS records should be proxied through Cloudflare
+  dnsProxied: true
+
+  # Default origin request settings for all Ingress rules
+  # These can be overridden per-Ingress via annotations
+  defaultOriginRequest:
+    # Connect timeout for backend connections
+    connectTimeout: 30s
+    # Enable HTTP/2 to origin
+    http2Origin: false
+    # Disable TLS verification (not recommended for production)
+    noTlsVerify: false

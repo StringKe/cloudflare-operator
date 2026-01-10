@@ -18,10 +18,19 @@ spec:
     - jsonPath: .status.hostnames
       name: FQDNs
       type: string
+    deprecated: true
+    deprecationWarning: TunnelBinding is deprecated. Please migrate to Ingress with
+      TunnelIngressClassConfig or Gateway API.
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: TunnelBinding is the Schema for the tunnelbindings API
+        description: |-
+          TunnelBinding is the Schema for the tunnelbindings API
+
+          Deprecated: TunnelBinding is deprecated and will be removed in a future release.
+          Please migrate to one of the following alternatives:
+          - Ingress with TunnelIngressClassConfig for HTTP/HTTPS services
+          - Gateway API (HTTPRoute, TCPRoute, UDPRoute) with TunnelGatewayClassConfig for advanced routing
         properties:
           apiVersion:
             description: |-

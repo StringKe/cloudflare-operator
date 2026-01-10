@@ -1,0 +1,28 @@
+# GatewayClass for Cloudflare Tunnel integration.
+# This enables Gateway API resources to use Cloudflare Tunnels for traffic routing.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: cloudflare-tunnel
+spec:
+  # Controller name identifies which controller manages this GatewayClass
+  controllerName: cloudflare-operator.io/gateway-controller
+  # Parameters reference for tunnel configuration
+  parametersRef:
+    group: networking.cloudflare-operator.io
+    kind: TunnelGatewayClassConfig
+    name: cloudflare-tunnel-config
+    namespace: cloudflare-operator-system
+---
+# Alternative GatewayClass using namespace-scoped configuration
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: cloudflare-tunnel-dev
+spec:
+  controllerName: cloudflare-operator.io/gateway-controller
+  parametersRef:
+    group: networking.cloudflare-operator.io
+    kind: TunnelGatewayClassConfig
+    name: namespace-tunnel-config
+    namespace: default

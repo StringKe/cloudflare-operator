@@ -32,9 +32,11 @@ import (
 	"github.com/StringKe/cloudflare-operator/internal/controller/deviceposturerule"
 	"github.com/StringKe/cloudflare-operator/internal/controller/devicesettingspolicy"
 	"github.com/StringKe/cloudflare-operator/internal/controller/dnsrecord"
+	"github.com/StringKe/cloudflare-operator/internal/controller/gateway"
 	"github.com/StringKe/cloudflare-operator/internal/controller/gatewayconfiguration"
 	"github.com/StringKe/cloudflare-operator/internal/controller/gatewaylist"
 	"github.com/StringKe/cloudflare-operator/internal/controller/gatewayrule"
+	"github.com/StringKe/cloudflare-operator/internal/controller/ingress"
 	"github.com/StringKe/cloudflare-operator/internal/controller/networkroute"
 	"github.com/StringKe/cloudflare-operator/internal/controller/privateservice"
 	"github.com/StringKe/cloudflare-operator/internal/controller/virtualnetwork"
@@ -55,6 +57,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
 	networkingv1alpha1 "github.com/StringKe/cloudflare-operator/api/v1alpha1"
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
@@ -68,11 +72,20 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 )
 
+const (
+	// webhooksDisabledValue is the value of ENABLE_WEBHOOKS env var when webhooks are disabled
+	webhooksDisabledValue = "false"
+)
+
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(networkingv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(networkingv1alpha2.AddToScheme(scheme))
+
+	// Gateway API scheme registration
+	utilruntime.Must(gatewayv1.Install(scheme))
+	utilruntime.Must(gatewayv1alpha2.Install(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -375,15 +388,37 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "CloudflareCredentials")
 		os.Exit(1)
 	}
-	// nolint:goconst
-	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+	if err = (&ingress.Reconciler{
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		Recorder:          mgr.GetEventRecorderFor("ingress-controller"),
+		OperatorNamespace: clusterResourceNamespace,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Ingress")
+		os.Exit(1)
+	}
+	if err = (&gateway.GatewayClassReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("gatewayclass-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "GatewayClass")
+		os.Exit(1)
+	}
+	if err = (&gateway.GatewayReconciler{
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		Recorder:          mgr.GetEventRecorderFor("gateway-controller"),
+		OperatorNamespace: clusterResourceNamespace,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Gateway")
+		os.Exit(1)
+	}
+	if os.Getenv("ENABLE_WEBHOOKS") != webhooksDisabledValue {
 		if err = webhooknetworkingv1alpha2.SetupTunnelWebhookWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create webhook", "webhook", "Tunnel")
 			os.Exit(1)
 		}
-	}
-	// nolint:goconst
-	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
 		if err = webhooknetworkingv1alpha2.SetupClusterTunnelWebhookWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create webhook", "webhook", "ClusterTunnel")
 			os.Exit(1)

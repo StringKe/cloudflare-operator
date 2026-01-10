@@ -42,7 +42,7 @@ var _ = Describe("AccessTunnel Controller", func() {
 
 		typeNamespacedName := types.NamespacedName{
 			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
+			Namespace: "default",
 		}
 		accesstunnel := &networkingv1alpha1.AccessTunnel{}
 
@@ -64,7 +64,7 @@ var _ = Describe("AccessTunnel Controller", func() {
 		})
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
+			// Cleanup the specific resource instance AccessTunnel
 			resource := &networkingv1alpha1.AccessTunnel{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
@@ -72,6 +72,7 @@ var _ = Describe("AccessTunnel Controller", func() {
 			By("Cleanup the specific resource instance AccessTunnel")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
+
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &Reconciler{
@@ -84,8 +85,8 @@ var _ = Describe("AccessTunnel Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+			// Note: Full reconciliation requires Cloudflare API credentials
+			// This test verifies the controller can be instantiated and called
 		})
 	})
 })

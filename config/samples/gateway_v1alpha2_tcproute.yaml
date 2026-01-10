@@ -1,0 +1,49 @@
+# TCPRoute defines routing rules for TCP traffic.
+# This enables exposing TCP services through Cloudflare Tunnels.
+# Note: TCPRoute is in v1alpha2 of the Gateway API.
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: ssh-route
+  namespace: default
+spec:
+  # Attach to the production Gateway's TCP listener
+  parentRefs:
+    - name: production
+      namespace: default
+      sectionName: tcp-ssh
+  # Routing rules
+  rules:
+    - backendRefs:
+        - name: ssh-bastion
+          port: 22
+---
+# Database access via TCP tunnel
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: postgres-route
+  namespace: default
+spec:
+  parentRefs:
+    - name: production
+      namespace: default
+  rules:
+    - backendRefs:
+        - name: postgres
+          port: 5432
+---
+# Redis access via TCP tunnel
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: redis-route
+  namespace: default
+spec:
+  parentRefs:
+    - name: production
+      namespace: default
+  rules:
+    - backendRefs:
+        - name: redis-master
+          port: 6379

@@ -1,31 +1,32 @@
 ---
 name: crd-development
-description: Develop new Kubernetes CRD for Cloudflare Operator. Use when creating new CRD types, implementing controllers, or adding Cloudflare API integrations. Triggers on "add CRD", "new resource", "implement controller".
+description: 为 Cloudflare Operator 开发新的 Kubernetes CRD。适用于创建新 CRD 类型、实现控制器或添加 Cloudflare API 集成。触发词："添加 CRD"、"新资源"、"实现控制器"。
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash
+user-invocable: true
 ---
 
-# CRD Development Guide
+# CRD 开发指南
 
-## Overview
+## 概述
 
-This skill guides the development of new Custom Resource Definitions (CRDs) for the Cloudflare Operator, following established patterns and best practices.
+此技能指导为 Cloudflare Operator 开发新的自定义资源定义（CRD），遵循已建立的模式和最佳实践。
 
-## Project Structure
+## 项目结构
 
 ```
-api/v1alpha2/           # CRD type definitions
-internal/controller/    # Controller implementations
-internal/clients/cf/    # Cloudflare API client
+api/v1alpha2/           # CRD 类型定义
+internal/controller/    # 控制器实现
+internal/clients/cf/    # Cloudflare API 客户端
 ```
 
-## Step 1: Define API Types
+## 步骤 1：定义 API 类型
 
-Create `api/v1alpha2/<resource>_types.go`:
+创建 `api/v1alpha2/<资源>_types.go`：
 
 ```go
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Cluster,shortName=<shortname>
+// +kubebuilder:resource:scope=Cluster,shortName=<简称>
 // +kubebuilder:printcolumn:name="State",type=string,JSONPath=`.status.state`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type MyResource struct {
@@ -37,39 +38,39 @@ type MyResource struct {
 }
 
 type MyResourceSpec struct {
-    // Cloudflare API credentials
+    // Cloudflare API 凭证
     Cloudflare CloudflareDetails `json:"cloudflare,omitempty"`
 
-    // Resource-specific fields
+    // 资源特定字段
     Name    string `json:"name,omitempty"`
     Comment string `json:"comment,omitempty"`
 }
 
 type MyResourceStatus struct {
-    // Cloudflare resource ID
+    // Cloudflare 资源 ID
     ResourceID string `json:"resourceId,omitempty"`
 
-    // Account ID for validation
+    // Account ID 用于验证
     AccountID string `json:"accountId,omitempty"`
 
-    // Current state
+    // 当前状态
     State string `json:"state,omitempty"`
 
-    // ObservedGeneration for drift detection
+    // ObservedGeneration 用于漂移检测
     ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
-    // Conditions for status reporting
+    // Conditions 用于状态报告
     Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 ```
 
-## Step 2: Implement Controller
+## 步骤 2：实现控制器
 
-Create `internal/controller/<resource>/controller.go`:
+创建 `internal/controller/<资源>/controller.go`：
 
 ```go
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-    // 1. Fetch resource
+    // 1. 获取资源
     obj := &v1alpha2.MyResource{}
     if err := r.Get(ctx, req.NamespacedName, obj); err != nil {
         if apierrors.IsNotFound(err) {
@@ -78,19 +79,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
         return ctrl.Result{}, err
     }
 
-    // 2. Initialize API client (use OperatorNamespace for cluster-scoped)
+    // 2. 初始化 API 客户端（集群作用域使用 OperatorNamespace）
     api, err := cf.NewAPIClientFromDetails(r.ctx, r.Client,
         controller.OperatorNamespace, obj.Spec.Cloudflare)
     if err != nil {
         return ctrl.Result{}, err
     }
 
-    // 3. Handle deletion
+    // 3. 处理删除
     if obj.GetDeletionTimestamp() != nil {
         return r.handleDeletion()
     }
 
-    // 4. Add finalizer
+    // 4. 添加 Finalizer
     if !controllerutil.ContainsFinalizer(obj, FinalizerName) {
         controllerutil.AddFinalizer(obj, FinalizerName)
         if err := r.Update(ctx, obj); err != nil {
@@ -98,14 +99,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
         }
     }
 
-    // 5. Reconcile
+    // 5. 协调
     return r.reconcile()
 }
 ```
 
-## Required Patterns
+## 必需模式
 
-### Status Updates (MUST use retry)
+### 状态更新（必须使用重试）
 
 ```go
 err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, obj, func() {
@@ -114,7 +115,7 @@ err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, obj, func() {
 })
 ```
 
-### Finalizer Operations (MUST use retry)
+### Finalizer 操作（必须使用重试）
 
 ```go
 err := controller.UpdateWithConflictRetry(ctx, r.Client, obj, func() {
@@ -122,60 +123,115 @@ err := controller.UpdateWithConflictRetry(ctx, r.Client, obj, func() {
 })
 ```
 
-### Error Handling (MUST sanitize)
+### 错误处理（必须清理敏感信息）
 
 ```go
 r.Recorder.Event(obj, corev1.EventTypeWarning, "Failed",
     cf.SanitizeErrorMessage(err))
 ```
 
-### Deletion (MUST check NotFound)
+### 删除（必须检查 NotFound）
 
 ```go
 if err := r.cfAPI.Delete(id); err != nil {
     if !cf.IsNotFoundError(err) {
         return err
     }
-    // Already deleted, continue
+    // 已删除，继续
 }
 ```
 
-## Step 3: Generate Code
+## 步骤 3：生成代码
 
 ```bash
-make manifests generate  # Generate CRD and DeepCopy
-make fmt vet            # Format and check
-make test               # Run tests
+make manifests generate  # 生成 CRD 和 DeepCopy
+make fmt vet            # 格式化和检查
+make test               # 运行测试
 ```
 
-## Step 4: Register Controller
+## 步骤 4：注册控制器
 
-Add to `cmd/main.go`:
+添加到 `cmd/main.go`：
 
 ```go
 if err = (&myresource.Reconciler{
     Client: mgr.GetClient(),
     Scheme: mgr.GetScheme(),
 }).SetupWithManager(mgr); err != nil {
-    setupLog.Error(err, "unable to create controller", "controller", "MyResource")
+    setupLog.Error(err, "无法创建控制器", "controller", "MyResource")
     os.Exit(1)
 }
 ```
 
-## Scope Rules
+## 作用域规则
 
-| Scope | Namespace Parameter | Secret Location |
-|-------|---------------------|-----------------|
-| Namespaced | `obj.Namespace` | Same namespace |
+| 作用域 | 命名空间参数 | Secret 位置 |
+|--------|-------------|-------------|
+| Namespaced | `obj.Namespace` | 相同命名空间 |
 | Cluster | `controller.OperatorNamespace` | cloudflare-operator-system |
 
-## Checklist
+## 检查清单
 
-- [ ] API types with proper kubebuilder markers
-- [ ] Controller with finalizer and deletion handling
-- [ ] Status updates with conflict retry
-- [ ] Error messages sanitized
-- [ ] NotFound check on deletion
-- [ ] Registered in main.go
-- [ ] CRD generated with `make manifests`
-- [ ] Tests pass with `make test`
+- [ ] API 类型有正确的 kubebuilder 标记
+- [ ] 控制器有 Finalizer 和删除处理
+- [ ] 状态更新使用冲突重试
+- [ ] 错误消息已清理敏感信息
+- [ ] 删除时检查 NotFound
+- [ ] 在 main.go 中注册
+- [ ] 使用 `make manifests` 生成 CRD
+- [ ] 使用 `make test` 测试通过
+
+## Cloudflare API 客户端方法
+
+添加新方法到 `internal/clients/cf/` 目录：
+
+```go
+// 创建资源
+func (api *API) CreateMyResource(params MyResourceParams) (*MyResourceResult, error) {
+    // 实现 Cloudflare API 调用
+}
+
+// 获取资源
+func (api *API) GetMyResource(id string) (*MyResourceResult, error) {
+    // 实现
+}
+
+// 更新资源
+func (api *API) UpdateMyResource(id string, params MyResourceParams) (*MyResourceResult, error) {
+    // 实现
+}
+
+// 删除资源
+func (api *API) DeleteMyResource(id string) error {
+    // 实现
+}
+
+// 按名称查找
+func (api *API) GetMyResourceByName(name string) (*MyResourceResult, error) {
+    // 实现
+}
+```
+
+## 测试模板
+
+创建 `internal/controller/<资源>/controller_test.go`：
+
+```go
+var _ = Describe("MyResource Controller", func() {
+    Context("When creating MyResource", func() {
+        It("Should create the resource in Cloudflare", func() {
+            // 测试创建逻辑
+        })
+    })
+
+    Context("When deleting MyResource", func() {
+        It("Should delete the resource from Cloudflare", func() {
+            // 测试删除逻辑
+        })
+
+        It("Should handle NotFound gracefully", func() {
+            // 测试 NotFound 处理
+        })
+    })
+})
+```

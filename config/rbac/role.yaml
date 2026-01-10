@@ -48,6 +48,42 @@ rules:
   - update
   - watch
 - apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - gatewayclasses
+  - gateways
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - gatewayclasses/status
+  - gateways/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - gateways/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - httproutes
+  - tcproutes
+  - udproutes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - networking.cloudflare-operator.io
   resources:
   - accessapplications
@@ -119,9 +155,51 @@ rules:
   - networkroutes/status
   - privateservices/status
   - tunnelbindings/status
+  - tunnelingressclassconfigs/status
   - tunnels/status
   - virtualnetworks/status
   - warpconnectors/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - networking.cloudflare-operator.io
+  resources:
+  - tunnelgatewayclassconfigs
+  - tunnelingressclassconfigs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingressclasses
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses/status
   verbs:
   - get
   - patch

@@ -1,183 +1,183 @@
 ---
 name: release
-description: Release new version of cloudflare-operator. Handles version bump, changelog, git tag, and GitHub release. Use when releasing a new version, creating tags, or publishing releases.
+description: cloudflare-operator 新版本发布。处理版本升级、变更日志、Git 标签和 GitHub 发布。适用于发布新版本、创建标签或发布发行版。
 allowed-tools: Read, Edit, Bash, Grep
 user-invocable: true
 ---
 
-# Release Process
+# 发布流程
 
-## Overview
+## 概述
 
-This skill guides the release process for cloudflare-operator, including version bump, git tag creation, and GitHub release.
+此技能指导 cloudflare-operator 的发布流程，包括版本升级、Git 标签创建和 GitHub 发布。
 
-## Pre-Release Checklist
+## 发布前检查清单
 
 ```bash
-# 1. Ensure all tests pass
+# 1. 确保所有测试通过
 make fmt vet test lint build
 
-# 2. Check current version
+# 2. 检查当前版本
 grep "VERSION ?=" Makefile
 
-# 3. Get latest tag
+# 3. 获取最新标签
 git tag --sort=-v:refname | head -5
 
-# 4. Check for uncommitted changes
+# 4. 检查未提交的变更
 git status
 ```
 
-## Release Steps
+## 发布步骤
 
-### Step 1: Determine Version
+### 步骤 1：确定版本号
 
-Follow semantic versioning:
-- **MAJOR** (x.0.0): Breaking API changes
-- **MINOR** (0.x.0): New features, backward compatible
-- **PATCH** (0.0.x): Bug fixes, backward compatible
+遵循语义化版本：
+- **MAJOR** (x.0.0)：破坏性 API 变更
+- **MINOR** (0.x.0)：新功能，向后兼容
+- **PATCH** (0.0.x)：Bug 修复，向后兼容
 
-Current version format: `v0.17.X`
+当前版本格式：`v0.17.X`
 
-### Step 2: Update Version in Makefile
+### 步骤 2：更新 Makefile 中的版本
 
 ```bash
-# Edit Makefile
-sed -i '' 's/VERSION ?= .*/VERSION ?= 0.17.NEW/' Makefile
+# 编辑 Makefile
+sed -i '' 's/VERSION ?= .*/VERSION ?= 0.17.新版本/' Makefile
 ```
 
-Or manually edit:
+或手动编辑：
 ```makefile
-VERSION ?= 0.17.NEW
+VERSION ?= 0.17.新版本
 ```
 
-### Step 3: Commit Version Bump
+### 步骤 3：提交版本升级
 
 ```bash
 git add Makefile
-git commit -m "chore: bump version to 0.17.NEW
+git commit -m "chore: bump version to 0.17.新版本
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 ```
 
-### Step 4: Create Annotated Tag
+### 步骤 4：创建注释标签
 
 ```bash
-git tag -a v0.17.NEW -m "v0.17.NEW: Brief description
+git tag -a v0.17.新版本 -m "v0.17.新版本: 简要描述
 
-## Changes
+## 变更
 
-### Features
-- Feature description
+### 功能
+- 功能描述
 
-### Bug Fixes
-- Fix description
+### Bug 修复
+- 修复描述
 
-### Documentation
-- Doc changes
+### 文档
+- 文档变更
 
-## Breaking Changes
-None (or list breaking changes)"
+## 破坏性变更
+无（或列出破坏性变更）"
 ```
 
-### Step 5: Push to GitHub
+### 步骤 5：推送到 GitHub
 
 ```bash
 git push origin main
-git push origin v0.17.NEW
+git push origin v0.17.新版本
 ```
 
-### Step 6: Verify Release
+### 步骤 6：验证发布
 
 ```bash
-# Check workflow status
+# 检查工作流状态
 gh run list --limit 5
 
-# Check release created
+# 检查已创建的发布
 gh release list --limit 3
 
-# View release details
-gh release view v0.17.NEW
+# 查看发布详情
+gh release view v0.17.新版本
 ```
 
-## Release Workflow
+## 发布工作流
 
-The CI automatically:
-1. Builds Docker images (amd64, arm64)
-2. Pushes to `ghcr.io/stringke/cloudflare-operator:VERSION`
-3. Generates installer manifests
-4. Creates GitHub Release with assets:
+CI 自动执行：
+1. 构建 Docker 镜像（amd64, arm64）
+2. 推送到 `ghcr.io/stringke/cloudflare-operator:VERSION`
+3. 生成安装器清单
+4. 创建 GitHub Release，包含资产：
    - `cloudflare-operator.yaml`
    - `cloudflare-operator.crds.yaml`
 
-## Rollback
+## 回滚
 
-If release fails:
+如果发布失败：
 
 ```bash
-# Delete local tag
-git tag -d v0.17.NEW
+# 删除本地标签
+git tag -d v0.17.新版本
 
-# Delete remote tag (if pushed)
-git push origin :refs/tags/v0.17.NEW
+# 删除远程标签（如果已推送）
+git push origin :refs/tags/v0.17.新版本
 
-# Revert version commit
+# 回退版本提交
 git revert HEAD
 ```
 
-## Release Notes Template
+## 发布说明模板
 
 ```markdown
 ## v0.17.X
 
-### Features
-- feat(component): Description (#PR)
+### 功能
+- feat(组件): 描述 (#PR)
 
-### Bug Fixes
-- fix(component): Description (#PR)
+### Bug 修复
+- fix(组件): 描述 (#PR)
 
-### Documentation
-- docs: Description
+### 文档
+- docs: 描述
 
-### Breaking Changes
-- **BREAKING**: Description of breaking change
+### 破坏性变更
+- **破坏性**: 破坏性变更描述
 
-### Migration Guide
-Steps to migrate from previous version (if applicable)
+### 迁移指南
+从上一版本迁移的步骤（如适用）
 
-### Full Changelog
-https://github.com/StringKe/cloudflare-operator/compare/v0.17.PREV...v0.17.X
+### 完整变更日志
+https://github.com/StringKe/cloudflare-operator/compare/v0.17.上一版本...v0.17.X
 ```
 
-## Hotfix Release
+## 热修复发布
 
-For urgent fixes:
+紧急修复：
 
 ```bash
-# 1. Create hotfix branch (optional)
+# 1. 创建热修复分支（可选）
 git checkout -b hotfix/v0.17.X
 
-# 2. Apply fix
-# ... make changes ...
+# 2. 应用修复
+# ... 进行变更 ...
 
-# 3. Fast-track release
+# 3. 快速发布
 make fmt vet test
 git add -A
-git commit -m "fix(component): urgent fix description"
+git commit -m "fix(组件): 紧急修复描述"
 git checkout main
 git merge hotfix/v0.17.X
 
-# 4. Release immediately
-# Follow standard release steps
+# 4. 立即发布
+# 按照标准发布步骤
 ```
 
-## Version History
+## 版本历史
 
-Check recent versions:
+查看最近版本：
 ```bash
 git tag --sort=-v:refname | head -20
 ```
 
-View changes between versions:
+查看版本间变更：
 ```bash
-git log v0.17.PREV..v0.17.NEW --oneline
+git log v0.17.上一版本..v0.17.新版本 --oneline
 ```

@@ -1,0 +1,41 @@
+# TunnelGatewayClassConfig provides parameters for the Gateway API GatewayClass.
+# This configures which Tunnel to use and how DNS records should be managed.
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: TunnelGatewayClassConfig
+metadata:
+  name: cloudflare-tunnel-config
+  namespace: cloudflare-operator-system
+spec:
+  # Reference to the Tunnel or ClusterTunnel resource
+  tunnelRef:
+    kind: ClusterTunnel
+    name: production-tunnel
+  # DNS management mode: Automatic (default), Manual, or DNSRecord
+  dnsManagement: Automatic
+  # Whether DNS records should be proxied through Cloudflare (default: true)
+  dnsProxied: true
+  # Fallback target for unmatched requests (default: http_status:404)
+  fallbackTarget: "http_status:404"
+  # Optional: Watch only specific namespaces (empty = all namespaces)
+  # watchNamespaces:
+  #   - default
+  #   - production
+  # Optional: Default origin request settings for all routes
+  # defaultOriginRequest:
+  #   noTLSVerify: false
+  #   httpHostHeader: "example.com"
+  #   connectTimeout: "30s"
+---
+# Alternative configuration using namespace-scoped Tunnel
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: TunnelGatewayClassConfig
+metadata:
+  name: namespace-tunnel-config
+  namespace: default
+spec:
+  tunnelRef:
+    kind: Tunnel
+    name: my-tunnel
+    namespace: default
+  dnsManagement: DNSRecord
+  dnsProxied: true

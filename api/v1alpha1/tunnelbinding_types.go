@@ -128,8 +128,14 @@ type TunnelBindingStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="FQDNs",type=string,JSONPath=`.status.hostnames`
+// +kubebuilder:deprecatedversion:warning="TunnelBinding is deprecated. Please migrate to Ingress with TunnelIngressClassConfig or Gateway API."
 
 // TunnelBinding is the Schema for the tunnelbindings API
+//
+// Deprecated: TunnelBinding is deprecated and will be removed in a future release.
+// Please migrate to one of the following alternatives:
+// - Ingress with TunnelIngressClassConfig for HTTP/HTTPS services
+// - Gateway API (HTTPRoute, TCPRoute, UDPRoute) with TunnelGatewayClassConfig for advanced routing
 type TunnelBinding struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

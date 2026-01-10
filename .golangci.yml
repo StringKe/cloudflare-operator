@@ -48,6 +48,11 @@ linters:
       - linters:
           - revive
         path: api/*
+      # Allow dot imports in test files for Ginkgo/Gomega
+      - linters:
+          - revive
+        path: _test\.go
+        text: "dot-imports"
 formatters:
   enable:
     - gofmt
