@@ -28,6 +28,9 @@ resources:
 - bases/networking.cloudflare-operator.io_deviceposturerules.yaml
 # DNS CRD
 - bases/networking.cloudflare-operator.io_dnsrecords.yaml
+# Kubernetes Integration CRDs
+- bases/networking.cloudflare-operator.io_tunnelingressclassconfigs.yaml
+- bases/networking.cloudflare-operator.io_tunnelgatewayclassconfigs.yaml
 #+kubebuilder:scaffold:crdkustomizeresource
 
 patches:
