@@ -20,11 +20,12 @@
 - **Group**: `networking.cloudflare-operator.io`
 - **版本**: v1alpha1 (deprecated), v1alpha2 (storage version)
 
-### 已实现的 CRD (21个)
+### 已实现的 CRD (22个)
 
 | 类别 | CRD | 作用域 | 状态 |
 |------|-----|--------|------|
 | **凭证** | CloudflareCredentials | Cluster | ✅ 完成 |
+| **域名** | CloudflareDomain | Cluster | ✅ 完成 (v0.19.0+) |
 | **网络层** | Tunnel | Namespaced | ✅ 完成 |
 | | ClusterTunnel | Cluster | ✅ 完成 |
 | | VirtualNetwork | Cluster | ✅ 完成 |
@@ -312,6 +313,60 @@ make undeploy           # 移除 Operator
 
 # E2E 测试
 make test-e2e           # Kind 集群 E2E 测试
+```
+
+---
+
+## 添加新 CRD 检查清单 ⚠️
+
+**重要**: 添加新 CRD 时必须完成以下所有步骤，否则 Release 构建会遗漏 CRD！
+
+### 必须步骤
+
+1. **创建类型定义**
+   ```bash
+   # 创建 api/v1alpha2/myresource_types.go
+   ```
+
+2. **生成代码**
+   ```bash
+   make manifests generate
+   ```
+
+3. **🔴 添加到 kustomization.yaml** (容易遗忘！)
+   ```bash
+   # 编辑 config/crd/kustomization.yaml，在 resources 中添加:
+   - bases/networking.cloudflare-operator.io_myresources.yaml
+   ```
+
+4. **创建控制器**
+   ```bash
+   # 创建 internal/controller/myresource/controller.go
+   ```
+
+5. **注册控制器到 main.go**
+   ```go
+   if err = (&myresource.Reconciler{...}).SetupWithManager(mgr); err != nil {
+       // ...
+   }
+   ```
+
+6. **验证构建输出**
+   ```bash
+   make build-installer VERSION=x.x.x
+   grep "myresources" dist/cloudflare-operator.crds.yaml  # 必须有输出
+   ```
+
+### 验证脚本
+
+```bash
+# 检查所有 CRD 是否都在 kustomization 中
+for crd in config/crd/bases/*.yaml; do
+  name=$(basename "$crd")
+  if ! grep -q "$name" config/crd/kustomization.yaml; then
+    echo "⚠️  Missing: $name"
+  fi
+done
 ```
 
 ---
