@@ -29,7 +29,6 @@ import (
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 
 	"github.com/go-logr/logr"
-	yaml "gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -40,6 +39,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/yaml"
 
 	networkingv1alpha1 "github.com/StringKe/cloudflare-operator/api/v1alpha1"
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"

@@ -136,8 +136,14 @@ stringData:
 
 ### Secret Location
 
-- **Namespaced Resources** (Tunnel, TunnelBinding, etc.): Secret in the same namespace
-- **Cluster Resources** (ClusterTunnel, VirtualNetwork, etc.): Secret in the operator namespace (`cloudflare-operator-system`)
+The operator uses different Secret lookup rules based on CRD scope:
+
+| Resource Scope | Secret Location | Examples |
+|----------------|-----------------|----------|
+| **Namespaced** | Same namespace as the resource | Tunnel, TunnelBinding, DNSRecord, AccessApplication |
+| **Cluster** | Operator namespace (`cloudflare-operator-system`) | ClusterTunnel, VirtualNetwork, NetworkRoute, AccessGroup |
+
+> **Important**: For detailed information about namespace restrictions and Secret management, see [Namespace Restrictions](namespace-restrictions.md).
 
 ## CloudflareSpec Reference
 

@@ -8,6 +8,7 @@ Welcome to the Cloudflare Zero Trust Operator documentation. This operator enabl
 |-------|-------------|
 | [Getting Started](getting-started.md) | Installation and first tunnel |
 | [Configuration](configuration.md) | API tokens and credentials |
+| [Namespace Restrictions](namespace-restrictions.md) | CRD scope and Secret management |
 | [API Reference](api-reference/) | Complete CRD documentation |
 | [Guides](guides/) | How-to guides for common tasks |
 | [Troubleshooting](troubleshooting.md) | Common issues and solutions |
@@ -22,36 +23,69 @@ The Cloudflare Operator provides Kubernetes-native management of:
 - **Access Control** - Zero Trust authentication for applications
 - **Gateway** - DNS/HTTP/L4 security policies
 - **Device Management** - WARP client configuration and posture rules
+- **Kubernetes Integration** - Native Ingress and Gateway API support
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Cloudflare Zero Trust                        │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
-│  │   Tunnels   │  │   Access    │  │   Gateway   │             │
-│  │             │  │             │  │             │             │
-│  │ • Tunnel    │  │ • Apps      │  │ • Rules     │             │
-│  │ • Cluster   │  │ • Groups    │  │ • Lists     │             │
-│  │   Tunnel    │  │ • IDPs      │  │ • Config    │             │
-│  │ • Binding   │  │ • Tokens    │  │             │             │
-│  └─────────────┘  └─────────────┘  └─────────────┘             │
-│                                                                 │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
-│  │   Network   │  │   Device    │  │    DNS      │             │
-│  │             │  │             │  │             │             │
-│  │ • VNet      │  │ • Policy    │  │ • Records   │             │
-│  │ • Routes    │  │ • Posture   │  │ • WARP      │             │
-│  │ • Private   │  │             │  │   Connector │             │
-│  │   Service   │  │             │  │             │             │
-│  └─────────────┘  └─────────────┘  └─────────────┘             │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Internet["Internet"]
+        Users["Users / WARP Clients"]
+    end
+
+    subgraph Cloudflare["Cloudflare Edge"]
+        Edge["Cloudflare Edge Network"]
+        API["Cloudflare API"]
+    end
+
+    subgraph K8s["Kubernetes Cluster"]
+        subgraph CRDs["Custom Resources"]
+            Tunnel["Tunnel / ClusterTunnel"]
+            TB["TunnelBinding"]
+            VNet["VirtualNetwork"]
+            Route["NetworkRoute"]
+            Access["Access*"]
+            Gateway["Gateway*"]
+        end
+
+        subgraph K8sNative["Kubernetes Native"]
+            Ingress["Ingress"]
+            GatewayAPI["Gateway API"]
+        end
+
+        subgraph Operator["Cloudflare Operator"]
+            Controller["Controller Manager"]
+        end
+
+        subgraph Managed["Managed Resources"]
+            ConfigMap["ConfigMap"]
+            Secret["Secret"]
+            Deployment["cloudflared"]
+        end
+
+        subgraph App["Applications"]
+            Service["Services"]
+            Pod["Pods"]
+        end
+    end
+
+    CRDs -.->|watches| Controller
+    K8sNative -.->|watches| Controller
+    Controller -->|creates| Managed
+    Controller -->|API calls| API
+    Managed -->|proxy| Service
+    Service --> Pod
+    Users -->|HTTPS/WARP| Edge
+    Edge <-->|tunnel| Deployment
 ```
 
 ## CRD Summary
+
+### Core Credentials
+
+| CRD | Scope | Description |
+|-----|-------|-------------|
+| `CloudflareCredentials` | Cluster | Shared API credential configuration |
 
 ### Tunnel Management
 
@@ -68,6 +102,7 @@ The Cloudflare Operator provides Kubernetes-native management of:
 | `VirtualNetwork` | Cluster | Traffic isolation network |
 | `NetworkRoute` | Cluster | Route CIDR through tunnel |
 | `PrivateService` | Namespaced | Expose Service via private IP |
+| `WARPConnector` | Cluster | WARP connector for site-to-site |
 
 ### Access Control
 
@@ -77,6 +112,7 @@ The Cloudflare Operator provides Kubernetes-native management of:
 | `AccessGroup` | Cluster | Reusable access policy group |
 | `AccessIdentityProvider` | Cluster | Identity provider configuration |
 | `AccessServiceToken` | Namespaced | M2M authentication token |
+| `AccessTunnel` | Namespaced | Access-protected tunnel endpoint |
 
 ### Gateway & Security
 
@@ -98,7 +134,26 @@ The Cloudflare Operator provides Kubernetes-native management of:
 | CRD | Scope | Description |
 |-----|-------|-------------|
 | `DNSRecord` | Namespaced | DNS record management |
-| `WARPConnector` | Cluster | WARP connector deployment |
+
+### Kubernetes Integration
+
+| CRD | Scope | Description |
+|-----|-------|-------------|
+| `TunnelIngressClassConfig` | Namespaced | Configuration for Ingress integration |
+| `TunnelGatewayClassConfig` | Cluster | Configuration for Gateway API integration |
+
+> **Note**: The operator also supports native Kubernetes `Ingress` and Gateway API (`Gateway`, `HTTPRoute`, `TCPRoute`, `UDPRoute`) resources when configured with the appropriate IngressClass or GatewayClass.
+
+## Namespace and Secret Rules
+
+The operator uses different Secret lookup rules based on CRD scope:
+
+| Resource Scope | Secret Location |
+|----------------|-----------------|
+| Namespaced | Same namespace as the resource |
+| Cluster | Operator namespace (`cloudflare-operator-system`) |
+
+See [Namespace Restrictions](namespace-restrictions.md) for detailed information.
 
 ## Getting Help
 
@@ -108,7 +163,7 @@ The Cloudflare Operator provides Kubernetes-native management of:
 
 ## Version Information
 
-- Current Version: v0.17.x (Alpha)
+- Current Version: v0.18.x (Alpha)
 - API Version: `networking.cloudflare-operator.io/v1alpha2`
 - Kubernetes: v1.28+
 - Go: 1.24+

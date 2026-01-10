@@ -136,8 +136,14 @@ stringData:
 
 ### Secret 位置
 
-- **命名空间级资源**（Tunnel、TunnelBinding 等）：Secret 在相同命名空间
-- **集群级资源**（ClusterTunnel、VirtualNetwork 等）：Secret 在 operator 命名空间（`cloudflare-operator-system`）
+Operator 根据 CRD 作用域使用不同的 Secret 查找规则：
+
+| 资源作用域 | Secret 位置 | 示例 |
+|-----------|-------------|------|
+| **Namespaced** | 与资源相同的命名空间 | Tunnel, TunnelBinding, DNSRecord, AccessApplication |
+| **Cluster** | Operator 命名空间（`cloudflare-operator-system`）| ClusterTunnel, VirtualNetwork, NetworkRoute, AccessGroup |
+
+> **重要**：有关命名空间限制和 Secret 管理的详细信息，请参阅 [命名空间限制](namespace-restrictions.md)。
 
 ## CloudflareSpec 参考
 
