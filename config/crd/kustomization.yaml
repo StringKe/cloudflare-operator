@@ -4,6 +4,8 @@
 resources:
 # Credentials CRD
 - bases/networking.cloudflare-operator.io_cloudflarecredentials.yaml
+# Domain CRD (multi-zone support)
+- bases/networking.cloudflare-operator.io_cloudflaredomains.yaml
 # Core Tunnel CRDs
 - bases/networking.cloudflare-operator.io_tunnels.yaml
 - bases/networking.cloudflare-operator.io_clustertunnels.yaml
