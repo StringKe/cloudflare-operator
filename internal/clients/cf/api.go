@@ -27,6 +27,7 @@ type API struct {
 	ValidTunnelId    string
 	ValidTunnelName  string
 	ValidZoneId      string
+	ValidDomainName  string // Domain name corresponding to ValidZoneId
 	CloudflareClient *cloudflare.API
 }
 

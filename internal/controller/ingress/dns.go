@@ -121,16 +121,25 @@ func (r *Reconciler) reconcileDNSAutomatic(
 	// Create/update DNS for each hostname with error aggregation
 	var errs []error
 	for _, hostname := range hostnames {
-		// Determine Zone ID for this hostname
+		// Determine Zone ID and domain for this hostname
 		zoneID := apiClient.ValidZoneId
+		domainName := apiClient.ValidDomainName
 		if domainInfo, ok := hostnameZones[hostname]; ok && domainInfo != nil {
 			zoneID = domainInfo.ZoneID
+			domainName = domainInfo.Domain
 			logger.V(1).Info("Using CloudflareDomain Zone ID for hostname",
 				"hostname", hostname, "domain", domainInfo.Domain, "zoneId", zoneID)
 		}
 
 		if zoneID == "" {
 			errs = append(errs, fmt.Errorf("no Zone ID found for hostname %s", hostname))
+			continue
+		}
+
+		// Validate that hostname belongs to the resolved domain
+		// This prevents creating records in the wrong zone (e.g., foo.sup-game.com in sup-any.com zone)
+		if domainName != "" && !hostnameBelongsToDomain(hostname, domainName) {
+			errs = append(errs, fmt.Errorf("hostname %q does not belong to domain %q: create a CloudflareDomain resource for the correct domain", hostname, domainName))
 			continue
 		}
 
@@ -468,6 +477,22 @@ func (r *Reconciler) initAPIClient(
 	apiClient.ValidTunnelName = status.TunnelName
 	apiClient.ValidZoneId = status.ZoneId
 	apiClient.ValidAccountId = status.AccountId
+	apiClient.ValidDomainName = apiClient.Domain // Use the domain from cloudflare spec
 
 	return apiClient, nil
+}
+
+// hostnameBelongsToDomain checks if a hostname belongs to a domain.
+// For example:
+//   - "api.example.com" belongs to "example.com" → true
+//   - "api.staging.example.com" belongs to "example.com" → true
+//   - "example.com" belongs to "example.com" → true
+//   - "api.other.com" does NOT belong to "example.com" → false
+func hostnameBelongsToDomain(hostname, domain string) bool {
+	// Exact match
+	if hostname == domain {
+		return true
+	}
+	// Suffix match: hostname must end with ".domain"
+	return strings.HasSuffix(hostname, "."+domain)
 }

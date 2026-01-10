@@ -6,6 +6,7 @@ package dnsrecord
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -94,6 +95,8 @@ func (r *DNSRecordReconciler) initAPIClient(ctx context.Context, record *network
 	// 2. Use DomainResolver to find CloudflareDomain matching the record name
 	// 3. Use existing apiClient.ValidZoneId (from domain lookup)
 	zoneID := record.Spec.Cloudflare.ZoneId
+	var resolvedDomain string
+
 	if zoneID == "" {
 		// Try DomainResolver
 		domainInfo, err := r.domainResolver.Resolve(ctx, record.Spec.Name)
@@ -102,6 +105,7 @@ func (r *DNSRecordReconciler) initAPIClient(ctx context.Context, record *network
 			// Fall back to existing Zone ID from API client
 		} else if domainInfo != nil {
 			zoneID = domainInfo.ZoneID
+			resolvedDomain = domainInfo.Domain
 			logger.V(1).Info("Resolved Zone ID via CloudflareDomain",
 				"name", record.Spec.Name,
 				"domain", domainInfo.Domain,
@@ -112,10 +116,22 @@ func (r *DNSRecordReconciler) initAPIClient(ctx context.Context, record *network
 	// Use API client's ValidZoneId as final fallback
 	if zoneID == "" {
 		zoneID = apiClient.ValidZoneId
+		resolvedDomain = apiClient.ValidDomainName
 	}
 
 	if zoneID == "" {
 		return nil, "", fmt.Errorf("unable to determine Zone ID for DNS record %s: specify cloudflare.zoneId or create a CloudflareDomain resource", record.Spec.Name)
+	}
+
+	// Validate that the record name belongs to the resolved domain
+	// This prevents creating records in the wrong zone (e.g., foo.sup-game.com in sup-any.com zone)
+	if resolvedDomain != "" {
+		if err := validateRecordBelongsToDomain(record.Spec.Name, resolvedDomain); err != nil {
+			return nil, "", fmt.Errorf(
+				"DNS record validation failed: %w. "+
+					"Hint: create a CloudflareDomain resource for the correct domain or specify cloudflare.zoneId explicitly",
+				err)
+		}
 	}
 
 	return apiClient, zoneID, nil
@@ -396,6 +412,29 @@ func (r *DNSRecordReconciler) findDNSRecordsForDomain(ctx context.Context, obj c
 	}
 
 	return requests
+}
+
+// validateRecordBelongsToDomain checks if a DNS record name belongs to a domain.
+// For example:
+//   - "api.example.com" belongs to "example.com" ✓
+//   - "api.staging.example.com" belongs to "example.com" ✓
+//   - "example.com" belongs to "example.com" ✓
+//   - "api.other.com" does NOT belong to "example.com" ✗
+//   - "notexample.com" does NOT belong to "example.com" ✗
+func validateRecordBelongsToDomain(recordName, domainName string) error {
+	// Exact match
+	if recordName == domainName {
+		return nil
+	}
+
+	// Suffix match: recordName must end with ".domainName"
+	suffix := "." + domainName
+	if strings.HasSuffix(recordName, suffix) {
+		return nil
+	}
+
+	return fmt.Errorf("record name %q does not belong to domain %q (expected %q or *%s)",
+		recordName, domainName, domainName, suffix)
 }
 
 func (r *DNSRecordReconciler) SetupWithManager(mgr ctrl.Manager) error {
