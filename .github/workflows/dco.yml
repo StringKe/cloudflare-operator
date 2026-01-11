@@ -4,18 +4,21 @@ on:
   pull_request:
     branches: [main]
 
+# Minimum required permissions
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
   dco:
     name: DCO Check
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     # Skip DCO check for bot users
     if: github.actor != 'dependabot[bot]'
     steps:
       - name: Check DCO
-        uses: dcoapp/app@v1
+        uses: dcoapp/app@113757536857a840e6b607a35547d7c696dfd1dd # v1.0.0
         with:
-          token: \${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
