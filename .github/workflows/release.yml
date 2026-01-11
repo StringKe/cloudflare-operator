@@ -223,7 +223,7 @@ jobs:
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
         with:
           name: installer
-          path: dist
+          path: installer-artifacts
 
       - name: Install cosign
         uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
@@ -239,9 +239,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Copy installer manifests to dist
+        run: cp installer-artifacts/*.yaml dist/
+
       - name: Sign installer manifests with cosign
         run: |
-          for file in dist/*.yaml; do
+          for file in dist/cloudflare-operator*.yaml; do
             if [ -f "${file}" ]; then
               echo "Signing ${file}..."
               cosign sign-blob --yes --output-signature "${file}.sig" --output-certificate "${file}.pem" "${file}"
@@ -255,7 +258,10 @@ jobs:
         run: |
           gh release upload "${TAG_NAME}" \
             --repo ${{ github.repository }} \
-            dist/*.yaml dist/*.sig dist/*.pem --clobber 2>/dev/null || true
+            dist/cloudflare-operator*.yaml \
+            dist/cloudflare-operator*.sig \
+            dist/cloudflare-operator*.pem \
+            --clobber
 
       - name: Attest release artifacts
         uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2 # v2.2.3
