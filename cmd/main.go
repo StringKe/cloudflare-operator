@@ -15,20 +15,28 @@ import (
 	"github.com/StringKe/cloudflare-operator/internal/controller/accessidentityprovider"
 	"github.com/StringKe/cloudflare-operator/internal/controller/accessservicetoken"
 	"github.com/StringKe/cloudflare-operator/internal/controller/accesstunnel"
-	cloudflareDomain "github.com/StringKe/cloudflare-operator/internal/controller/cloudflareDomain"
 	"github.com/StringKe/cloudflare-operator/internal/controller/cloudflarecredentials"
+	"github.com/StringKe/cloudflare-operator/internal/controller/cloudflaredomain"
 	"github.com/StringKe/cloudflare-operator/internal/controller/deviceposturerule"
 	"github.com/StringKe/cloudflare-operator/internal/controller/devicesettingspolicy"
 	"github.com/StringKe/cloudflare-operator/internal/controller/dnsrecord"
+	"github.com/StringKe/cloudflare-operator/internal/controller/domainregistration"
 	"github.com/StringKe/cloudflare-operator/internal/controller/gateway"
 	"github.com/StringKe/cloudflare-operator/internal/controller/gatewayconfiguration"
 	"github.com/StringKe/cloudflare-operator/internal/controller/gatewaylist"
 	"github.com/StringKe/cloudflare-operator/internal/controller/gatewayrule"
 	"github.com/StringKe/cloudflare-operator/internal/controller/ingress"
 	"github.com/StringKe/cloudflare-operator/internal/controller/networkroute"
+	"github.com/StringKe/cloudflare-operator/internal/controller/origincacertificate"
 	"github.com/StringKe/cloudflare-operator/internal/controller/privateservice"
+	"github.com/StringKe/cloudflare-operator/internal/controller/r2bucket"
+	"github.com/StringKe/cloudflare-operator/internal/controller/r2bucketdomain"
+	"github.com/StringKe/cloudflare-operator/internal/controller/r2bucketnotification"
+	"github.com/StringKe/cloudflare-operator/internal/controller/redirectrule"
+	"github.com/StringKe/cloudflare-operator/internal/controller/transformrule"
 	"github.com/StringKe/cloudflare-operator/internal/controller/virtualnetwork"
 	"github.com/StringKe/cloudflare-operator/internal/controller/warpconnector"
+	"github.com/StringKe/cloudflare-operator/internal/controller/zoneruleset"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -376,12 +384,76 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "CloudflareCredentials")
 		os.Exit(1)
 	}
-	if err = (&cloudflareDomain.Reconciler{
+	if err = (&cloudflaredomain.Reconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("cloudflareDomain-controller"),
+		Recorder: mgr.GetEventRecorderFor("cloudflaredomain-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "CloudflareDomain")
+		os.Exit(1)
+	}
+	if err = (&origincacertificate.Reconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("origincacertificate-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "OriginCACertificate")
+		os.Exit(1)
+	}
+	if err = (&r2bucket.Reconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("r2bucket-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "R2Bucket")
+		os.Exit(1)
+	}
+	if err = (&r2bucketdomain.Reconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("r2bucketdomain-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "R2BucketDomain")
+		os.Exit(1)
+	}
+	if err = (&r2bucketnotification.Reconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("r2bucketnotification-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "R2BucketNotification")
+		os.Exit(1)
+	}
+	if err = (&zoneruleset.Reconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("zoneruleset-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ZoneRuleset")
+		os.Exit(1)
+	}
+	if err = (&transformrule.Reconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("transformrule-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "TransformRule")
+		os.Exit(1)
+	}
+	if err = (&redirectrule.Reconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("redirectrule-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "RedirectRule")
+		os.Exit(1)
+	}
+	if err = (&domainregistration.Reconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("domainregistration-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "DomainRegistration")
 		os.Exit(1)
 	}
 	if err = (&ingress.Reconciler{

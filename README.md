@@ -7,7 +7,7 @@
   <br />
 
   <p align="center">
-    A Kubernetes Operator for Cloudflare Zero Trust: Tunnels, Access, Gateway, and Device Management
+    A Kubernetes Operator for Cloudflare Zero Trust: Tunnels, Access, Gateway, Device, DNS, R2, and Rules Management
     <br />
     <br />
     <a href="https://github.com/StringKe/cloudflare-operator/blob/main/docs/en/README.md"><strong>Documentation (English) »</strong></a>
@@ -41,7 +41,7 @@
 
 ## Overview
 
-The Cloudflare Zero Trust Operator provides Kubernetes-native management of Cloudflare Zero Trust resources. Built with `kubebuilder` and `controller-runtime`, it enables declarative configuration of tunnels, access policies, gateway rules, and device settings through Custom Resource Definitions (CRDs).
+The Cloudflare Zero Trust Operator provides Kubernetes-native management of Cloudflare Zero Trust resources. Built with `kubebuilder` and `controller-runtime`, it enables declarative configuration of tunnels, access policies, gateway rules, device settings, R2 storage, and zone rules through Custom Resource Definitions (CRDs).
 
 ## Features
 
@@ -53,6 +53,10 @@ The Cloudflare Zero Trust Operator provides Kubernetes-native management of Clou
 | **Gateway & Security** | Gateway Rules (DNS/HTTP/L4), Gateway Lists, Browser Isolation |
 | **Device Management** | Split Tunnel configuration, Fallback Domains, Device Posture Rules |
 | **DNS & Connectivity** | DNS Record management, WARP Connectors for site-to-site |
+| **Domain Management** | Zone settings (SSL/TLS, Cache, Security), Origin CA Certificates |
+| **R2 Storage** | R2 Buckets, Custom Domains, Event Notifications |
+| **Rules Engine** | Zone Rulesets, Transform Rules (URL/Header), Redirect Rules |
+| **Registrar** | Domain Registration management (Enterprise) |
 | **Kubernetes Integration** | Native Ingress support, Gateway API support (Gateway, HTTPRoute, TCPRoute, UDPRoute) |
 
 ## Architecture
@@ -172,6 +176,13 @@ tunnelRef:
 
 ## CRD Reference
 
+### Credentials & Configuration
+
+| CRD | API Version | Scope | Description |
+|-----|-------------|-------|-------------|
+| CloudflareCredentials | `networking.cloudflare-operator.io/v1alpha2` | Cluster | Cloudflare API credentials management |
+| CloudflareDomain | `networking.cloudflare-operator.io/v1alpha2` | Cluster | Zone settings (SSL/TLS, Cache, Security, WAF) |
+
 ### Tunnel Management
 
 | CRD | API Version | Scope | Description |
@@ -193,16 +204,16 @@ tunnelRef:
 | CRD | API Version | Scope | Description |
 |-----|-------------|-------|-------------|
 | AccessApplication | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | Zero Trust application |
-| AccessGroup | `networking.cloudflare-operator.io/v1alpha2` | **Cluster** | Access policy group |
-| AccessIdentityProvider | `networking.cloudflare-operator.io/v1alpha2` | **Cluster** | Identity provider config |
+| AccessGroup | `networking.cloudflare-operator.io/v1alpha2` | Cluster | Access policy group |
+| AccessIdentityProvider | `networking.cloudflare-operator.io/v1alpha2` | Cluster | Identity provider config |
 | AccessServiceToken | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | Service token for M2M |
 
 ### Gateway & Security
 
 | CRD | API Version | Scope | Description |
 |-----|-------------|-------|-------------|
-| GatewayRule | `networking.cloudflare-operator.io/v1alpha2` | **Cluster** | Gateway policy rule |
-| GatewayList | `networking.cloudflare-operator.io/v1alpha2` | **Cluster** | List for gateway rules |
+| GatewayRule | `networking.cloudflare-operator.io/v1alpha2` | Cluster | Gateway policy rule |
+| GatewayList | `networking.cloudflare-operator.io/v1alpha2` | Cluster | List for gateway rules |
 | GatewayConfiguration | `networking.cloudflare-operator.io/v1alpha2` | Cluster | Global gateway settings |
 
 ### Device Management
@@ -210,14 +221,42 @@ tunnelRef:
 | CRD | API Version | Scope | Description |
 |-----|-------------|-------|-------------|
 | DeviceSettingsPolicy | `networking.cloudflare-operator.io/v1alpha2` | Cluster | WARP client settings |
-| DevicePostureRule | `networking.cloudflare-operator.io/v1alpha2` | **Cluster** | Device posture check |
+| DevicePostureRule | `networking.cloudflare-operator.io/v1alpha2` | Cluster | Device posture check |
 
 ### DNS & Connectivity
 
 | CRD | API Version | Scope | Description |
 |-----|-------------|-------|-------------|
 | DNSRecord | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | DNS record management |
-| WARPConnector | `networking.cloudflare-operator.io/v1alpha2` | **Cluster** | WARP connector deployment |
+| WARPConnector | `networking.cloudflare-operator.io/v1alpha2` | Cluster | WARP connector deployment |
+
+### SSL/TLS & Certificates
+
+| CRD | API Version | Scope | Description |
+|-----|-------------|-------|-------------|
+| OriginCACertificate | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | Cloudflare Origin CA certificate with K8s Secret |
+
+### R2 Storage
+
+| CRD | API Version | Scope | Description |
+|-----|-------------|-------|-------------|
+| R2Bucket | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | R2 storage bucket with lifecycle rules |
+| R2BucketDomain | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | Custom domain for R2 bucket |
+| R2BucketNotification | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | Event notifications for R2 bucket |
+
+### Rules Engine
+
+| CRD | API Version | Scope | Description |
+|-----|-------------|-------|-------------|
+| ZoneRuleset | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | Zone ruleset (WAF, rate limiting, etc.) |
+| TransformRule | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | URL rewrite & header modification |
+| RedirectRule | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | URL redirect rules |
+
+### Registrar (Enterprise)
+
+| CRD | API Version | Scope | Description |
+|-----|-------------|-------|-------------|
+| DomainRegistration | `networking.cloudflare-operator.io/v1alpha2` | Cluster | Domain registration settings |
 
 ### Kubernetes Integration
 
@@ -261,6 +300,11 @@ Documentation includes:
 | DNS | `Zone:DNS:Edit` | Zone |
 | Access | `Account:Access: Apps and Policies:Edit` | Account |
 | Gateway | `Account:Zero Trust:Edit` | Account |
+| Zone Settings | `Zone:Zone Settings:Edit` | Zone |
+| SSL/TLS | `Zone:SSL and Certificates:Edit` | Zone |
+| R2 | `Account:Workers R2 Storage:Edit` | Account |
+| Rules | `Zone:Zone Rulesets:Edit` | Zone |
+| Registrar | `Account:Registrar:Edit` | Account |
 
 ## Contributing
 
@@ -276,6 +320,10 @@ This fork extends the original project with:
 - Complete Zero Trust resource support (Access, Gateway, Device management)
 - v1alpha2 API with improved resource management
 - Native Kubernetes Ingress and Gateway API integration
+- R2 Storage management (buckets, custom domains, notifications)
+- Zone settings and rules engine (SSL/TLS, Cache, WAF, Transform/Redirect rules)
+- Origin CA certificate integration
+- Domain registration management (Enterprise)
 - Enhanced error handling and status reporting
 - Comprehensive documentation and examples
 

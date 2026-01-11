@@ -7,7 +7,7 @@
   <br />
 
   <p align="center">
-    Cloudflare Zero Trust 的 Kubernetes Operator：隧道、访问控制、网关和设备管理
+    Cloudflare Zero Trust 的 Kubernetes Operator：隧道、访问控制、网关、设备、DNS、R2 和规则管理
     <br />
     <br />
     <a href="https://github.com/StringKe/cloudflare-operator/blob/main/docs/en/README.md"><strong>Documentation (English) »</strong></a>
@@ -41,7 +41,7 @@
 
 ## 概述
 
-Cloudflare Zero Trust Operator 提供 Kubernetes 原生的 Cloudflare Zero Trust 资源管理。基于 `kubebuilder` 和 `controller-runtime` 构建，通过自定义资源定义 (CRD) 实现隧道、访问策略、网关规则和设备设置的声明式配置。
+Cloudflare Zero Trust Operator 提供 Kubernetes 原生的 Cloudflare Zero Trust 资源管理。基于 `kubebuilder` 和 `controller-runtime` 构建，通过自定义资源定义 (CRD) 实现隧道、访问策略、网关规则、设备设置、R2 存储和区域规则的声明式配置。
 
 ## 功能特性
 
@@ -53,6 +53,10 @@ Cloudflare Zero Trust Operator 提供 Kubernetes 原生的 Cloudflare Zero Trust
 | **网关与安全** | 网关规则 (DNS/HTTP/L4)、网关列表、浏览器隔离 |
 | **设备管理** | Split Tunnel 配置、回退域、设备态势规则 |
 | **DNS 与连接** | DNS 记录管理、WARP Connector 站点连接 |
+| **域名管理** | Zone 设置 (SSL/TLS、缓存、安全)、Origin CA 证书 |
+| **R2 存储** | R2 存储桶、自定义域名、事件通知 |
+| **规则引擎** | Zone 规则集、转换规则 (URL/Header)、重定向规则 |
+| **域名注册** | 域名注册管理 (Enterprise) |
 | **Kubernetes 集成** | 原生 Ingress 支持、Gateway API 支持 (Gateway, HTTPRoute, TCPRoute, UDPRoute) |
 
 ## 架构
@@ -172,6 +176,13 @@ tunnelRef:
 
 ## CRD 参考
 
+### 凭证与配置
+
+| CRD | API 版本 | 作用域 | 说明 |
+|-----|---------|--------|------|
+| CloudflareCredentials | `networking.cloudflare-operator.io/v1alpha2` | Cluster | Cloudflare API 凭证管理 |
+| CloudflareDomain | `networking.cloudflare-operator.io/v1alpha2` | Cluster | Zone 设置 (SSL/TLS、缓存、安全、WAF) |
+
 ### 隧道管理
 
 | CRD | API 版本 | 作用域 | 说明 |
@@ -193,16 +204,16 @@ tunnelRef:
 | CRD | API 版本 | 作用域 | 说明 |
 |-----|---------|--------|------|
 | AccessApplication | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | Zero Trust 应用 |
-| AccessGroup | `networking.cloudflare-operator.io/v1alpha2` | **Cluster** | 访问策略组 |
-| AccessIdentityProvider | `networking.cloudflare-operator.io/v1alpha2` | **Cluster** | 身份提供商配置 |
+| AccessGroup | `networking.cloudflare-operator.io/v1alpha2` | Cluster | 访问策略组 |
+| AccessIdentityProvider | `networking.cloudflare-operator.io/v1alpha2` | Cluster | 身份提供商配置 |
 | AccessServiceToken | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | M2M 服务令牌 |
 
 ### 网关与安全
 
 | CRD | API 版本 | 作用域 | 说明 |
 |-----|---------|--------|------|
-| GatewayRule | `networking.cloudflare-operator.io/v1alpha2` | **Cluster** | 网关策略规则 |
-| GatewayList | `networking.cloudflare-operator.io/v1alpha2` | **Cluster** | 网关规则使用的列表 |
+| GatewayRule | `networking.cloudflare-operator.io/v1alpha2` | Cluster | 网关策略规则 |
+| GatewayList | `networking.cloudflare-operator.io/v1alpha2` | Cluster | 网关规则使用的列表 |
 | GatewayConfiguration | `networking.cloudflare-operator.io/v1alpha2` | Cluster | 全局网关设置 |
 
 ### 设备管理
@@ -210,14 +221,42 @@ tunnelRef:
 | CRD | API 版本 | 作用域 | 说明 |
 |-----|---------|--------|------|
 | DeviceSettingsPolicy | `networking.cloudflare-operator.io/v1alpha2` | Cluster | WARP 客户端设置 |
-| DevicePostureRule | `networking.cloudflare-operator.io/v1alpha2` | **Cluster** | 设备态势检查 |
+| DevicePostureRule | `networking.cloudflare-operator.io/v1alpha2` | Cluster | 设备态势检查 |
 
 ### DNS 与连接
 
 | CRD | API 版本 | 作用域 | 说明 |
 |-----|---------|--------|------|
 | DNSRecord | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | DNS 记录管理 |
-| WARPConnector | `networking.cloudflare-operator.io/v1alpha2` | **Cluster** | WARP Connector 部署 |
+| WARPConnector | `networking.cloudflare-operator.io/v1alpha2` | Cluster | WARP Connector 部署 |
+
+### SSL/TLS 与证书
+
+| CRD | API 版本 | 作用域 | 说明 |
+|-----|---------|--------|------|
+| OriginCACertificate | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | Cloudflare Origin CA 证书，自动创建 K8s Secret |
+
+### R2 存储
+
+| CRD | API 版本 | 作用域 | 说明 |
+|-----|---------|--------|------|
+| R2Bucket | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | R2 存储桶，支持生命周期规则 |
+| R2BucketDomain | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | R2 存储桶自定义域名 |
+| R2BucketNotification | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | R2 存储桶事件通知 |
+
+### 规则引擎
+
+| CRD | API 版本 | 作用域 | 说明 |
+|-----|---------|--------|------|
+| ZoneRuleset | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | Zone 规则集 (WAF、速率限制等) |
+| TransformRule | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | URL 重写和 Header 修改 |
+| RedirectRule | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | URL 重定向规则 |
+
+### 域名注册 (Enterprise)
+
+| CRD | API 版本 | 作用域 | 说明 |
+|-----|---------|--------|------|
+| DomainRegistration | `networking.cloudflare-operator.io/v1alpha2` | Cluster | 域名注册设置 |
 
 ### Kubernetes 集成
 
@@ -261,6 +300,11 @@ tunnelRef:
 | DNS | `Zone:DNS:Edit` | Zone |
 | Access | `Account:Access: Apps and Policies:Edit` | Account |
 | Gateway | `Account:Zero Trust:Edit` | Account |
+| Zone 设置 | `Zone:Zone Settings:Edit` | Zone |
+| SSL/TLS | `Zone:SSL and Certificates:Edit` | Zone |
+| R2 | `Account:Workers R2 Storage:Edit` | Account |
+| 规则 | `Zone:Zone Rulesets:Edit` | Zone |
+| 域名注册 | `Account:Registrar:Edit` | Account |
 
 ## 贡献
 
@@ -276,6 +320,10 @@ tunnelRef:
 - 完整的 Zero Trust 资源支持（Access、Gateway、Device 管理）
 - v1alpha2 API 及改进的资源管理
 - 原生 Kubernetes Ingress 和 Gateway API 集成
+- R2 存储管理（存储桶、自定义域名、通知）
+- Zone 设置和规则引擎（SSL/TLS、缓存、WAF、转换/重定向规则）
+- Origin CA 证书集成
+- 域名注册管理（Enterprise）
 - 增强的错误处理和状态报告
 - 完善的文档和示例
 

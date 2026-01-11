@@ -54,6 +54,24 @@ type CloudflareDomainSpec struct {
 	// This is useful for advanced scenarios or when automatic lookup fails.
 	// +kubebuilder:validation:Optional
 	ZoneID string `json:"zoneId,omitempty"`
+
+	// ========== Zone Settings (optional) ==========
+
+	// SSL configures SSL/TLS settings for this domain
+	// +kubebuilder:validation:Optional
+	SSL *SSLConfig `json:"ssl,omitempty"`
+
+	// Cache configures caching settings for this domain
+	// +kubebuilder:validation:Optional
+	Cache *CacheConfig `json:"cache,omitempty"`
+
+	// Security configures security settings for this domain
+	// +kubebuilder:validation:Optional
+	Security *SecurityConfig `json:"security,omitempty"`
+
+	// Performance configures performance settings for this domain
+	// +kubebuilder:validation:Optional
+	Performance *PerformanceConfig `json:"performance,omitempty"`
 }
 
 // CloudflareDomainStatus defines the observed state of CloudflareDomain
@@ -97,6 +115,10 @@ type CloudflareDomainStatus struct {
 	// Message provides additional information about the current state
 	// +optional
 	Message string `json:"message,omitempty"`
+
+	// ConfigSyncStatus represents the sync status of zone settings
+	// +optional
+	ConfigSyncStatus *ConfigSyncStatus `json:"configSyncStatus,omitempty"`
 }
 
 // +kubebuilder:object:root=true

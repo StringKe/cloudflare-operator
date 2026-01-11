@@ -33,6 +33,18 @@ resources:
 # Kubernetes Integration CRDs
 - bases/networking.cloudflare-operator.io_tunnelingressclassconfigs.yaml
 - bases/networking.cloudflare-operator.io_tunnelgatewayclassconfigs.yaml
+# SSL/TLS CRDs
+- bases/networking.cloudflare-operator.io_origincacertificates.yaml
+# R2 Storage CRDs
+- bases/networking.cloudflare-operator.io_r2buckets.yaml
+- bases/networking.cloudflare-operator.io_r2bucketdomains.yaml
+- bases/networking.cloudflare-operator.io_r2bucketnotifications.yaml
+# Rules Engine CRDs
+- bases/networking.cloudflare-operator.io_zonerulesets.yaml
+- bases/networking.cloudflare-operator.io_transformrules.yaml
+- bases/networking.cloudflare-operator.io_redirectrules.yaml
+# Registrar CRDs (Enterprise)
+- bases/networking.cloudflare-operator.io_domainregistrations.yaml
 #+kubebuilder:scaffold:crdkustomizeresource
 
 patches:

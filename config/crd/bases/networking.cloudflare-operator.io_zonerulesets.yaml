@@ -1,0 +1,649 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  name: zonerulesets.networking.cloudflare-operator.io
+spec:
+  group: networking.cloudflare-operator.io
+  names:
+    kind: ZoneRuleset
+    listKind: ZoneRulesetList
+    plural: zonerulesets
+    shortNames:
+    - cfzr
+    - zoneruleset
+    singular: zoneruleset
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.zone
+      name: Zone
+      type: string
+    - jsonPath: .spec.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.ruleCount
+      name: Rules
+      type: integer
+    - jsonPath: .status.state
+      name: State
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ZoneRuleset manages Cloudflare zone rulesets.
+          Rulesets are the backbone of Cloudflare Rules (Transform Rules, Redirect Rules,
+          Cache Rules, Configuration Rules, WAF Custom Rules, etc.).
+
+          Each ZoneRuleset manages rules for a specific phase (entry point) in the
+          request processing pipeline.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ZoneRulesetSpec defines the desired state of ZoneRuleset
+            properties:
+              credentialsRef:
+                description: |-
+                  CredentialsRef references a CloudflareCredentials resource
+                  If not specified, the default CloudflareCredentials will be used
+                properties:
+                  name:
+                    description: Name of the CloudflareCredentials resource
+                    type: string
+                required:
+                - name
+                type: object
+              description:
+                description: Description is a human-readable description of the ruleset
+                type: string
+              phase:
+                description: Phase is the ruleset phase/entry point
+                enum:
+                - http_request_transform
+                - http_request_late_transform
+                - http_request_origin
+                - http_request_redirect
+                - http_request_dynamic_redirect
+                - http_request_cache_settings
+                - http_config_settings
+                - http_custom_errors
+                - http_response_headers_transform
+                - http_response_compression
+                - http_ratelimit
+                - http_request_firewall_custom
+                - http_request_firewall_managed
+                - http_response_firewall_managed
+                type: string
+              rules:
+                description: Rules are the rules in this ruleset
+                items:
+                  description: RulesetRule defines a single rule in the ruleset
+                  properties:
+                    action:
+                      description: Action is the action to take when the expression
+                        matches
+                      enum:
+                      - block
+                      - challenge
+                      - js_challenge
+                      - managed_challenge
+                      - log
+                      - skip
+                      - rewrite
+                      - redirect
+                      - route
+                      - score
+                      - execute
+                      - set_config
+                      - set_cache_settings
+                      - serve_error
+                      - compress_response
+                      type: string
+                    actionParameters:
+                      description: ActionParameters contains parameters for the action
+                      properties:
+                        algorithms:
+                          description: Algorithms contains compression algorithms
+                          items:
+                            description: RulesetCompressionAlgorithm defines a compression
+                              algorithm
+                            properties:
+                              name:
+                                description: Name is the algorithm name (gzip, brotli,
+                                  auto, none)
+                                enum:
+                                - gzip
+                                - brotli
+                                - auto
+                                - none
+                                type: string
+                            required:
+                            - name
+                            type: object
+                          type: array
+                        cache:
+                          description: Cache contains cache settings
+                          properties:
+                            browserTtl:
+                              description: BrowserTTL sets the browser cache TTL
+                              properties:
+                                default:
+                                  description: Default is the default TTL in seconds
+                                  type: integer
+                                mode:
+                                  description: Mode is the TTL mode (respect_origin,
+                                    bypass_by_default, override_origin)
+                                  enum:
+                                  - respect_origin
+                                  - bypass_by_default
+                                  - override_origin
+                                  type: string
+                                statusCodeTtl:
+                                  description: StatusCodeTTL sets TTL based on status
+                                    codes
+                                  items:
+                                    description: RulesetStatusCodeTTL defines TTL
+                                      for specific status codes
+                                    properties:
+                                      statusCodeRange:
+                                        description: StatusCodeRange is the status
+                                          code range (e.g., "200-299")
+                                        properties:
+                                          from:
+                                            description: From is the start of the
+                                              range
+                                            type: integer
+                                          to:
+                                            description: To is the end of the range
+                                            type: integer
+                                        required:
+                                        - from
+                                        - to
+                                        type: object
+                                      statusCodeValue:
+                                        description: StatusCodeValue is a single status
+                                          code
+                                        type: integer
+                                      value:
+                                        description: Value is the TTL value in seconds
+                                        type: integer
+                                    required:
+                                    - value
+                                    type: object
+                                  type: array
+                              type: object
+                            cache:
+                              description: Cache enables or disables caching
+                              type: boolean
+                            cacheKey:
+                              description: CacheKey customizes the cache key
+                              properties:
+                                cacheDeceptionArmor:
+                                  description: CacheDeceptionArmor enables cache deception
+                                    armor
+                                  type: boolean
+                                cookie:
+                                  description: Cookie customizes cookie-based cache
+                                    key
+                                  properties:
+                                    checkPresence:
+                                      description: CheckPresence checks for cookie
+                                        presence
+                                      items:
+                                        type: string
+                                      type: array
+                                    include:
+                                      description: Include includes cookies
+                                      items:
+                                        type: string
+                                      type: array
+                                  type: object
+                                header:
+                                  description: Header customizes header-based cache
+                                    key
+                                  properties:
+                                    checkPresence:
+                                      description: CheckPresence checks for header
+                                        presence
+                                      items:
+                                        type: string
+                                      type: array
+                                    excludeOrigin:
+                                      description: ExcludeOrigin excludes origin headers
+                                      type: boolean
+                                    include:
+                                      description: Include includes headers
+                                      items:
+                                        type: string
+                                      type: array
+                                  type: object
+                                host:
+                                  description: Host customizes host-based cache key
+                                  properties:
+                                    resolved:
+                                      description: Resolved uses the resolved host
+                                      type: boolean
+                                  type: object
+                                ignoreQueryStringsOrder:
+                                  description: IgnoreQueryStringsOrder ignores query
+                                    string order
+                                  type: boolean
+                                queryString:
+                                  description: QueryString customizes query string
+                                    handling
+                                  properties:
+                                    exclude:
+                                      description: Exclude excludes query parameters
+                                      properties:
+                                        all:
+                                          description: All includes/excludes all query
+                                            parameters
+                                          type: boolean
+                                        list:
+                                          description: List is a list of query parameter
+                                            names
+                                          items:
+                                            type: string
+                                          type: array
+                                      type: object
+                                    include:
+                                      description: Include includes query parameters
+                                      properties:
+                                        all:
+                                          description: All includes/excludes all query
+                                            parameters
+                                          type: boolean
+                                        list:
+                                          description: List is a list of query parameter
+                                            names
+                                          items:
+                                            type: string
+                                          type: array
+                                      type: object
+                                  type: object
+                                user:
+                                  description: User customizes user-based cache key
+                                  properties:
+                                    deviceType:
+                                      description: DeviceType includes device type
+                                      type: boolean
+                                    geo:
+                                      description: Geo includes geolocation
+                                      type: boolean
+                                    lang:
+                                      description: Lang includes language
+                                      type: boolean
+                                  type: object
+                              type: object
+                            edgeTtl:
+                              description: EdgeTTL sets the edge cache TTL
+                              properties:
+                                default:
+                                  description: Default is the default TTL in seconds
+                                  type: integer
+                                mode:
+                                  description: Mode is the TTL mode (respect_origin,
+                                    bypass_by_default, override_origin)
+                                  enum:
+                                  - respect_origin
+                                  - bypass_by_default
+                                  - override_origin
+                                  type: string
+                                statusCodeTtl:
+                                  description: StatusCodeTTL sets TTL based on status
+                                    codes
+                                  items:
+                                    description: RulesetStatusCodeTTL defines TTL
+                                      for specific status codes
+                                    properties:
+                                      statusCodeRange:
+                                        description: StatusCodeRange is the status
+                                          code range (e.g., "200-299")
+                                        properties:
+                                          from:
+                                            description: From is the start of the
+                                              range
+                                            type: integer
+                                          to:
+                                            description: To is the end of the range
+                                            type: integer
+                                        required:
+                                        - from
+                                        - to
+                                        type: object
+                                      statusCodeValue:
+                                        description: StatusCodeValue is a single status
+                                          code
+                                        type: integer
+                                      value:
+                                        description: Value is the TTL value in seconds
+                                        type: integer
+                                    required:
+                                    - value
+                                    type: object
+                                  type: array
+                              type: object
+                            originErrorPagePassthru:
+                              description: OriginErrorPagePassthru passes through
+                                origin error pages
+                              type: boolean
+                            respectStrongEtags:
+                              description: RespectStrongETags respects strong ETags
+                              type: boolean
+                          type: object
+                        headers:
+                          additionalProperties:
+                            description: RulesetHeaderAction defines a header modification
+                              action
+                            properties:
+                              expression:
+                                description: Expression is a dynamic expression for
+                                  the value
+                                type: string
+                              operation:
+                                description: Operation is the header operation (set,
+                                  add, remove)
+                                enum:
+                                - set
+                                - add
+                                - remove
+                                type: string
+                              value:
+                                description: Value is the header value (for set/add
+                                  operations)
+                                type: string
+                            required:
+                            - operation
+                            type: object
+                          description: Headers contains header modification parameters
+                          type: object
+                        origin:
+                          description: Origin contains origin override parameters
+                          properties:
+                            host:
+                              description: Host overrides the Host header
+                              type: string
+                            port:
+                              description: Port overrides the port
+                              type: integer
+                          type: object
+                        phases:
+                          description: Phases lists phases to skip (for skip action)
+                          items:
+                            type: string
+                          type: array
+                        products:
+                          description: Products lists products to skip (for skip action)
+                          items:
+                            type: string
+                          type: array
+                        redirect:
+                          description: Redirect contains redirect parameters
+                          properties:
+                            includeSubdomains:
+                              description: IncludeSubdomains applies to subdomains
+                              type: boolean
+                            preserveQueryString:
+                              description: PreserveQueryString preserves the original
+                                query string
+                              type: boolean
+                            sourceUrl:
+                              description: SourceURL is the URL pattern to match
+                              type: string
+                            statusCode:
+                              description: StatusCode is the HTTP status code (301,
+                                302, 307, 308)
+                              enum:
+                              - 301
+                              - 302
+                              - 307
+                              - 308
+                              type: integer
+                            subpathMatching:
+                              description: SubpathMatching enables subpath matching
+                              type: boolean
+                            targetUrl:
+                              description: TargetURL is the redirect destination
+                              properties:
+                                expression:
+                                  description: Expression is a dynamic expression
+                                  type: string
+                                value:
+                                  description: Value is a static value
+                                  type: string
+                              type: object
+                          type: object
+                        response:
+                          description: Response contains custom error response parameters
+                          properties:
+                            content:
+                              description: Content is the response body
+                              type: string
+                            contentType:
+                              description: ContentType is the response content type
+                              type: string
+                            statusCode:
+                              description: StatusCode is the HTTP status code
+                              type: integer
+                          type: object
+                        rules:
+                          additionalProperties:
+                            items:
+                              type: string
+                            type: array
+                          description: Rules lists rule IDs to skip (for skip action)
+                          type: object
+                        ruleset:
+                          description: Ruleset is the ID of ruleset to execute (for
+                            execute action)
+                          type: string
+                        uri:
+                          description: URI contains URL rewrite parameters
+                          properties:
+                            path:
+                              description: Path is the new path (can use expressions)
+                              properties:
+                                expression:
+                                  description: Expression is a dynamic expression
+                                  type: string
+                                value:
+                                  description: Value is a static value
+                                  type: string
+                              type: object
+                            query:
+                              description: Query is the new query string (can use
+                                expressions)
+                              properties:
+                                expression:
+                                  description: Expression is a dynamic expression
+                                  type: string
+                                value:
+                                  description: Value is a static value
+                                  type: string
+                              type: object
+                          type: object
+                      type: object
+                    description:
+                      description: Description is a human-readable description of
+                        the rule
+                      type: string
+                    enabled:
+                      default: true
+                      description: Enabled controls whether the rule is active
+                      type: boolean
+                    expression:
+                      description: Expression is the filter expression (Cloudflare
+                        Rules language)
+                      type: string
+                    rateLimit:
+                      description: RateLimit defines rate limiting parameters (for
+                        http_ratelimit phase)
+                      properties:
+                        characteristics:
+                          description: Characteristics defines what to count for rate
+                            limiting
+                          items:
+                            type: string
+                          type: array
+                        countingExpression:
+                          description: CountingExpression is the expression for counting
+                          type: string
+                        mitigationTimeout:
+                          description: MitigationTimeout is the block duration in
+                            seconds
+                          type: integer
+                        period:
+                          description: Period is the period in seconds
+                          type: integer
+                        requestsPerPeriod:
+                          description: RequestsPerPeriod is the request limit
+                          type: integer
+                        requestsToOrigin:
+                          description: RequestsToOrigin counts only requests to origin
+                          type: boolean
+                        scorePerPeriod:
+                          description: ScorePerPeriod is the score limit (for complexity-based
+                            limiting)
+                          type: integer
+                        scoreResponseHeaderName:
+                          description: ScoreResponseHeaderName is the header for score
+                            reporting
+                          type: string
+                      type: object
+                    ref:
+                      description: Ref is a reference ID for the rule (for ordering)
+                      type: string
+                  required:
+                  - action
+                  - expression
+                  type: object
+                minItems: 1
+                type: array
+              zone:
+                description: Zone is the zone name (domain) to apply rules to
+                type: string
+            required:
+            - phase
+            - rules
+            - zone
+            type: object
+          status:
+            description: ZoneRulesetStatus defines the observed state of ZoneRuleset
+            properties:
+              conditions:
+                description: Conditions represent the latest available observations
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              lastUpdated:
+                description: LastUpdated is the last time the ruleset was updated
+                format: date-time
+                type: string
+              message:
+                description: Message provides additional information about the current
+                  state
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the most recent generation observed
+                format: int64
+                type: integer
+              ruleCount:
+                description: RuleCount is the number of rules in the ruleset
+                type: integer
+              rulesetId:
+                description: RulesetID is the Cloudflare ruleset ID
+                type: string
+              rulesetVersion:
+                description: RulesetVersion is the current ruleset version
+                type: string
+              state:
+                description: State represents the current state of the ruleset
+                enum:
+                - Pending
+                - Syncing
+                - Ready
+                - Error
+                type: string
+              zoneId:
+                description: ZoneID is the Cloudflare zone ID
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

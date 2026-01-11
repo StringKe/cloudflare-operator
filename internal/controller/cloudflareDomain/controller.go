@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2025-2026 The Cloudflare Operator Authors
 
-package cloudflareDomain
+package cloudflaredomain
 
 import (
 	"context"
@@ -107,6 +107,26 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			r.updateState(networkingv1alpha2.CloudflareDomainStateError, err.Error())
 			r.Recorder.Event(r.domain, corev1.EventTypeWarning, "DuplicateDefault", err.Error())
 			return ctrl.Result{}, nil
+		}
+	}
+
+	// Sync zone settings if configured
+	if r.domain.Spec.SSL != nil || r.domain.Spec.Cache != nil ||
+		r.domain.Spec.Security != nil || r.domain.Spec.Performance != nil {
+		cfClient, err := r.createCloudflareClient(creds)
+		if err != nil {
+			r.updateState(networkingv1alpha2.CloudflareDomainStateError, fmt.Sprintf("Failed to create Cloudflare client: %v", err))
+			r.Recorder.Event(r.domain, corev1.EventTypeWarning, controller.EventReasonAPIError, err.Error())
+			return ctrl.Result{RequeueAfter: time.Minute}, nil
+		}
+
+		if err := r.syncZoneSettings(cfClient); err != nil {
+			r.log.Error(err, "Failed to sync zone settings")
+			r.Recorder.Event(r.domain, corev1.EventTypeWarning, "SettingsSyncFailed", err.Error())
+			// Don't fail the entire reconciliation, just log the error
+			// Settings sync is best-effort
+		} else {
+			r.Recorder.Event(r.domain, corev1.EventTypeNormal, "SettingsSynced", "Zone settings synchronized successfully")
 		}
 	}
 

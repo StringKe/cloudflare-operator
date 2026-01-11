@@ -1,0 +1,294 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  name: r2buckets.networking.cloudflare-operator.io
+spec:
+  group: networking.cloudflare-operator.io
+  names:
+    kind: R2Bucket
+    listKind: R2BucketList
+    plural: r2buckets
+    shortNames:
+    - cfr2
+    - r2bucket
+    singular: r2bucket
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.bucketName
+      name: Bucket
+      type: string
+    - jsonPath: .status.location
+      name: Location
+      type: string
+    - jsonPath: .status.state
+      name: State
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          R2Bucket manages a Cloudflare R2 storage bucket.
+          R2 is Cloudflare's S3-compatible object storage service.
+
+          The controller creates and manages R2 buckets in your Cloudflare account.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: R2BucketSpec defines the desired state of R2Bucket
+            properties:
+              cors:
+                description: CORS defines the Cross-Origin Resource Sharing rules
+                  for the bucket
+                items:
+                  description: R2CORSRule defines a CORS rule for the bucket
+                  properties:
+                    allowedHeaders:
+                      description: AllowedHeaders is a list of headers that are allowed
+                        in requests
+                      items:
+                        type: string
+                      type: array
+                    allowedMethods:
+                      description: AllowedMethods is a list of HTTP methods that are
+                        allowed
+                      items:
+                        type: string
+                      minItems: 1
+                      type: array
+                    allowedOrigins:
+                      description: |-
+                        AllowedOrigins is a list of origins that are allowed
+                        Use "*" to allow all origins
+                      items:
+                        type: string
+                      minItems: 1
+                      type: array
+                    exposeHeaders:
+                      description: ExposeHeaders is a list of headers that can be
+                        exposed to the browser
+                      items:
+                        type: string
+                      type: array
+                    id:
+                      description: ID is an optional identifier for the rule
+                      type: string
+                    maxAgeSeconds:
+                      description: MaxAgeSeconds is the number of seconds the browser
+                        can cache the preflight response
+                      minimum: 0
+                      type: integer
+                  required:
+                  - allowedMethods
+                  - allowedOrigins
+                  type: object
+                type: array
+              credentialsRef:
+                description: |-
+                  CredentialsRef references a CloudflareCredentials resource
+                  If not specified, the default CloudflareCredentials will be used
+                properties:
+                  name:
+                    description: Name of the CloudflareCredentials resource
+                    type: string
+                required:
+                - name
+                type: object
+              deletionPolicy:
+                default: Delete
+                description: |-
+                  DeletionPolicy specifies what happens when the Kubernetes resource is deleted
+                  Delete: The R2 bucket will be deleted from Cloudflare
+                  Orphan: The R2 bucket will be left in Cloudflare
+                enum:
+                - Delete
+                - Orphan
+                type: string
+              lifecycle:
+                description: Lifecycle defines the object lifecycle rules for the
+                  bucket
+                items:
+                  description: R2LifecycleRule defines a lifecycle rule for the bucket
+                  properties:
+                    abortIncompleteMultipartUpload:
+                      description: AbortIncompleteMultipartUpload defines when to
+                        abort incomplete multipart uploads
+                      properties:
+                        daysAfterInitiation:
+                          description: DaysAfterInitiation is the number of days after
+                            which incomplete uploads are aborted
+                          minimum: 1
+                          type: integer
+                      required:
+                      - daysAfterInitiation
+                      type: object
+                    enabled:
+                      default: true
+                      description: Enabled indicates if this rule is active
+                      type: boolean
+                    expiration:
+                      description: Expiration defines when objects should be deleted
+                      properties:
+                        date:
+                          description: Date is the specific date when objects expire
+                            (ISO 8601 format)
+                          type: string
+                        days:
+                          description: Days is the number of days after object creation
+                            when the object expires
+                          minimum: 1
+                          type: integer
+                      type: object
+                    id:
+                      description: ID is a unique identifier for the rule
+                      type: string
+                    prefix:
+                      description: Prefix limits the rule to objects with this key
+                        prefix
+                      type: string
+                  required:
+                  - id
+                  type: object
+                type: array
+              locationHint:
+                description: |-
+                  LocationHint specifies the preferred location for the bucket
+                  Cloudflare will attempt to place the bucket in this location,
+                  but may use a different location if unavailable
+                enum:
+                - apac
+                - eeur
+                - enam
+                - weur
+                - wnam
+                type: string
+              name:
+                description: |-
+                  Name is the name of the R2 bucket in Cloudflare
+                  If not specified, defaults to the Kubernetes resource name
+                pattern: ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$
+                type: string
+            type: object
+          status:
+            description: R2BucketStatus defines the observed state of R2Bucket
+            properties:
+              bucketName:
+                description: BucketName is the actual name of the bucket in Cloudflare
+                type: string
+              conditions:
+                description: Conditions represent the latest available observations
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              corsRulesCount:
+                description: CORSRulesCount is the number of CORS rules configured
+                type: integer
+              createdAt:
+                description: CreatedAt is the time the bucket was created in Cloudflare
+                format: date-time
+                type: string
+              lifecycleRulesCount:
+                description: LifecycleRulesCount is the number of lifecycle rules
+                  configured
+                type: integer
+              location:
+                description: Location is the actual location where the bucket was
+                  created
+                type: string
+              message:
+                description: Message provides additional information about the current
+                  state
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the most recent generation observed
+                format: int64
+                type: integer
+              state:
+                description: State represents the current state of the bucket
+                enum:
+                - Pending
+                - Creating
+                - Ready
+                - Deleting
+                - Error
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

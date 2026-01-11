@@ -20,12 +20,12 @@
 - **Group**: `networking.cloudflare-operator.io`
 - **版本**: v1alpha1 (deprecated), v1alpha2 (storage version)
 
-### 已实现的 CRD (22个)
+### 已实现的 CRD (30个)
 
 | 类别 | CRD | 作用域 | 状态 |
 |------|-----|--------|------|
 | **凭证** | CloudflareCredentials | Cluster | ✅ 完成 |
-| **域名** | CloudflareDomain | Cluster | ✅ 完成 (v0.19.0+) |
+| **域名配置** | CloudflareDomain | Cluster | ✅ 完成 (SSL/TLS, 缓存, 安全, WAF) |
 | **网络层** | Tunnel | Namespaced | ✅ 完成 |
 | | ClusterTunnel | Cluster | ✅ 完成 |
 | | VirtualNetwork | Cluster | ✅ 完成 |
@@ -44,6 +44,14 @@
 | **网关层** | GatewayRule | Cluster | ⚠️ 框架完成 |
 | | GatewayList | Cluster | ⚠️ 框架完成 |
 | | GatewayConfiguration | Cluster | ✅ 完成 |
+| **SSL/TLS** | OriginCACertificate | Namespaced | ✅ 完成 (自动 K8s Secret) |
+| **R2 存储** | R2Bucket | Namespaced | ✅ 完成 (生命周期规则) |
+| | R2BucketDomain | Namespaced | ✅ 完成 (自定义域名) |
+| | R2BucketNotification | Namespaced | ✅ 完成 (事件通知) |
+| **规则引擎** | ZoneRuleset | Namespaced | ✅ 完成 (WAF, 速率限制等) |
+| | TransformRule | Namespaced | ✅ 完成 (URL/Header 转换) |
+| | RedirectRule | Namespaced | ✅ 完成 (重定向规则) |
+| **域名注册** | DomainRegistration | Cluster | ✅ 完成 (Enterprise) |
 | **K8s 集成** | TunnelIngressClassConfig | Cluster | ⚠️ 框架完成 |
 | | TunnelGatewayClassConfig | Cluster | ⚠️ 框架完成 |
 

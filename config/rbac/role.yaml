@@ -97,15 +97,23 @@ rules:
   - deviceposturerules
   - devicesettingspolicies
   - dnsrecords
+  - domainregistrations
   - gatewayconfigurations
   - gatewaylists
   - gatewayrules
   - networkroutes
+  - origincacertificates
   - privateservices
+  - r2bucketdomains
+  - r2bucketnotifications
+  - r2buckets
+  - redirectrules
+  - transformrules
   - tunnelbindings
   - tunnels
   - virtualnetworks
   - warpconnectors
+  - zonerulesets
   verbs:
   - create
   - delete
@@ -127,15 +135,23 @@ rules:
   - deviceposturerules/finalizers
   - devicesettingspolicies/finalizers
   - dnsrecords/finalizers
+  - domainregistrations/finalizers
   - gatewayconfigurations/finalizers
   - gatewaylists/finalizers
   - gatewayrules/finalizers
   - networkroutes/finalizers
+  - origincacertificates/finalizers
   - privateservices/finalizers
+  - r2bucketdomains/finalizers
+  - r2bucketnotifications/finalizers
+  - r2buckets/finalizers
+  - redirectrules/finalizers
+  - transformrules/finalizers
   - tunnelbindings/finalizers
   - tunnels/finalizers
   - virtualnetworks/finalizers
   - warpconnectors/finalizers
+  - zonerulesets/finalizers
   verbs:
   - update
 - apiGroups:
@@ -152,16 +168,24 @@ rules:
   - deviceposturerules/status
   - devicesettingspolicies/status
   - dnsrecords/status
+  - domainregistrations/status
   - gatewayconfigurations/status
   - gatewaylists/status
   - gatewayrules/status
   - networkroutes/status
+  - origincacertificates/status
   - privateservices/status
+  - r2bucketdomains/status
+  - r2bucketnotifications/status
+  - r2buckets/status
+  - redirectrules/status
+  - transformrules/status
   - tunnelbindings/status
   - tunnelingressclassconfigs/status
   - tunnels/status
   - virtualnetworks/status
   - warpconnectors/status
+  - zonerulesets/status
   verbs:
   - get
   - patch

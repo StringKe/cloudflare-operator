@@ -69,6 +69,76 @@ spec:
           spec:
             description: CloudflareDomainSpec defines the desired state of CloudflareDomain
             properties:
+              cache:
+                description: Cache configures caching settings for this domain
+                properties:
+                  alwaysOnline:
+                    default: true
+                    description: AlwaysOnline serves stale content when origin is
+                      unavailable
+                    type: boolean
+                  browserTTL:
+                    description: |-
+                      BrowserTTL sets the browser cache TTL in seconds
+                      Minimum: 0 (respect origin), Maximum: 31536000 (1 year)
+                    maximum: 31536000
+                    minimum: 0
+                    type: integer
+                  cacheByDeviceType:
+                    default: false
+                    description: |-
+                      CacheByDeviceType caches content separately for mobile/desktop
+                      Requires Enterprise plan
+                    type: boolean
+                  cacheLevel:
+                    default: aggressive
+                    description: CacheLevel sets the cache level
+                    enum:
+                    - bypass
+                    - basic
+                    - simplified
+                    - aggressive
+                    type: string
+                  cacheReserve:
+                    description: CacheReserve configures persistent cache storage
+                    properties:
+                      enabled:
+                        default: false
+                        description: Enabled enables Cache Reserve
+                        type: boolean
+                    type: object
+                  developmentMode:
+                    default: false
+                    description: |-
+                      DevelopmentMode temporarily bypasses cache for development
+                      Automatically disables after 3 hours
+                    type: boolean
+                  sortQueryStringForCache:
+                    default: false
+                    description: |-
+                      SortQueryStringForCache treats query strings with same parameters
+                      but different order as the same for caching purposes
+                      Requires Enterprise plan
+                    type: boolean
+                  tieredCache:
+                    description: TieredCache configures tiered caching
+                    properties:
+                      enabled:
+                        default: true
+                        description: Enabled enables tiered caching
+                        type: boolean
+                      topology:
+                        default: smart
+                        description: |-
+                          Topology sets the tiered cache topology
+                          - smart: Dynamically selects the best upper tier
+                          - generic: Uses regional hub data centers
+                        enum:
+                        - smart
+                        - generic
+                        type: string
+                    type: object
+                type: object
               credentialsRef:
                 description: |-
                   CredentialsRef references a CloudflareCredentials resource for API access.
@@ -93,6 +163,219 @@ spec:
                   Only one CloudflareDomain can be marked as default.
                   When multiple hostnames need zone lookup, the longest suffix match is used.
                 type: boolean
+              performance:
+                description: Performance configures performance settings for this
+                  domain
+                properties:
+                  brotli:
+                    default: true
+                    description: Brotli enables Brotli compression
+                    type: boolean
+                  earlyHints:
+                    default: true
+                    description: EarlyHints enables 103 Early Hints
+                    type: boolean
+                  http2:
+                    default: true
+                    description: HTTP2 enables HTTP/2 support
+                    type: boolean
+                  http3:
+                    default: true
+                    description: HTTP3 enables HTTP/3 (QUIC) support
+                    type: boolean
+                  ipGeolocation:
+                    default: true
+                    description: IPGeolocation adds visitor's country to request headers
+                    type: boolean
+                  minify:
+                    description: Minify configures code minification
+                    properties:
+                      css:
+                        default: false
+                        description: CSS enables CSS minification
+                        type: boolean
+                      html:
+                        default: false
+                        description: HTML enables HTML minification
+                        type: boolean
+                      javascript:
+                        default: false
+                        description: JavaScript enables JavaScript minification
+                        type: boolean
+                    type: object
+                  mirage:
+                    default: false
+                    description: |-
+                      Mirage enables mobile image optimization
+                      Requires Pro plan or higher
+                    type: boolean
+                  polish:
+                    default: "off"
+                    description: |-
+                      Polish configures image optimization mode
+                      Requires Pro plan or higher
+                    enum:
+                    - "off"
+                    - lossless
+                    - lossy
+                    type: string
+                  prefetchPreload:
+                    default: true
+                    description: PrefetchPreload enables prefetch and preload
+                    type: boolean
+                  rocketLoader:
+                    default: false
+                    description: RocketLoader optimizes JavaScript loading
+                    type: boolean
+                  webp:
+                    default: false
+                    description: |-
+                      WebP enables WebP image conversion
+                      Requires Pro plan or higher
+                    type: boolean
+                  websockets:
+                    default: true
+                    description: Websockets enables WebSocket support
+                    type: boolean
+                  zeroRTT:
+                    default: true
+                    description: ZeroRTT enables 0-RTT Connection Resumption
+                    type: boolean
+                type: object
+              security:
+                description: Security configures security settings for this domain
+                properties:
+                  browserCheck:
+                    default: true
+                    description: BrowserCheck enables browser integrity check
+                    type: boolean
+                  challengePassage:
+                    default: 1800
+                    description: |-
+                      ChallengePassage sets how long a visitor can access the site
+                      after completing a challenge (in seconds)
+                    maximum: 31536000
+                    minimum: 300
+                    type: integer
+                  emailObfuscation:
+                    default: true
+                    description: EmailObfuscation hides email addresses from bots
+                    type: boolean
+                  hotlinkProtection:
+                    default: false
+                    description: HotlinkProtection prevents hotlinking of images
+                    type: boolean
+                  level:
+                    default: medium
+                    description: Level sets the security level
+                    enum:
+                    - "off"
+                    - essentially_off
+                    - low
+                    - medium
+                    - high
+                    - under_attack
+                    type: string
+                  serverSideExclude:
+                    default: true
+                    description: ServerSideExclude enables server-side excludes
+                    type: boolean
+                  waf:
+                    description: WAF configures Web Application Firewall
+                    properties:
+                      enabled:
+                        default: false
+                        description: Enabled enables WAF
+                        type: boolean
+                    type: object
+                type: object
+              ssl:
+                description: SSL configures SSL/TLS settings for this domain
+                properties:
+                  alwaysUseHttps:
+                    default: true
+                    description: AlwaysUseHTTPS redirects all HTTP requests to HTTPS
+                    type: boolean
+                  authenticatedOriginPull:
+                    description: AuthenticatedOriginPull configures mTLS between Cloudflare
+                      and origin
+                    properties:
+                      certificateSecretRef:
+                        description: |-
+                          CertificateSecretRef references a Secret containing custom client certificate
+                          If not specified, Cloudflare's default certificate will be used
+                        properties:
+                          apiKeyKey:
+                            default: CLOUDFLARE_API_KEY
+                            description: Key in the secret for Global API Key (used
+                              when authType is globalAPIKey)
+                            type: string
+                          apiTokenKey:
+                            default: CLOUDFLARE_API_TOKEN
+                            description: Key in the secret for API Token (used when
+                              authType is apiToken)
+                            type: string
+                          emailKey:
+                            default: CLOUDFLARE_EMAIL
+                            description: Key in the secret for Email (used when authType
+                              is globalAPIKey)
+                            type: string
+                          name:
+                            description: Name of the secret
+                            type: string
+                          namespace:
+                            default: cloudflare-operator-system
+                            description: Namespace of the secret. Defaults to "cloudflare-operator-system"
+                            type: string
+                        required:
+                        - name
+                        type: object
+                      enabled:
+                        default: false
+                        description: Enabled enables authenticated origin pulls (mTLS)
+                        type: boolean
+                    type: object
+                  automaticHttpsRewrites:
+                    default: true
+                    description: AutomaticHTTPSRewrites rewrites HTTP links to HTTPS
+                      in HTML content
+                    type: boolean
+                  minTLSVersion:
+                    default: "1.2"
+                    description: MinTLSVersion sets the minimum TLS version
+                    enum:
+                    - "1.0"
+                    - "1.1"
+                    - "1.2"
+                    - "1.3"
+                    type: string
+                  mode:
+                    default: full
+                    description: |-
+                      Mode sets the SSL/TLS encryption mode
+                      - off: No encryption (not recommended)
+                      - flexible: Encrypts traffic between browser and Cloudflare only
+                      - full: Encrypts end-to-end, using a self-signed cert on the origin
+                      - strict/full_strict: Encrypts end-to-end, requires valid origin cert
+                    enum:
+                    - "off"
+                    - flexible
+                    - full
+                    - strict
+                    - full_strict
+                    type: string
+                  opportunisticEncryption:
+                    default: true
+                    description: OpportunisticEncryption enables opportunistic encryption
+                    type: boolean
+                  tls13:
+                    default: "on"
+                    description: TLS13 enables TLS 1.3 support
+                    enum:
+                    - "on"
+                    - "off"
+                    type: string
+                type: object
               zoneId:
                 description: |-
                   ZoneID allows manual specification of the Cloudflare Zone ID.
@@ -166,6 +449,49 @@ spec:
                   - type
                   type: object
                 type: array
+              configSyncStatus:
+                description: ConfigSyncStatus represents the sync status of zone settings
+                properties:
+                  cache:
+                    description: Cache sync status
+                    enum:
+                    - Synced
+                    - Syncing
+                    - Error
+                    - Unknown
+                    type: string
+                  errorMessage:
+                    description: ErrorMessage contains error details if any sync failed
+                    type: string
+                  lastSyncTime:
+                    description: LastSyncTime is the last time any configuration was
+                      synced
+                    type: string
+                  performance:
+                    description: Performance sync status
+                    enum:
+                    - Synced
+                    - Syncing
+                    - Error
+                    - Unknown
+                    type: string
+                  security:
+                    description: Security sync status
+                    enum:
+                    - Synced
+                    - Syncing
+                    - Error
+                    - Unknown
+                    type: string
+                  ssl:
+                    description: SSL sync status
+                    enum:
+                    - Synced
+                    - Syncing
+                    - Error
+                    - Unknown
+                    type: string
+                type: object
               lastVerifiedTime:
                 description: LastVerifiedTime is the last time the zone was verified
                   with Cloudflare API
