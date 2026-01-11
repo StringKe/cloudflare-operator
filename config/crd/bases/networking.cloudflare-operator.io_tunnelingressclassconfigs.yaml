@@ -129,6 +129,31 @@ spec:
                     description: TLSTimeout for TLS handshake with origin (e.g., "10s")
                     type: string
                 type: object
+              defaultProtocol:
+                default: http
+                description: |-
+                  DefaultProtocol specifies the default backend protocol when not specified by
+                  Ingress annotation, Service annotation, or Service port appProtocol.
+                  Protocol detection priority (highest to lowest):
+                  1. Ingress annotation: cloudflare.com/protocol
+                  2. Ingress annotation: cloudflare.com/protocol-{port} (port-specific)
+                  3. Service annotation: cloudflare.com/protocol
+                  4. Service port appProtocol field (Kubernetes native)
+                  5. Service port name (http, https, grpc, h2c, etc.)
+                  6. This defaultProtocol field
+                  7. Port number inference (443→https, 22→ssh, others→http)
+                enum:
+                - http
+                - https
+                - tcp
+                - udp
+                - ssh
+                - rdp
+                - smb
+                - bastion
+                - wss
+                - ws
+                type: string
               dnsManagement:
                 default: Automatic
                 description: |-

@@ -124,8 +124,8 @@ func (r *Reconciler) buildRuleFromIngressPath(
 	parser *AnnotationParser,
 	tlsHosts map[string]string,
 ) cf.UnvalidatedIngressRule {
-	// Determine service target
-	target := r.resolveIngressBackend(ctx, ing.Namespace, path.Backend, parser, tlsHosts, host)
+	// Determine service target with multi-level protocol detection
+	target := r.resolveIngressBackend(ctx, ing.Namespace, path.Backend, parser, config)
 
 	// Build origin request from annotations + defaults
 	originRequest := r.buildOriginRequest(parser, config.Spec.DefaultOriginRequest, tlsHosts, host)
@@ -175,76 +175,209 @@ func convertPathType(path string, pathType *networkingv1.PathType) string {
 	}
 }
 
+// ServiceInfo contains Service information for protocol detection
+type ServiceInfo struct {
+	Name        string
+	Namespace   string
+	Port        string
+	Annotations map[string]string
+	AppProtocol *string
+	PortName    string
+}
+
 // resolveIngressBackend resolves Ingress backend to service URL
 func (r *Reconciler) resolveIngressBackend(
 	ctx context.Context,
 	namespace string,
 	backend networkingv1.IngressBackend,
 	parser *AnnotationParser,
-	tlsHosts map[string]string,
-	host string,
+	config *networkingv1alpha2.TunnelIngressClassConfig,
 ) string {
 	if backend.Service == nil {
 		return "http_status:503"
 	}
 
-	// Get port
-	port := r.resolveServicePort(ctx, namespace, backend.Service)
+	// Get Service info including port, annotations, appProtocol
+	svcInfo := r.getServiceInfo(ctx, namespace, backend.Service)
 
-	// Determine protocol
-	protocol := r.determineProtocol(parser, port, tlsHosts, host)
+	// Determine protocol using multi-level detection
+	protocol := r.determineProtocol(parser, svcInfo, config)
 
-	return fmt.Sprintf("%s://%s.%s.svc:%s", protocol, backend.Service.Name, namespace, port)
+	return fmt.Sprintf("%s://%s.%s.svc:%s", protocol, backend.Service.Name, namespace, svcInfo.Port)
 }
 
-// resolveServicePort resolves the port from Ingress backend
-// nolint:revive // Cognitive complexity for port resolution logic
-func (r *Reconciler) resolveServicePort(ctx context.Context, namespace string, svcBackend *networkingv1.IngressServiceBackend) string {
+// getServiceInfo retrieves Service information for protocol detection
+// nolint:revive // cognitive complexity is acceptable for port resolution logic
+func (r *Reconciler) getServiceInfo(ctx context.Context, namespace string, svcBackend *networkingv1.IngressServiceBackend) ServiceInfo {
 	logger := log.FromContext(ctx)
 
-	if svcBackend.Port.Number != 0 {
-		return fmt.Sprintf("%d", svcBackend.Port.Number)
+	info := ServiceInfo{
+		Name:      svcBackend.Name,
+		Namespace: namespace,
+		Port:      "80",
 	}
 
-	if svcBackend.Port.Name != "" {
-		// Resolve named port from Service
-		svc := &corev1.Service{}
-		if err := r.Get(ctx, apitypes.NamespacedName{
-			Name:      svcBackend.Name,
-			Namespace: namespace,
-		}, svc); err != nil {
-			logger.Error(err, "Failed to get Service for named port resolution, using default port 80",
-				"service", fmt.Sprintf("%s/%s", namespace, svcBackend.Name),
-				"portName", svcBackend.Port.Name)
-		} else {
-			for _, p := range svc.Spec.Ports {
-				if p.Name == svcBackend.Port.Name {
-					return fmt.Sprintf("%d", p.Port)
-				}
-			}
-			logger.Info("Named port not found in Service, using default port 80",
-				"service", fmt.Sprintf("%s/%s", namespace, svcBackend.Name),
-				"portName", svcBackend.Port.Name)
+	// Try to get Service for additional info
+	svc := &corev1.Service{}
+	if err := r.Get(ctx, apitypes.NamespacedName{
+		Name:      svcBackend.Name,
+		Namespace: namespace,
+	}, svc); err != nil {
+		logger.V(1).Info("Failed to get Service, using defaults",
+			"service", fmt.Sprintf("%s/%s", namespace, svcBackend.Name),
+			"error", err.Error())
+		// Still try to resolve port from backend spec
+		if svcBackend.Port.Number != 0 {
+			info.Port = fmt.Sprintf("%d", svcBackend.Port.Number)
 		}
+		return info
 	}
 
-	return "80"
+	// Get Service annotations
+	info.Annotations = svc.Annotations
+
+	// Resolve port and get port info
+	if svcBackend.Port.Number != 0 {
+		info.Port = fmt.Sprintf("%d", svcBackend.Port.Number)
+		// Find matching port for appProtocol and name
+		for _, p := range svc.Spec.Ports {
+			if p.Port == svcBackend.Port.Number {
+				info.AppProtocol = p.AppProtocol
+				info.PortName = p.Name
+				break
+			}
+		}
+	} else if svcBackend.Port.Name != "" {
+		// Resolve named port
+		for _, p := range svc.Spec.Ports {
+			if p.Name == svcBackend.Port.Name {
+				info.Port = fmt.Sprintf("%d", p.Port)
+				info.AppProtocol = p.AppProtocol
+				info.PortName = p.Name
+				break
+			}
+		}
+	} else if len(svc.Spec.Ports) > 0 {
+		// Use first port if no port specified
+		info.Port = fmt.Sprintf("%d", svc.Spec.Ports[0].Port)
+		info.AppProtocol = svc.Spec.Ports[0].AppProtocol
+		info.PortName = svc.Spec.Ports[0].Name
+	}
+
+	return info
 }
 
-// determineProtocol determines the protocol based on annotations, port, and TLS
-func (*Reconciler) determineProtocol(parser *AnnotationParser, port string, tlsHosts map[string]string, host string) string {
-	// 1. Check annotation override
-	if protocol, ok := parser.GetString(AnnotationProtocol); ok {
+// determineProtocol determines the protocol using multi-level detection.
+// Priority (highest to lowest):
+// 1. Ingress annotation: cloudflare.com/protocol
+// 2. Ingress annotation: cloudflare.com/protocol-{port} (port-specific)
+// 3. Service annotation: cloudflare.com/protocol
+// 4. Service port appProtocol field (Kubernetes native)
+// 5. Service port name (http, https, grpc, h2c, etc.)
+// 6. TunnelIngressClassConfig defaultProtocol
+// 7. Port number inference (443→https, 22→ssh, others→http)
+//
+// nolint:revive // cyclomatic complexity is acceptable for multi-level detection
+func (*Reconciler) determineProtocol(
+	ingressParser *AnnotationParser,
+	svcInfo ServiceInfo,
+	config *networkingv1alpha2.TunnelIngressClassConfig,
+) string {
+	// 1. Check Ingress annotation: cloudflare.com/protocol
+	if protocol, ok := ingressParser.GetString(AnnotationProtocol); ok && protocol != "" {
 		return protocol
 	}
 
-	// 2. Check if host is in TLS hosts
-	if _, isTLS := tlsHosts[host]; isTLS {
-		return "https"
+	// 2. Check Ingress annotation: cloudflare.com/protocol-{port}
+	portSpecificKey := AnnotationProtocolPrefix + svcInfo.Port
+	if protocol, ok := ingressParser.GetString(portSpecificKey); ok && protocol != "" {
+		return protocol
 	}
 
-	// 3. Infer from port
-	return inferProtocolFromPort(port)
+	// 3. Check Service annotation: cloudflare.com/protocol
+	if svcInfo.Annotations != nil {
+		if protocol, ok := svcInfo.Annotations[AnnotationProtocol]; ok && protocol != "" {
+			return protocol
+		}
+	}
+
+	// 4. Check Service port appProtocol field (Kubernetes native)
+	if svcInfo.AppProtocol != nil && *svcInfo.AppProtocol != "" {
+		return inferProtocolFromAppProtocol(*svcInfo.AppProtocol)
+	}
+
+	// 5. Check Service port name
+	if svcInfo.PortName != "" {
+		if protocol := inferProtocolFromPortName(svcInfo.PortName); protocol != "" {
+			return protocol
+		}
+	}
+
+	// 6. Check TunnelIngressClassConfig defaultProtocol
+	if config != nil && config.Spec.DefaultProtocol != "" {
+		return string(config.Spec.DefaultProtocol)
+	}
+
+	// 7. Fall back to port number inference
+	return inferProtocolFromPort(svcInfo.Port)
+}
+
+// inferProtocolFromAppProtocol converts Kubernetes appProtocol to tunnel protocol
+// nolint:goconst // protocol strings in switch cases don't need to be constants
+func inferProtocolFromAppProtocol(appProtocol string) string {
+	// Handle kubernetes.io/h2c and similar prefixes
+	switch appProtocol {
+	case "kubernetes.io/h2c", "h2c":
+		return "h2mux" // HTTP/2 cleartext
+	case "kubernetes.io/ws", "ws":
+		return "ws"
+	case "kubernetes.io/wss", "wss":
+		return "wss"
+	case "http", "HTTP":
+		return "http"
+	case "https", "HTTPS":
+		return "https"
+	case "tcp", "TCP":
+		return "tcp"
+	case "udp", "UDP":
+		return "udp"
+	case "grpc", "GRPC":
+		return "http" // gRPC over HTTP/2
+	default:
+		// If it looks like a protocol, use it directly
+		return appProtocol
+	}
+}
+
+// inferProtocolFromPortName determines protocol based on port name
+// nolint:goconst,revive // protocol strings in switch cases don't need to be constants; cyclomatic complexity is acceptable
+func inferProtocolFromPortName(portName string) string {
+	switch portName {
+	case "http", "http-web", "http-api", "web":
+		return "http"
+	case "https", "https-web", "https-api", "secure":
+		return "https"
+	case "grpc", "grpc-web":
+		return "http" // gRPC uses HTTP/2
+	case "h2c", "http2":
+		return "h2mux"
+	case "ws", "websocket":
+		return "ws"
+	case "wss", "websocket-secure":
+		return "wss"
+	case "ssh":
+		return "ssh"
+	case "rdp":
+		return "rdp"
+	case "smb":
+		return "smb"
+	case "tcp":
+		return "tcp"
+	case "udp":
+		return "udp"
+	default:
+		return "" // Not recognized, continue to next level
+	}
 }
 
 // inferProtocolFromPort determines protocol based on port number

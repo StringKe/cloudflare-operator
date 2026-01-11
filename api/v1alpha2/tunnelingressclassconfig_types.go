@@ -104,11 +104,42 @@ type OriginRequestSpec struct {
 	BastionMode *bool `json:"bastionMode,omitempty"`
 }
 
+// ProtocolType defines the backend protocol type
+// +kubebuilder:validation:Enum=http;https;tcp;udp;ssh;rdp;smb;bastion;wss;ws
+type ProtocolType string
+
+const (
+	ProtocolHTTP    ProtocolType = "http"
+	ProtocolHTTPS   ProtocolType = "https"
+	ProtocolTCP     ProtocolType = "tcp"
+	ProtocolUDP     ProtocolType = "udp"
+	ProtocolSSH     ProtocolType = "ssh"
+	ProtocolRDP     ProtocolType = "rdp"
+	ProtocolSMB     ProtocolType = "smb"
+	ProtocolBastion ProtocolType = "bastion"
+	ProtocolWSS     ProtocolType = "wss"
+	ProtocolWS      ProtocolType = "ws"
+)
+
 // TunnelIngressClassConfigSpec defines the desired state of TunnelIngressClassConfig
 type TunnelIngressClassConfigSpec struct {
 	// TunnelRef references the Tunnel or ClusterTunnel to use for this IngressClass
 	// +kubebuilder:validation:Required
 	TunnelRef TunnelReference `json:"tunnelRef"`
+
+	// DefaultProtocol specifies the default backend protocol when not specified by
+	// Ingress annotation, Service annotation, or Service port appProtocol.
+	// Protocol detection priority (highest to lowest):
+	// 1. Ingress annotation: cloudflare.com/protocol
+	// 2. Ingress annotation: cloudflare.com/protocol-{port} (port-specific)
+	// 3. Service annotation: cloudflare.com/protocol
+	// 4. Service port appProtocol field (Kubernetes native)
+	// 5. Service port name (http, https, grpc, h2c, etc.)
+	// 6. This defaultProtocol field
+	// 7. Port number inference (443→https, 22→ssh, others→http)
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=http
+	DefaultProtocol ProtocolType `json:"defaultProtocol,omitempty"`
 
 	// DefaultOriginRequest provides default origin request settings for all Ingresses
 	// using this IngressClass. Can be overridden per-Ingress via annotations.

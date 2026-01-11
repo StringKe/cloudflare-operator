@@ -16,8 +16,15 @@ const AnnotationPrefix = "cloudflare.com/"
 
 // Protocol annotations
 const (
-	// AnnotationProtocol specifies the backend protocol: http, https, tcp, udp, ssh, rdp, smb
+	// AnnotationProtocol specifies the backend protocol: http, https, tcp, udp, ssh, rdp, smb, wss, ws
+	// Can be used on both Ingress and Service resources.
+	// Priority: Ingress annotation > Service annotation > appProtocol > port name > default
 	AnnotationProtocol = AnnotationPrefix + "protocol"
+
+	// AnnotationProtocolPrefix is the prefix for port-specific protocol annotations.
+	// Usage: cloudflare.com/protocol-{port} = http|https|...
+	// Example: cloudflare.com/protocol-9091 = http
+	AnnotationProtocolPrefix = AnnotationPrefix + "protocol-"
 
 	// AnnotationNoTLSVerify disables TLS verification for HTTPS origins ("true" or "false")
 	AnnotationNoTLSVerify = AnnotationPrefix + "no-tls-verify"

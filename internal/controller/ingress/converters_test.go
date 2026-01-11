@@ -121,61 +121,218 @@ func TestInferProtocolFromPort(t *testing.T) {
 }
 
 func TestDetermineProtocol(t *testing.T) {
+	httpProtocol := networkingv1alpha2.ProtocolHTTP
+	httpsProtocol := networkingv1alpha2.ProtocolHTTPS
+
 	tests := []struct {
-		name        string
-		annotations map[string]string
-		port        string
-		tlsHosts    map[string]string
-		host        string
-		want        string
+		name              string
+		ingressAnnotation map[string]string
+		svcInfo           ServiceInfo
+		defaultProtocol   *networkingv1alpha2.ProtocolType
+		want              string
 	}{
 		{
-			name:        "annotation override",
-			annotations: map[string]string{AnnotationProtocol: "wss"},
-			port:        "80",
-			tlsHosts:    map[string]string{},
-			host:        "example.com",
-			want:        "wss",
+			name:              "1. Ingress annotation cloudflare.com/protocol takes highest priority",
+			ingressAnnotation: map[string]string{AnnotationProtocol: "wss"},
+			svcInfo: ServiceInfo{
+				Port:        "80",
+				Annotations: map[string]string{AnnotationProtocol: "https"},
+			},
+			defaultProtocol: &httpsProtocol,
+			want:            "wss",
 		},
 		{
-			name:        "TLS host",
-			annotations: map[string]string{},
-			port:        "80",
-			tlsHosts:    map[string]string{"example.com": "tls-secret"},
-			host:        "example.com",
-			want:        "https",
+			name:              "2. Ingress port-specific annotation",
+			ingressAnnotation: map[string]string{AnnotationProtocolPrefix + "9091": "http"},
+			svcInfo: ServiceInfo{
+				Port: "9091",
+			},
+			defaultProtocol: &httpsProtocol,
+			want:            "http",
 		},
 		{
-			name:        "port 443",
-			annotations: map[string]string{},
-			port:        "443",
-			tlsHosts:    map[string]string{},
-			host:        "example.com",
-			want:        "https",
+			name:              "3. Service annotation",
+			ingressAnnotation: map[string]string{},
+			svcInfo: ServiceInfo{
+				Port:        "9091",
+				Annotations: map[string]string{AnnotationProtocol: "http"},
+			},
+			defaultProtocol: &httpsProtocol,
+			want:            "http",
 		},
 		{
-			name:        "default http",
-			annotations: map[string]string{},
-			port:        "8080",
-			tlsHosts:    map[string]string{},
-			host:        "example.com",
-			want:        "http",
+			name:              "4. Service port appProtocol",
+			ingressAnnotation: map[string]string{},
+			svcInfo: ServiceInfo{
+				Port:        "9091",
+				AppProtocol: strPtr("http"),
+			},
+			defaultProtocol: &httpsProtocol,
+			want:            "http",
 		},
 		{
-			name:        "annotation takes precedence over TLS",
-			annotations: map[string]string{AnnotationProtocol: "tcp"},
-			port:        "443",
-			tlsHosts:    map[string]string{"example.com": "tls-secret"},
-			host:        "example.com",
-			want:        "tcp",
+			name:              "4b. Service port appProtocol grpc",
+			ingressAnnotation: map[string]string{},
+			svcInfo: ServiceInfo{
+				Port:        "9091",
+				AppProtocol: strPtr("grpc"),
+			},
+			want: "http", // gRPC uses HTTP/2
+		},
+		{
+			name:              "4c. Service port appProtocol kubernetes.io/h2c",
+			ingressAnnotation: map[string]string{},
+			svcInfo: ServiceInfo{
+				Port:        "9091",
+				AppProtocol: strPtr("kubernetes.io/h2c"),
+			},
+			want: "h2mux",
+		},
+		{
+			name:              "5. Service port name",
+			ingressAnnotation: map[string]string{},
+			svcInfo: ServiceInfo{
+				Port:     "9091",
+				PortName: "http-api",
+			},
+			defaultProtocol: &httpsProtocol,
+			want:            "http",
+		},
+		{
+			name:              "5b. Service port name grpc",
+			ingressAnnotation: map[string]string{},
+			svcInfo: ServiceInfo{
+				Port:     "9091",
+				PortName: "grpc",
+			},
+			want: "http",
+		},
+		{
+			name:              "6. TunnelIngressClassConfig defaultProtocol",
+			ingressAnnotation: map[string]string{},
+			svcInfo: ServiceInfo{
+				Port: "9091",
+			},
+			defaultProtocol: &httpProtocol,
+			want:            "http",
+		},
+		{
+			name:              "7. Port number inference - 443",
+			ingressAnnotation: map[string]string{},
+			svcInfo: ServiceInfo{
+				Port: "443",
+			},
+			want: "https",
+		},
+		{
+			name:              "7b. Port number inference - default http",
+			ingressAnnotation: map[string]string{},
+			svcInfo: ServiceInfo{
+				Port: "8080",
+			},
+			want: "http",
+		},
+		{
+			name:              "Priority: Ingress annotation > Service annotation > appProtocol",
+			ingressAnnotation: map[string]string{AnnotationProtocol: "tcp"},
+			svcInfo: ServiceInfo{
+				Port:        "443",
+				Annotations: map[string]string{AnnotationProtocol: "https"},
+				AppProtocol: strPtr("https"),
+			},
+			defaultProtocol: &httpsProtocol,
+			want:            "tcp",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := &Reconciler{}
-			parser := NewAnnotationParser(tt.annotations)
-			got := r.determineProtocol(parser, tt.port, tt.tlsHosts, tt.host)
+			parser := NewAnnotationParser(tt.ingressAnnotation)
+
+			var config *networkingv1alpha2.TunnelIngressClassConfig
+			if tt.defaultProtocol != nil {
+				config = &networkingv1alpha2.TunnelIngressClassConfig{
+					Spec: networkingv1alpha2.TunnelIngressClassConfigSpec{
+						DefaultProtocol: *tt.defaultProtocol,
+					},
+				}
+			}
+
+			got := r.determineProtocol(parser, tt.svcInfo, config)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func strPtr(s string) *string {
+	return &s
+}
+
+func TestInferProtocolFromAppProtocol(t *testing.T) {
+	tests := []struct {
+		appProtocol string
+		want        string
+	}{
+		{"http", "http"},
+		{"HTTP", "http"},
+		{"https", "https"},
+		{"HTTPS", "https"},
+		{"grpc", "http"},
+		{"GRPC", "http"},
+		{"kubernetes.io/h2c", "h2mux"},
+		{"h2c", "h2mux"},
+		{"kubernetes.io/ws", "ws"},
+		{"ws", "ws"},
+		{"kubernetes.io/wss", "wss"},
+		{"wss", "wss"},
+		{"tcp", "tcp"},
+		{"TCP", "tcp"},
+		{"udp", "udp"},
+		{"UDP", "udp"},
+		{"custom-protocol", "custom-protocol"}, // Unknown protocols pass through
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.appProtocol, func(t *testing.T) {
+			got := inferProtocolFromAppProtocol(tt.appProtocol)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestInferProtocolFromPortName(t *testing.T) {
+	tests := []struct {
+		portName string
+		want     string
+	}{
+		{"http", "http"},
+		{"http-web", "http"},
+		{"http-api", "http"},
+		{"web", "http"},
+		{"https", "https"},
+		{"https-web", "https"},
+		{"secure", "https"},
+		{"grpc", "http"},
+		{"grpc-web", "http"},
+		{"h2c", "h2mux"},
+		{"http2", "h2mux"},
+		{"ws", "ws"},
+		{"websocket", "ws"},
+		{"wss", "wss"},
+		{"websocket-secure", "wss"},
+		{"ssh", "ssh"},
+		{"rdp", "rdp"},
+		{"smb", "smb"},
+		{"tcp", "tcp"},
+		{"udp", "udp"},
+		{"unknown-name", ""}, // Unknown names return empty
+		{"custom-port", ""},  // Unknown names return empty
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.portName, func(t *testing.T) {
+			got := inferProtocolFromPortName(tt.portName)
 			assert.Equal(t, tt.want, got)
 		})
 	}

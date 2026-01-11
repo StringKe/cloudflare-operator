@@ -253,9 +253,17 @@ func (c *API) CreateAccessApplication(params AccessApplicationParams) (*AccessAp
 		createParams.DomainType = cloudflare.AccessDestinationType(params.DomainType)
 	}
 
-	// Set destinations
-	if len(params.Destinations) > 0 {
-		createParams.Destinations = convertDestinationsToCloudflare(params.Destinations)
+	// Set destinations (including SelfHostedDomains as public destinations)
+	destinations := convertDestinationsToCloudflare(params.Destinations)
+	// Convert SelfHostedDomains to public destinations
+	for _, domain := range params.SelfHostedDomains {
+		destinations = append(destinations, cloudflare.AccessDestination{
+			Type: cloudflare.AccessDestinationType("public"),
+			URI:  domain,
+		})
+	}
+	if len(destinations) > 0 {
+		createParams.Destinations = destinations
 	}
 
 	// Set CORS headers
@@ -371,9 +379,17 @@ func (c *API) UpdateAccessApplication(applicationID string, params AccessApplica
 		updateParams.DomainType = cloudflare.AccessDestinationType(params.DomainType)
 	}
 
-	// Set destinations
-	if len(params.Destinations) > 0 {
-		updateParams.Destinations = convertDestinationsToCloudflare(params.Destinations)
+	// Set destinations (including SelfHostedDomains as public destinations)
+	destinations := convertDestinationsToCloudflare(params.Destinations)
+	// Convert SelfHostedDomains to public destinations
+	for _, domain := range params.SelfHostedDomains {
+		destinations = append(destinations, cloudflare.AccessDestination{
+			Type: cloudflare.AccessDestinationType("public"),
+			URI:  domain,
+		})
+	}
+	if len(destinations) > 0 {
+		updateParams.Destinations = destinations
 	}
 
 	// Set CORS headers

@@ -202,6 +202,7 @@ spec:
                   idpPublicCerts:
                     description: |-
                       IdPPublicCerts are the IdP's public certificates for SAML (multiple certs).
+
                       Deprecated: Use IdPPublicCert instead.
                     items:
                       type: string
