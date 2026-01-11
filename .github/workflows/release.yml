@@ -223,7 +223,7 @@ jobs:
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
         with:
           name: installer
-          path: installer-artifacts
+          path: /tmp/installer-artifacts
 
       - name: Install cosign
         uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
@@ -240,7 +240,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Copy installer manifests to dist
-        run: cp installer-artifacts/*.yaml dist/
+        run: cp /tmp/installer-artifacts/*.yaml dist/
 
       - name: Sign installer manifests with cosign
         run: |
