@@ -125,9 +125,9 @@ func (r *DevicePostureRuleReconciler) reconcileDevicePostureRule(ctx context.Con
 
 	// Build match rules
 	if len(rule.Spec.Match) > 0 {
-		params.Match = make([]map[string]interface{}, 0, len(rule.Spec.Match))
+		params.Match = make([]cf.DevicePostureMatchParams, 0, len(rule.Spec.Match))
 		for _, m := range rule.Spec.Match {
-			params.Match = append(params.Match, map[string]interface{}{"platform": m.Platform})
+			params.Match = append(params.Match, cf.DevicePostureMatchParams{Platform: m.Platform})
 		}
 	}
 
@@ -171,86 +171,54 @@ func (r *DevicePostureRuleReconciler) reconcileDevicePostureRule(ctx context.Con
 	return r.updateStatusSuccess(ctx, rule, result)
 }
 
-func (r *DevicePostureRuleReconciler) buildInput(input *networkingv1alpha2.DevicePostureInput) map[string]interface{} {
-	result := make(map[string]interface{})
-
-	if input.ID != "" {
-		result["id"] = input.ID
-	}
-	if input.Path != "" {
-		result["path"] = input.Path
-	}
-	if input.Exists != nil {
-		result["exists"] = *input.Exists
-	}
-	if input.Sha256 != "" {
-		result["sha256"] = input.Sha256
-	}
-	if input.Thumbprint != "" {
-		result["thumbprint"] = input.Thumbprint
-	}
-	if input.Running != nil {
-		result["running"] = *input.Running
-	}
-	if input.RequireAll != nil {
-		result["require_all"] = *input.RequireAll
-	}
-	if input.Enabled != nil {
-		result["enabled"] = *input.Enabled
-	}
-	if input.Version != "" {
-		result["version"] = input.Version
-	}
-	if input.Operator != "" {
-		result["operator"] = input.Operator
-	}
-	if input.Domain != "" {
-		result["domain"] = input.Domain
-	}
-	if input.ComplianceStatus != "" {
-		result["compliance_status"] = input.ComplianceStatus
-	}
-	if input.ConnectionID != "" {
-		result["connection_id"] = input.ConnectionID
-	}
-	if input.LastSeen != "" {
-		result["last_seen"] = input.LastSeen
-	}
-	if input.ActiveThreats != nil {
-		result["active_threats"] = *input.ActiveThreats
-	}
-	if input.NetworkStatus != "" {
-		result["network_status"] = input.NetworkStatus
-	}
-	if input.SensorConfig != "" {
-		result["sensor_config"] = input.SensorConfig
-	}
-	if input.VersionOperator != "" {
-		result["version_operator"] = input.VersionOperator
-	}
-	if input.CountOperator != "" {
-		result["count_operator"] = input.CountOperator
-	}
-	if input.IssueCount != nil {
-		result["issue_count"] = *input.IssueCount
-	}
-	if input.OSDistroName != "" {
-		result["os_distro_name"] = input.OSDistroName
-	}
-	if input.OSDistroRevision != "" {
-		result["os_distro_revision"] = input.OSDistroRevision
-	}
-	if input.CertificateID != "" {
-		result["certificate_id"] = input.CertificateID
-	}
-	if input.CommonName != "" {
-		result["common_name"] = input.CommonName
-	}
-	if len(input.CheckDisks) > 0 {
-		result["check_disks"] = input.CheckDisks
+func (*DevicePostureRuleReconciler) buildInput(input *networkingv1alpha2.DevicePostureInput) *cf.DevicePostureInputParams {
+	if input == nil {
+		return nil
 	}
 
-	return result
+	return &cf.DevicePostureInputParams{
+		ID:               input.ID,
+		Path:             input.Path,
+		Exists:           input.Exists,
+		Sha256:           input.Sha256,
+		Thumbprint:       input.Thumbprint,
+		Running:          input.Running,
+		RequireAll:       input.RequireAll,
+		Enabled:          input.Enabled,
+		Version:          input.Version,
+		Operator:         input.Operator,
+		Domain:           input.Domain,
+		ComplianceStatus: input.ComplianceStatus,
+		ConnectionID:     input.ConnectionID,
+		LastSeen:         input.LastSeen,
+		EidLastSeen:      input.EidLastSeen,
+		ActiveThreats:    input.ActiveThreats,
+		Infected:         input.Infected,
+		IsActive:         input.IsActive,
+		NetworkStatus:    input.NetworkStatus,
+		SensorConfig:     input.SensorConfig,
+		VersionOperator:  input.VersionOperator,
+		CountOperator:    input.CountOperator,
+		ScoreOperator:    input.ScoreOperator,
+		IssueCount:       input.IssueCount,
+		Score:            input.Score,
+		TotalScore:       input.TotalScore,
+		RiskLevel:        input.RiskLevel,
+		Overall:          input.Overall,
+		State:            input.State,
+		OperationalState: input.OperationalState,
+		OSDistroName:     input.OSDistroName,
+		OSDistroRevision: input.OSDistroRevision,
+		OSVersionExtra:   input.OSVersionExtra,
+		OS:               input.OS,
+		OperatingSystem:  input.OperatingSystem,
+		CertificateID:    input.CertificateID,
+		CommonName:       input.CommonName,
+		Cn:               input.Cn,
+		CheckPrivateKey:  input.CheckPrivateKey,
+		ExtendedKeyUsage: input.ExtendedKeyUsage,
+		CheckDisks:       input.CheckDisks,
+	}
 }
 
 func (r *DevicePostureRuleReconciler) updateStatusError(ctx context.Context, rule *networkingv1alpha2.DevicePostureRule, err error) (ctrl.Result, error) {

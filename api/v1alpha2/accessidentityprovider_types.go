@@ -27,6 +27,10 @@ type AccessIdentityProviderSpec struct {
 	// +kubebuilder:validation:Optional
 	ConfigSecretRef *SecretKeySelector `json:"configSecretRef,omitempty"`
 
+	// ScimConfig contains SCIM provisioning configuration.
+	// +kubebuilder:validation:Optional
+	ScimConfig *IdentityProviderScimConfig `json:"scimConfig,omitempty"`
+
 	// Cloudflare contains the Cloudflare API credentials.
 	// +kubebuilder:validation:Required
 	Cloudflare CloudflareDetails `json:"cloudflare"`
@@ -77,7 +81,16 @@ type IdentityProviderConfig struct {
 	// +kubebuilder:validation:Optional
 	Scopes []string `json:"scopes,omitempty"`
 
-	// IdPPublicCerts are the IdP's public certificates for SAML.
+	// Attributes are custom attributes to include in tokens.
+	// +kubebuilder:validation:Optional
+	Attributes []string `json:"attributes,omitempty"`
+
+	// IdPPublicCert is the IdP's public certificate for SAML (single cert).
+	// +kubebuilder:validation:Optional
+	IdPPublicCert string `json:"idpPublicCert,omitempty"`
+
+	// IdPPublicCerts are the IdP's public certificates for SAML (multiple certs).
+	// Deprecated: Use IdPPublicCert instead.
 	// +kubebuilder:validation:Optional
 	IdPPublicCerts []string `json:"idpPublicCerts,omitempty"`
 
@@ -133,6 +146,10 @@ type IdentityProviderConfig struct {
 	// +kubebuilder:validation:Optional
 	OktaAccount string `json:"oktaAccount,omitempty"`
 
+	// OktaAuthorizationServerID is the Okta authorization server ID.
+	// +kubebuilder:validation:Optional
+	OktaAuthorizationServerID string `json:"oktaAuthorizationServerId,omitempty"`
+
 	// OneloginAccount is the OneLogin subdomain.
 	// +kubebuilder:validation:Optional
 	OneloginAccount string `json:"oneloginAccount,omitempty"`
@@ -152,6 +169,34 @@ type IdentityProviderConfig struct {
 	// RedirectURL is the callback URL.
 	// +kubebuilder:validation:Optional
 	RedirectURL string `json:"redirectUrl,omitempty"`
+}
+
+// IdentityProviderScimConfig contains SCIM provisioning configuration.
+type IdentityProviderScimConfig struct {
+	// Enabled enables SCIM provisioning.
+	// +kubebuilder:validation:Optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Secret is the SCIM secret (should use a Secret reference in production).
+	// +kubebuilder:validation:Optional
+	Secret string `json:"secret,omitempty"`
+
+	// UserDeprovision enables automatic user deprovisioning.
+	// +kubebuilder:validation:Optional
+	UserDeprovision *bool `json:"userDeprovision,omitempty"`
+
+	// SeatDeprovision enables automatic seat deprovisioning.
+	// +kubebuilder:validation:Optional
+	SeatDeprovision *bool `json:"seatDeprovision,omitempty"`
+
+	// GroupMemberDeprovision enables automatic group member deprovisioning.
+	// +kubebuilder:validation:Optional
+	GroupMemberDeprovision *bool `json:"groupMemberDeprovision,omitempty"`
+
+	// IdentityUpdateBehavior controls how identity updates are handled.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=automatic;reauth;no_action
+	IdentityUpdateBehavior string `json:"identityUpdateBehavior,omitempty"`
 }
 
 // SAMLHeaderAttribute defines a SAML attribute to header mapping.

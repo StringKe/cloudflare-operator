@@ -63,10 +63,17 @@ spec:
               action:
                 description: Action is what happens when the rule matches.
                 enum:
+                - "on"
+                - "off"
                 - allow
                 - block
-                - log
+                - scan
+                - noscan
+                - safesearch
+                - ytrestricted
                 - isolate
+                - noisolate
+                - override
                 - l4_override
                 - egress
                 - resolve
@@ -151,6 +158,17 @@ spec:
                 default: true
                 description: Enabled controls whether the rule is active.
                 type: boolean
+              expiration:
+                description: Expiration defines when the rule expires (for DNS policies).
+                properties:
+                  duration:
+                    description: Duration is the default expiration duration (e.g.,
+                      "1h", "24h").
+                    type: string
+                  expiresAt:
+                    description: ExpiresAt is when the rule expires (RFC3339 format).
+                    type: string
+                type: object
               filters:
                 description: Filters specifies which types of traffic this rule applies
                   to.
@@ -177,6 +195,9 @@ spec:
                       type: string
                     description: AddHeaders adds headers to requests.
                     type: object
+                  allowChildBypass:
+                    description: AllowChildBypass allows child MSP accounts to bypass.
+                    type: boolean
                   auditSsh:
                     description: AuditSSH enables SSH command logging.
                     properties:
@@ -207,6 +228,9 @@ spec:
                   blockReason:
                     description: BlockReason is shown on the block page.
                     type: string
+                  bypassParentRule:
+                    description: BypassParentRule allows bypassing parent MSP rules.
+                    type: boolean
                   checkSession:
                     description: CheckSession enables session check.
                     properties:
@@ -218,29 +242,53 @@ spec:
                     - duration
                     - enforce
                     type: object
-                  dnsResolverIpv4:
-                    description: DNSResolverIPv4 custom resolver.
+                  dnsResolvers:
+                    description: DNSResolvers contains custom DNS resolver settings.
                     properties:
-                      ip:
-                        type: string
-                      port:
-                        type: integer
-                      routeThroughPrivateNetwork:
-                        type: boolean
-                      vnetId:
-                        type: string
-                    type: object
-                  dnsResolverIpv6:
-                    description: DNSResolverIPv6 custom resolver.
-                    properties:
-                      ip:
-                        type: string
-                      port:
-                        type: integer
-                      routeThroughPrivateNetwork:
-                        type: boolean
-                      vnetId:
-                        type: string
+                      ipv4:
+                        description: IPv4 resolvers.
+                        items:
+                          description: DNSResolverEntry for custom DNS resolver.
+                          properties:
+                            ip:
+                              description: IP is the resolver IP address.
+                              type: string
+                            port:
+                              description: Port is the resolver port.
+                              type: integer
+                            routeThroughPrivateNetwork:
+                              description: RouteThroughPrivateNetwork routes through
+                                private network.
+                              type: boolean
+                            vnetId:
+                              description: VNetID is the virtual network ID.
+                              type: string
+                          required:
+                          - ip
+                          type: object
+                        type: array
+                      ipv6:
+                        description: IPv6 resolvers.
+                        items:
+                          description: DNSResolverEntry for custom DNS resolver.
+                          properties:
+                            ip:
+                              description: IP is the resolver IP address.
+                              type: string
+                            port:
+                              description: Port is the resolver port.
+                              type: integer
+                            routeThroughPrivateNetwork:
+                              description: RouteThroughPrivateNetwork routes through
+                                private network.
+                              type: boolean
+                            vnetId:
+                              description: VNetID is the virtual network ID.
+                              type: string
+                          required:
+                          - ip
+                          type: object
+                        type: array
                     type: object
                   egress:
                     description: EgressSettings for egress action.
@@ -252,8 +300,19 @@ spec:
                       ipv6:
                         type: string
                     type: object
+                  ignoreCnameCategoryMatches:
+                    description: IgnoreCNAMECategoryMatches ignores category at CNAME
+                      domains.
+                    type: boolean
                   insecureDisableDnssecValidation:
                     description: InsecureDisableDNSSECValidation disables DNSSEC validation.
+                    type: boolean
+                  ipCategories:
+                    description: IPCategories enables IPs in DNS resolver category
+                      blocks.
+                    type: boolean
+                  ipIndicatorFeeds:
+                    description: IPIndicatorFeeds includes IPs in indicator feed blocks.
                     type: boolean
                   l4Override:
                     description: L4Override for L4 override action.
@@ -294,8 +353,29 @@ spec:
                     required:
                     - enabled
                     type: object
+                  quarantine:
+                    description: Quarantine settings for quarantine action.
+                    properties:
+                      fileTypes:
+                        description: FileTypes to quarantine.
+                        items:
+                          type: string
+                        type: array
+                    type: object
                   resolveDnsInternally:
-                    description: ResolveDNSInternally for private DNS resolution.
+                    description: ResolveDNSInternally enables internal DNS resolution
+                      with view_id.
+                    properties:
+                      fallback:
+                        description: Fallback determines behavior when internal resolution
+                          fails.
+                        type: boolean
+                      viewId:
+                        description: ViewID is the DNS view ID for internal resolution.
+                        type: string
+                    type: object
+                  resolveDnsThroughCloudflare:
+                    description: ResolveDNSThroughCloudflare sends DNS to 1.1.1.1.
                     type: boolean
                   untrustedCertificateAction:
                     description: UntrustedCertificateAction for TLS inspection.
@@ -303,6 +383,35 @@ spec:
                     - pass_through
                     - block
                     - error
+                    type: string
+                type: object
+              schedule:
+                description: Schedule defines when the rule is active.
+                properties:
+                  fri:
+                    description: Fri is the schedule for Friday.
+                    type: string
+                  mon:
+                    description: Mon is the schedule for Monday (e.g., "09:00-17:00").
+                    type: string
+                  sat:
+                    description: Sat is the schedule for Saturday.
+                    type: string
+                  sun:
+                    description: Sun is the schedule for Sunday.
+                    type: string
+                  thu:
+                    description: Thu is the schedule for Thursday.
+                    type: string
+                  timeZone:
+                    description: TimeZone is the time zone for the schedule (e.g.,
+                      "America/New_York").
+                    type: string
+                  tue:
+                    description: Tue is the schedule for Tuesday.
+                    type: string
+                  wed:
+                    description: Wed is the schedule for Wednesday.
                     type: string
                 type: object
               traffic:

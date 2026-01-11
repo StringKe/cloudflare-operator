@@ -40,6 +40,8 @@ linters:
           disabled: true
         - name: add-constant
           disabled: true
+        - name: use-any
+          disabled: true
     interfacebloat:
       max: 15
   exclusions:

@@ -16,7 +16,7 @@ type DevicePostureRuleSpec struct {
 
 	// Type is the posture rule type.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Enum=file;application;serial_number;tanium;gateway;warp;disk_encryption;sentinelone;carbonblack;firewall;os_version;domain_joined;client_certificate;unique_client_id;kolide;tanium_s2s;crowdstrike_s2s;intune;workspace_one
+	// +kubebuilder:validation:Enum=file;application;serial_number;tanium;gateway;warp;disk_encryption;sentinelone;carbonblack;firewall;os_version;domain_joined;client_certificate;client_certificate_v2;unique_client_id;kolide;tanium_s2s;crowdstrike_s2s;sentinelone_s2s;intune;workspace_one;custom_s2s
 	Type string `json:"type"`
 
 	// Description is a human-readable description.
@@ -113,9 +113,21 @@ type DevicePostureInput struct {
 	// +kubebuilder:validation:Optional
 	LastSeen string `json:"lastSeen,omitempty"`
 
+	// EidLastSeen is for enterprise ID last seen time.
+	// +kubebuilder:validation:Optional
+	EidLastSeen string `json:"eidLastSeen,omitempty"`
+
 	// ActiveThreats is the maximum active threat count.
 	// +kubebuilder:validation:Optional
 	ActiveThreats *int `json:"activeThreats,omitempty"`
+
+	// Infected checks if device is infected.
+	// +kubebuilder:validation:Optional
+	Infected *bool `json:"infected,omitempty"`
+
+	// IsActive checks if the device is active.
+	// +kubebuilder:validation:Optional
+	IsActive *bool `json:"isActive,omitempty"`
 
 	// NetworkStatus checks for network connection.
 	// +kubebuilder:validation:Optional
@@ -137,9 +149,39 @@ type DevicePostureInput struct {
 	// +kubebuilder:validation:Enum=<;<=;>;>=;==
 	CountOperator string `json:"countOperator,omitempty"`
 
+	// ScoreOperator for score comparisons.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=<;<=;>;>=;==
+	ScoreOperator string `json:"scoreOperator,omitempty"`
+
 	// IssueCount is the number of issues for SentinelOne.
 	// +kubebuilder:validation:Optional
 	IssueCount *int `json:"issueCount,omitempty"`
+
+	// Score for risk/posture scoring.
+	// +kubebuilder:validation:Optional
+	Score *int `json:"score,omitempty"`
+
+	// TotalScore for total risk scoring.
+	// +kubebuilder:validation:Optional
+	TotalScore *int `json:"totalScore,omitempty"`
+
+	// RiskLevel for risk assessment.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=low;medium;high;critical
+	RiskLevel string `json:"riskLevel,omitempty"`
+
+	// Overall risk assessment.
+	// +kubebuilder:validation:Optional
+	Overall string `json:"overall,omitempty"`
+
+	// State for device state checks.
+	// +kubebuilder:validation:Optional
+	State string `json:"state,omitempty"`
+
+	// OperationalState for device operational state.
+	// +kubebuilder:validation:Optional
+	OperationalState string `json:"operationalState,omitempty"`
 
 	// OSDistroName is the OS distribution name.
 	// +kubebuilder:validation:Optional
@@ -149,17 +191,56 @@ type DevicePostureInput struct {
 	// +kubebuilder:validation:Optional
 	OSDistroRevision string `json:"osDistroRevision,omitempty"`
 
+	// OSVersionExtra for additional OS version info.
+	// +kubebuilder:validation:Optional
+	OSVersionExtra string `json:"osVersionExtra,omitempty"`
+
+	// OS for operating system checks.
+	// +kubebuilder:validation:Optional
+	OS string `json:"os,omitempty"`
+
+	// OperatingSystem for operating system name.
+	// +kubebuilder:validation:Optional
+	OperatingSystem string `json:"operatingSystem,omitempty"`
+
 	// CertificateID for client certificate checks.
 	// +kubebuilder:validation:Optional
 	CertificateID string `json:"certificateId,omitempty"`
 
-	// CommonName for client certificate checks.
+	// CommonName (CN) for client certificate checks.
 	// +kubebuilder:validation:Optional
 	CommonName string `json:"commonName,omitempty"`
+
+	// Cn is an alias for CommonName.
+	// +kubebuilder:validation:Optional
+	Cn string `json:"cn,omitempty"`
+
+	// CheckPrivateKey checks if private key is present.
+	// +kubebuilder:validation:Optional
+	CheckPrivateKey *bool `json:"checkPrivateKey,omitempty"`
+
+	// ExtendedKeyUsage for certificate key usage.
+	// +kubebuilder:validation:Optional
+	ExtendedKeyUsage []string `json:"extendedKeyUsage,omitempty"`
+
+	// Locations for location-based checks.
+	// +kubebuilder:validation:Optional
+	Locations []DevicePostureLocation `json:"locations,omitempty"`
 
 	// CheckDisks specifies which disks to check encryption.
 	// +kubebuilder:validation:Optional
 	CheckDisks []string `json:"checkDisks,omitempty"`
+}
+
+// DevicePostureLocation for location-based posture checks.
+type DevicePostureLocation struct {
+	// Paths for location paths.
+	// +kubebuilder:validation:Optional
+	Paths []string `json:"paths,omitempty"`
+
+	// TrustStores for trust store locations.
+	// +kubebuilder:validation:Optional
+	TrustStores []string `json:"trustStores,omitempty"`
 }
 
 // DevicePostureRuleStatus defines the observed state

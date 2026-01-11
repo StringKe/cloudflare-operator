@@ -5,9 +5,22 @@ package cf
 
 import (
 	"context"
+	"time"
 
 	"github.com/cloudflare/cloudflare-go"
 )
+
+// parseDuration parses a duration string like "5m", "1h", "24h".
+func parseDuration(s string) time.Duration {
+	if s == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0
+	}
+	return d
+}
 
 // GatewayRuleParams contains parameters for a Gateway Rule.
 type GatewayRuleParams struct {
@@ -20,7 +33,125 @@ type GatewayRuleParams struct {
 	Traffic       string
 	Identity      string
 	DevicePosture string
-	RuleSettings  map[string]interface{}
+	RuleSettings  *GatewayRuleSettingsParams
+	Schedule      *GatewayRuleScheduleParams
+	Expiration    *GatewayRuleExpirationParams
+}
+
+// GatewayRuleSettingsParams contains settings for a Gateway Rule.
+type GatewayRuleSettingsParams struct {
+	BlockPageEnabled                *bool
+	BlockReason                     string
+	OverrideIPs                     []string
+	OverrideHost                    string
+	L4Override                      *GatewayL4OverrideParams
+	BISOAdminControls               *GatewayBISOAdminControlsParams
+	CheckSession                    *GatewayCheckSessionParams
+	AddHeaders                      map[string]string
+	InsecureDisableDNSSECValidation *bool
+	Egress                          *GatewayEgressParams
+	PayloadLog                      *GatewayPayloadLogParams
+	UntrustedCertAction             string
+	AuditSSH                        *GatewayAuditSSHParams
+	ResolveDNSInternally            *GatewayResolveDNSInternallyParams
+	ResolveDNSThroughCloudflare     *bool
+	DNSResolvers                    *GatewayDNSResolversParams
+	NotificationSettings            *GatewayNotificationSettingsParams
+	AllowChildBypass                *bool
+	BypassParentRule                *bool
+	IgnoreCNAMECategoryMatches      *bool
+	IPCategories                    *bool
+	IPIndicatorFeeds                *bool
+	Quarantine                      *GatewayQuarantineParams
+}
+
+// GatewayL4OverrideParams for L4 override settings.
+type GatewayL4OverrideParams struct {
+	IP   string
+	Port int
+}
+
+// GatewayBISOAdminControlsParams for browser isolation controls.
+type GatewayBISOAdminControlsParams struct {
+	DisablePrinting             *bool
+	DisableCopyPaste            *bool
+	DisableDownload             *bool
+	DisableUpload               *bool
+	DisableKeyboard             *bool
+	DisableClipboardRedirection *bool
+}
+
+// GatewayCheckSessionParams for session check settings.
+type GatewayCheckSessionParams struct {
+	Enforce  bool
+	Duration string
+}
+
+// GatewayEgressParams for egress settings.
+type GatewayEgressParams struct {
+	IPv4         string
+	IPv6         string
+	IPv4Fallback string
+}
+
+// GatewayPayloadLogParams for payload logging.
+type GatewayPayloadLogParams struct {
+	Enabled bool
+}
+
+// GatewayAuditSSHParams for SSH audit settings.
+type GatewayAuditSSHParams struct {
+	CommandLogging bool
+}
+
+// GatewayResolveDNSInternallyParams for internal DNS resolution.
+type GatewayResolveDNSInternallyParams struct {
+	ViewID   string
+	Fallback string // "none", "public_dns", etc.
+}
+
+// GatewayDNSResolversParams for custom DNS resolvers.
+type GatewayDNSResolversParams struct {
+	IPv4 []GatewayDNSResolverEntryParams
+	IPv6 []GatewayDNSResolverEntryParams
+}
+
+// GatewayDNSResolverEntryParams for a single DNS resolver.
+type GatewayDNSResolverEntryParams struct {
+	IP                         string
+	Port                       int
+	VNetID                     string
+	RouteThroughPrivateNetwork *bool
+}
+
+// GatewayNotificationSettingsParams for notification settings.
+type GatewayNotificationSettingsParams struct {
+	Enabled    bool
+	Message    string
+	SupportURL string
+}
+
+// GatewayQuarantineParams for quarantine settings.
+type GatewayQuarantineParams struct {
+	FileTypes []string
+}
+
+// GatewayRuleScheduleParams for rule scheduling.
+type GatewayRuleScheduleParams struct {
+	TimeZone string
+	Mon      string
+	Tue      string
+	Wed      string
+	Thu      string
+	Fri      string
+	Sat      string
+	Sun      string
+}
+
+// GatewayRuleExpirationParams for rule expiration.
+type GatewayRuleExpirationParams struct {
+	ExpiresAt string
+	Duration  string
 }
 
 // GatewayRuleResult contains the result of a Gateway Rule operation.
@@ -31,6 +162,190 @@ type GatewayRuleResult struct {
 	Precedence  int
 	Enabled     bool
 	Action      string
+}
+
+// convertRuleSettingsToSDK converts GatewayRuleSettingsParams to cloudflare.TeamsRuleSettings.
+//
+//nolint:gocyclo,revive // cyclomatic/cognitive complexity is acceptable for this conversion
+func convertRuleSettingsToSDK(params *GatewayRuleSettingsParams) cloudflare.TeamsRuleSettings {
+	if params == nil {
+		return cloudflare.TeamsRuleSettings{}
+	}
+
+	settings := cloudflare.TeamsRuleSettings{
+		BlockReason:  params.BlockReason,
+		OverrideIPs:  params.OverrideIPs,
+		OverrideHost: params.OverrideHost,
+	}
+
+	if params.BlockPageEnabled != nil {
+		settings.BlockPageEnabled = *params.BlockPageEnabled
+	}
+	if params.InsecureDisableDNSSECValidation != nil {
+		settings.InsecureDisableDNSSECValidation = *params.InsecureDisableDNSSECValidation
+	}
+	if params.L4Override != nil {
+		settings.L4Override = &cloudflare.TeamsL4OverrideSettings{
+			IP:   params.L4Override.IP,
+			Port: params.L4Override.Port,
+		}
+	}
+	if params.BISOAdminControls != nil {
+		biso := &cloudflare.TeamsBISOAdminControlSettings{}
+		if params.BISOAdminControls.DisablePrinting != nil {
+			biso.DisablePrinting = *params.BISOAdminControls.DisablePrinting
+		}
+		if params.BISOAdminControls.DisableCopyPaste != nil {
+			biso.DisableCopyPaste = *params.BISOAdminControls.DisableCopyPaste
+		}
+		if params.BISOAdminControls.DisableDownload != nil {
+			biso.DisableDownload = *params.BISOAdminControls.DisableDownload
+		}
+		if params.BISOAdminControls.DisableUpload != nil {
+			biso.DisableUpload = *params.BISOAdminControls.DisableUpload
+		}
+		if params.BISOAdminControls.DisableKeyboard != nil {
+			biso.DisableKeyboard = *params.BISOAdminControls.DisableKeyboard
+		}
+		if params.BISOAdminControls.DisableClipboardRedirection != nil {
+			biso.DisableClipboardRedirection = *params.BISOAdminControls.DisableClipboardRedirection
+		}
+		settings.BISOAdminControls = biso
+	}
+	if params.CheckSession != nil {
+		settings.CheckSession = &cloudflare.TeamsCheckSessionSettings{
+			Enforce:  params.CheckSession.Enforce,
+			Duration: cloudflare.Duration{Duration: parseDuration(params.CheckSession.Duration)},
+		}
+	}
+	if params.AddHeaders != nil {
+		settings.AddHeaders = make(map[string][]string)
+		for k, v := range params.AddHeaders {
+			settings.AddHeaders[k] = []string{v}
+		}
+	}
+	if params.Egress != nil {
+		settings.EgressSettings = &cloudflare.EgressSettings{
+			Ipv4:         params.Egress.IPv4,
+			Ipv6Range:    params.Egress.IPv6,
+			Ipv4Fallback: params.Egress.IPv4Fallback,
+		}
+	}
+	if params.PayloadLog != nil {
+		settings.PayloadLog = &cloudflare.TeamsDlpPayloadLogSettings{
+			Enabled: params.PayloadLog.Enabled,
+		}
+	}
+	if params.UntrustedCertAction != "" {
+		settings.UntrustedCertSettings = &cloudflare.UntrustedCertSettings{
+			Action: cloudflare.TeamsGatewayUntrustedCertAction(params.UntrustedCertAction),
+		}
+	}
+	if params.AuditSSH != nil {
+		settings.AuditSSH = &cloudflare.AuditSSHRuleSettings{
+			CommandLogging: params.AuditSSH.CommandLogging,
+		}
+	}
+	if params.NotificationSettings != nil {
+		settings.NotificationSettings = &cloudflare.TeamsNotificationSettings{
+			Enabled:    &params.NotificationSettings.Enabled,
+			Message:    params.NotificationSettings.Message,
+			SupportURL: params.NotificationSettings.SupportURL,
+		}
+	}
+	if params.AllowChildBypass != nil {
+		settings.AllowChildBypass = params.AllowChildBypass
+	}
+	if params.BypassParentRule != nil {
+		settings.BypassParentRule = params.BypassParentRule
+	}
+	if params.IgnoreCNAMECategoryMatches != nil {
+		settings.IgnoreCNAMECategoryMatches = params.IgnoreCNAMECategoryMatches
+	}
+	if params.IPCategories != nil {
+		settings.IPCategories = *params.IPCategories
+	}
+	if params.ResolveDNSThroughCloudflare != nil {
+		settings.ResolveDnsThroughCloudflare = params.ResolveDNSThroughCloudflare
+	}
+	if params.Quarantine != nil {
+		settings.Quarantine = &cloudflare.TeamsQuarantine{
+			FileTypes: params.Quarantine.FileTypes,
+		}
+	}
+	if params.DNSResolvers != nil {
+		settings.DnsResolverSettings = &cloudflare.TeamsDnsResolverSettings{}
+		if len(params.DNSResolvers.IPv4) > 0 {
+			for _, r := range params.DNSResolvers.IPv4 {
+				addr := cloudflare.TeamsDnsResolverAddress{
+					IP:                         r.IP,
+					VnetID:                     r.VNetID,
+					RouteThroughPrivateNetwork: r.RouteThroughPrivateNetwork,
+				}
+				if r.Port != 0 {
+					port := r.Port
+					addr.Port = &port
+				}
+				settings.DnsResolverSettings.V4Resolvers = append(settings.DnsResolverSettings.V4Resolvers,
+					cloudflare.TeamsDnsResolverAddressV4{TeamsDnsResolverAddress: addr})
+			}
+		}
+		if len(params.DNSResolvers.IPv6) > 0 {
+			for _, r := range params.DNSResolvers.IPv6 {
+				addr := cloudflare.TeamsDnsResolverAddress{
+					IP:                         r.IP,
+					VnetID:                     r.VNetID,
+					RouteThroughPrivateNetwork: r.RouteThroughPrivateNetwork,
+				}
+				if r.Port != 0 {
+					port := r.Port
+					addr.Port = &port
+				}
+				settings.DnsResolverSettings.V6Resolvers = append(settings.DnsResolverSettings.V6Resolvers,
+					cloudflare.TeamsDnsResolverAddressV6{TeamsDnsResolverAddress: addr})
+			}
+		}
+	}
+	if params.ResolveDNSInternally != nil {
+		settings.ResolveDnsInternallySettings = &cloudflare.TeamsResolveDnsInternallySettings{
+			ViewID:   params.ResolveDNSInternally.ViewID,
+			Fallback: cloudflare.TeamsResolveDnsInternallyFallbackStrategy(params.ResolveDNSInternally.Fallback),
+		}
+	}
+
+	return settings
+}
+
+// convertScheduleToSDK converts GatewayRuleScheduleParams to cloudflare.TeamsRuleSchedule.
+func convertScheduleToSDK(params *GatewayRuleScheduleParams) *cloudflare.TeamsRuleSchedule {
+	if params == nil {
+		return nil
+	}
+	return &cloudflare.TeamsRuleSchedule{
+		TimeZone:  params.TimeZone,
+		Monday:    cloudflare.TeamsScheduleTimes(params.Mon),
+		Tuesday:   cloudflare.TeamsScheduleTimes(params.Tue),
+		Wednesday: cloudflare.TeamsScheduleTimes(params.Wed),
+		Thursday:  cloudflare.TeamsScheduleTimes(params.Thu),
+		Friday:    cloudflare.TeamsScheduleTimes(params.Fri),
+		Saturday:  cloudflare.TeamsScheduleTimes(params.Sat),
+		Sunday:    cloudflare.TeamsScheduleTimes(params.Sun),
+	}
+}
+
+// convertExpirationToSDK converts GatewayRuleExpirationParams to cloudflare.TeamsRuleExpiration.
+func convertExpirationToSDK(params *GatewayRuleExpirationParams) *cloudflare.TeamsRuleExpiration {
+	if params == nil {
+		return nil
+	}
+	result := &cloudflare.TeamsRuleExpiration{}
+	if params.ExpiresAt != "" {
+		t, err := time.Parse(time.RFC3339, params.ExpiresAt)
+		if err == nil {
+			result.ExpiresAt = &t
+		}
+	}
+	return result
 }
 
 // CreateGatewayRule creates a new Gateway Rule.
@@ -52,6 +367,9 @@ func (c *API) CreateGatewayRule(params GatewayRuleParams) (*GatewayRuleResult, e
 		Traffic:       params.Traffic,
 		Identity:      params.Identity,
 		DevicePosture: params.DevicePosture,
+		RuleSettings:  convertRuleSettingsToSDK(params.RuleSettings),
+		Schedule:      convertScheduleToSDK(params.Schedule),
+		Expiration:    convertExpirationToSDK(params.Expiration),
 	}
 
 	result, err := c.CloudflareClient.TeamsCreateRule(ctx, c.ValidAccountId, rule)
@@ -117,6 +435,9 @@ func (c *API) UpdateGatewayRule(ruleID string, params GatewayRuleParams) (*Gatew
 		Traffic:       params.Traffic,
 		Identity:      params.Identity,
 		DevicePosture: params.DevicePosture,
+		RuleSettings:  convertRuleSettingsToSDK(params.RuleSettings),
+		Schedule:      convertScheduleToSDK(params.Schedule),
+		Expiration:    convertExpirationToSDK(params.Expiration),
 	}
 
 	result, err := c.CloudflareClient.TeamsUpdateRule(ctx, c.ValidAccountId, ruleID, rule)

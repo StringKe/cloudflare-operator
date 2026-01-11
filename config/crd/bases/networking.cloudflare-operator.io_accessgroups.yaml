@@ -120,7 +120,7 @@ spec:
                 type: object
               exclude:
                 description: Exclude defines rules that exclude users even if they
-                  match include rules.
+                  match include rules (NOT logic).
                 items:
                   description: AccessGroupRule defines a single rule in an Access
                     Group.
@@ -129,6 +129,35 @@ spec:
                       description: AnyValidServiceToken matches any valid service
                         token.
                       type: boolean
+                    authContext:
+                      description: AuthContext matches Azure Authentication Context.
+                      properties:
+                        acId:
+                          description: AcID is the Azure AD Conditional Access Policy
+                            ID.
+                          type: string
+                        id:
+                          description: ID is the Azure Authentication Context ID.
+                          type: string
+                        identityProviderId:
+                          description: IdentityProviderID is the Cloudflare ID of
+                            the Azure identity provider.
+                          type: string
+                      required:
+                      - acId
+                      - id
+                      - identityProviderId
+                      type: object
+                    authMethod:
+                      description: AuthMethod enforces different MFA options.
+                      properties:
+                        authMethod:
+                          description: AuthMethod is the authentication method type
+                            (e.g., "mfa").
+                          type: string
+                      required:
+                      - authMethod
+                      type: object
                     azure:
                       description: Azure matches users from Azure AD groups.
                       properties:
@@ -188,6 +217,15 @@ spec:
                       required:
                       - domain
                       type: object
+                    emailList:
+                      description: EmailList matches emails from a predefined list.
+                      properties:
+                        id:
+                          description: ID is the Cloudflare ID of the email list.
+                          type: string
+                      required:
+                      - id
+                      type: object
                     everyone:
                       description: Everyone matches all users.
                       type: boolean
@@ -237,6 +275,15 @@ spec:
                       - email
                       - identityProviderId
                       type: object
+                    ipList:
+                      description: IPList matches users from a predefined IP list.
+                      properties:
+                        id:
+                          description: ID is the Cloudflare ID of the IP list.
+                          type: string
+                      required:
+                      - id
+                      type: object
                     ipRanges:
                       description: IPRanges matches users from specific IP ranges.
                       properties:
@@ -246,6 +293,15 @@ spec:
                           type: array
                       required:
                       - ip
+                      type: object
+                    loginMethod:
+                      description: LoginMethod matches a specific identity provider.
+                      properties:
+                        id:
+                          description: ID is the Cloudflare ID of the identity provider.
+                          type: string
+                      required:
+                      - id
                       type: object
                     oidc:
                       description: OIDC matches users based on OIDC claims.
@@ -260,6 +316,20 @@ spec:
                       - claimName
                       - claimValue
                       - identityProviderId
+                      type: object
+                    okta:
+                      description: Okta matches users from Okta groups.
+                      properties:
+                        identityProviderId:
+                          description: IdentityProviderID is the Cloudflare ID of
+                            the Okta identity provider.
+                          type: string
+                        name:
+                          description: Name is the Okta group name.
+                          type: string
+                      required:
+                      - identityProviderId
+                      - name
                       type: object
                     saml:
                       description: SAML matches users based on SAML attributes.
@@ -287,7 +357,8 @@ spec:
                   type: object
                 type: array
               include:
-                description: Include defines rules that users must match to be included.
+                description: Include defines rules that users must match to be included
+                  (OR logic).
                 items:
                   description: AccessGroupRule defines a single rule in an Access
                     Group.
@@ -296,6 +367,35 @@ spec:
                       description: AnyValidServiceToken matches any valid service
                         token.
                       type: boolean
+                    authContext:
+                      description: AuthContext matches Azure Authentication Context.
+                      properties:
+                        acId:
+                          description: AcID is the Azure AD Conditional Access Policy
+                            ID.
+                          type: string
+                        id:
+                          description: ID is the Azure Authentication Context ID.
+                          type: string
+                        identityProviderId:
+                          description: IdentityProviderID is the Cloudflare ID of
+                            the Azure identity provider.
+                          type: string
+                      required:
+                      - acId
+                      - id
+                      - identityProviderId
+                      type: object
+                    authMethod:
+                      description: AuthMethod enforces different MFA options.
+                      properties:
+                        authMethod:
+                          description: AuthMethod is the authentication method type
+                            (e.g., "mfa").
+                          type: string
+                      required:
+                      - authMethod
+                      type: object
                     azure:
                       description: Azure matches users from Azure AD groups.
                       properties:
@@ -355,6 +455,15 @@ spec:
                       required:
                       - domain
                       type: object
+                    emailList:
+                      description: EmailList matches emails from a predefined list.
+                      properties:
+                        id:
+                          description: ID is the Cloudflare ID of the email list.
+                          type: string
+                      required:
+                      - id
+                      type: object
                     everyone:
                       description: Everyone matches all users.
                       type: boolean
@@ -404,6 +513,15 @@ spec:
                       - email
                       - identityProviderId
                       type: object
+                    ipList:
+                      description: IPList matches users from a predefined IP list.
+                      properties:
+                        id:
+                          description: ID is the Cloudflare ID of the IP list.
+                          type: string
+                      required:
+                      - id
+                      type: object
                     ipRanges:
                       description: IPRanges matches users from specific IP ranges.
                       properties:
@@ -413,6 +531,15 @@ spec:
                           type: array
                       required:
                       - ip
+                      type: object
+                    loginMethod:
+                      description: LoginMethod matches a specific identity provider.
+                      properties:
+                        id:
+                          description: ID is the Cloudflare ID of the identity provider.
+                          type: string
+                      required:
+                      - id
                       type: object
                     oidc:
                       description: OIDC matches users based on OIDC claims.
@@ -427,6 +554,20 @@ spec:
                       - claimName
                       - claimValue
                       - identityProviderId
+                      type: object
+                    okta:
+                      description: Okta matches users from Okta groups.
+                      properties:
+                        identityProviderId:
+                          description: IdentityProviderID is the Cloudflare ID of
+                            the Okta identity provider.
+                          type: string
+                        name:
+                          description: Name is the Okta group name.
+                          type: string
+                      required:
+                      - identityProviderId
+                      - name
                       type: object
                     saml:
                       description: SAML matches users based on SAML attributes.
@@ -454,13 +595,16 @@ spec:
                   type: object
                 minItems: 1
                 type: array
+              isDefault:
+                description: IsDefault indicates whether this is the default group.
+                type: boolean
               name:
                 description: Name of the Access Group in Cloudflare.
                 maxLength: 255
                 type: string
               require:
                 description: Require defines rules that all users must match in addition
-                  to include rules.
+                  to include rules (AND logic).
                 items:
                   description: AccessGroupRule defines a single rule in an Access
                     Group.
@@ -469,6 +613,35 @@ spec:
                       description: AnyValidServiceToken matches any valid service
                         token.
                       type: boolean
+                    authContext:
+                      description: AuthContext matches Azure Authentication Context.
+                      properties:
+                        acId:
+                          description: AcID is the Azure AD Conditional Access Policy
+                            ID.
+                          type: string
+                        id:
+                          description: ID is the Azure Authentication Context ID.
+                          type: string
+                        identityProviderId:
+                          description: IdentityProviderID is the Cloudflare ID of
+                            the Azure identity provider.
+                          type: string
+                      required:
+                      - acId
+                      - id
+                      - identityProviderId
+                      type: object
+                    authMethod:
+                      description: AuthMethod enforces different MFA options.
+                      properties:
+                        authMethod:
+                          description: AuthMethod is the authentication method type
+                            (e.g., "mfa").
+                          type: string
+                      required:
+                      - authMethod
+                      type: object
                     azure:
                       description: Azure matches users from Azure AD groups.
                       properties:
@@ -528,6 +701,15 @@ spec:
                       required:
                       - domain
                       type: object
+                    emailList:
+                      description: EmailList matches emails from a predefined list.
+                      properties:
+                        id:
+                          description: ID is the Cloudflare ID of the email list.
+                          type: string
+                      required:
+                      - id
+                      type: object
                     everyone:
                       description: Everyone matches all users.
                       type: boolean
@@ -577,6 +759,15 @@ spec:
                       - email
                       - identityProviderId
                       type: object
+                    ipList:
+                      description: IPList matches users from a predefined IP list.
+                      properties:
+                        id:
+                          description: ID is the Cloudflare ID of the IP list.
+                          type: string
+                      required:
+                      - id
+                      type: object
                     ipRanges:
                       description: IPRanges matches users from specific IP ranges.
                       properties:
@@ -586,6 +777,15 @@ spec:
                           type: array
                       required:
                       - ip
+                      type: object
+                    loginMethod:
+                      description: LoginMethod matches a specific identity provider.
+                      properties:
+                        id:
+                          description: ID is the Cloudflare ID of the identity provider.
+                          type: string
+                      required:
+                      - id
                       type: object
                     oidc:
                       description: OIDC matches users based on OIDC claims.
@@ -600,6 +800,20 @@ spec:
                       - claimName
                       - claimValue
                       - identityProviderId
+                      type: object
+                    okta:
+                      description: Okta matches users from Okta groups.
+                      properties:
+                        identityProviderId:
+                          description: IdentityProviderID is the Cloudflare ID of
+                            the Okta identity provider.
+                          type: string
+                        name:
+                          description: Name is the Okta group name.
+                          type: string
+                      required:
+                      - identityProviderId
+                      - name
                       type: object
                     saml:
                       description: SAML matches users based on SAML attributes.

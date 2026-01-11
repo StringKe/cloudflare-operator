@@ -165,94 +165,142 @@ func (r *AccessGroupReconciler) reconcileAccessGroup(ctx context.Context, access
 	return r.updateStatusSuccess(ctx, accessGroup, result)
 }
 
-func (r *AccessGroupReconciler) buildGroupRules(rules []networkingv1alpha2.AccessGroupRule) []interface{} {
+// buildGroupRules converts CRD group rules to API params.
+//
+//nolint:revive // cognitive complexity is acceptable for this conversion
+func (*AccessGroupReconciler) buildGroupRules(rules []networkingv1alpha2.AccessGroupRule) []cf.AccessGroupRuleParams {
 	if len(rules) == 0 {
 		return nil
 	}
 
-	result := make([]interface{}, 0, len(rules))
+	result := make([]cf.AccessGroupRuleParams, 0, len(rules))
 	for _, rule := range rules {
-		ruleMap := make(map[string]interface{})
+		params := cf.AccessGroupRuleParams{}
+		hasRule := false
 
 		if rule.Email != nil {
-			ruleMap["email"] = map[string]string{"email": rule.Email.Email}
+			params.Email = &cf.AccessGroupEmailRuleParams{Email: rule.Email.Email}
+			hasRule = true
 		}
 		if rule.EmailDomain != nil {
-			ruleMap["email_domain"] = map[string]string{"domain": rule.EmailDomain.Domain}
+			params.EmailDomain = &cf.AccessGroupEmailDomainRuleParams{Domain: rule.EmailDomain.Domain}
+			hasRule = true
+		}
+		if rule.EmailList != nil {
+			params.EmailList = &cf.AccessGroupEmailListRuleParams{ID: rule.EmailList.ID}
+			hasRule = true
 		}
 		if rule.IPRanges != nil && len(rule.IPRanges.IP) > 0 {
-			// Add first IP range - for multiple, create multiple rules
-			ruleMap["ip"] = map[string]string{"ip": rule.IPRanges.IP[0]}
+			params.IPRanges = &cf.AccessGroupIPRangesRuleParams{IP: rule.IPRanges.IP}
+			hasRule = true
+		}
+		if rule.IPList != nil {
+			params.IPList = &cf.AccessGroupIPListRuleParams{ID: rule.IPList.ID}
+			hasRule = true
 		}
 		if rule.Everyone {
-			ruleMap["everyone"] = struct{}{}
+			params.Everyone = true
+			hasRule = true
 		}
 		if rule.Group != nil {
-			ruleMap["group"] = map[string]string{"id": rule.Group.ID}
+			params.Group = &cf.AccessGroupGroupRuleParams{ID: rule.Group.ID}
+			hasRule = true
 		}
 		if rule.AnyValidServiceToken {
-			ruleMap["any_valid_service_token"] = struct{}{}
+			params.AnyValidServiceToken = true
+			hasRule = true
 		}
 		if rule.ServiceToken != nil {
-			ruleMap["service_token"] = map[string]string{"token_id": rule.ServiceToken.TokenID}
+			params.ServiceToken = &cf.AccessGroupServiceTokenRuleParams{TokenID: rule.ServiceToken.TokenID}
+			hasRule = true
 		}
 		if rule.ExternalEvaluation != nil {
-			ruleMap["external_evaluation"] = map[string]string{
-				"evaluate_url": rule.ExternalEvaluation.EvaluateURL,
-				"keys_url":     rule.ExternalEvaluation.KeysURL,
+			params.ExternalEvaluation = &cf.AccessGroupExternalEvaluationRuleParams{
+				EvaluateURL: rule.ExternalEvaluation.EvaluateURL,
+				KeysURL:     rule.ExternalEvaluation.KeysURL,
 			}
+			hasRule = true
 		}
 		if rule.Country != nil && len(rule.Country.Country) > 0 {
-			ruleMap["geo"] = map[string]string{"country_code": rule.Country.Country[0]}
+			params.Country = &cf.AccessGroupCountryRuleParams{Country: rule.Country.Country}
+			hasRule = true
 		}
 		if rule.DevicePosture != nil {
-			ruleMap["device_posture"] = map[string]string{"integration_uid": rule.DevicePosture.IntegrationUID}
+			params.DevicePosture = &cf.AccessGroupDevicePostureRuleParams{IntegrationUID: rule.DevicePosture.IntegrationUID}
+			hasRule = true
 		}
 		if rule.CommonName != nil {
-			ruleMap["common_name"] = map[string]string{"common_name": rule.CommonName.CommonName}
+			params.CommonName = &cf.AccessGroupCommonNameRuleParams{CommonName: rule.CommonName.CommonName}
+			hasRule = true
 		}
 		if rule.Certificate {
-			ruleMap["certificate"] = struct{}{}
+			params.Certificate = true
+			hasRule = true
 		}
 		if rule.SAML != nil {
-			ruleMap["saml"] = map[string]interface{}{
-				"attribute_name":       rule.SAML.AttributeName,
-				"attribute_value":      rule.SAML.AttributeValue,
-				"identity_provider_id": rule.SAML.IdentityProviderID,
+			params.SAML = &cf.AccessGroupSAMLRuleParams{
+				AttributeName:      rule.SAML.AttributeName,
+				AttributeValue:     rule.SAML.AttributeValue,
+				IdentityProviderID: rule.SAML.IdentityProviderID,
 			}
+			hasRule = true
 		}
 		if rule.OIDC != nil {
-			ruleMap["oidc"] = map[string]interface{}{
-				"claim_name":           rule.OIDC.ClaimName,
-				"claim_value":          rule.OIDC.ClaimValue,
-				"identity_provider_id": rule.OIDC.IdentityProviderID,
+			params.OIDC = &cf.AccessGroupOIDCRuleParams{
+				ClaimName:          rule.OIDC.ClaimName,
+				ClaimValue:         rule.OIDC.ClaimValue,
+				IdentityProviderID: rule.OIDC.IdentityProviderID,
 			}
+			hasRule = true
 		}
 		if rule.GSuite != nil {
-			ruleMap["gsuite"] = map[string]interface{}{
-				"email":                rule.GSuite.Email,
-				"identity_provider_id": rule.GSuite.IdentityProviderID,
+			params.GSuite = &cf.AccessGroupGSuiteRuleParams{
+				Email:              rule.GSuite.Email,
+				IdentityProviderID: rule.GSuite.IdentityProviderID,
 			}
+			hasRule = true
 		}
 		if rule.Azure != nil {
-			ruleMap["azure_ad"] = map[string]interface{}{
-				"id":                   rule.Azure.ID,
-				"identity_provider_id": rule.Azure.IdentityProviderID,
+			params.Azure = &cf.AccessGroupAzureRuleParams{
+				ID:                 rule.Azure.ID,
+				IdentityProviderID: rule.Azure.IdentityProviderID,
 			}
+			hasRule = true
 		}
 		if rule.GitHub != nil {
-			ghMap := map[string]interface{}{
-				"name":                 rule.GitHub.Name,
-				"identity_provider_id": rule.GitHub.IdentityProviderID,
+			params.GitHub = &cf.AccessGroupGitHubRuleParams{
+				Name:               rule.GitHub.Name,
+				Teams:              rule.GitHub.Teams,
+				IdentityProviderID: rule.GitHub.IdentityProviderID,
 			}
-			if len(rule.GitHub.Teams) > 0 {
-				ghMap["teams"] = rule.GitHub.Teams
+			hasRule = true
+		}
+		if rule.Okta != nil {
+			params.Okta = &cf.AccessGroupOktaRuleParams{
+				Name:               rule.Okta.Name,
+				IdentityProviderID: rule.Okta.IdentityProviderID,
 			}
-			ruleMap["github_organization"] = ghMap
+			hasRule = true
+		}
+		if rule.AuthMethod != nil {
+			params.AuthMethod = &cf.AccessGroupAuthMethodRuleParams{AuthMethod: rule.AuthMethod.AuthMethod}
+			hasRule = true
+		}
+		if rule.AuthContext != nil {
+			params.AuthContext = &cf.AccessGroupAuthContextRuleParams{
+				ID:                 rule.AuthContext.ID,
+				AcID:               rule.AuthContext.AcID,
+				IdentityProviderID: rule.AuthContext.IdentityProviderID,
+			}
+			hasRule = true
+		}
+		if rule.LoginMethod != nil {
+			params.LoginMethod = &cf.AccessGroupLoginMethodRuleParams{ID: rule.LoginMethod.ID}
+			hasRule = true
 		}
 
-		if len(ruleMap) > 0 {
-			result = append(result, ruleMap)
+		if hasRule {
+			result = append(result, params)
 		}
 	}
 

@@ -194,10 +194,14 @@ func (r *AccessServiceTokenReconciler) reconcileServiceToken(ctx context.Context
 			// If in Error state but generation unchanged, also skip update
 			// Use cached values to update state to Ready since token exists
 			result = &cf.AccessServiceTokenResult{
-				TokenID:   token.Status.TokenID,
-				ClientID:  token.Status.ClientID,
-				AccountID: token.Status.AccountID,
-				ExpiresAt: token.Status.ExpiresAt,
+				TokenID:             token.Status.TokenID,
+				ClientID:            token.Status.ClientID,
+				AccountID:           token.Status.AccountID,
+				ExpiresAt:           token.Status.ExpiresAt,
+				CreatedAt:           token.Status.CreatedAt,
+				UpdatedAt:           token.Status.UpdatedAt,
+				LastSeenAt:          token.Status.LastSeenAt,
+				ClientSecretVersion: token.Status.ClientSecretVersion,
 			}
 		} else {
 			// Spec changed, update the token
@@ -397,6 +401,16 @@ func (r *AccessServiceTokenReconciler) updateStatusSuccess(ctx context.Context, 
 		if result.ExpiresAt != "" {
 			token.Status.ExpiresAt = result.ExpiresAt
 		}
+		if result.CreatedAt != "" {
+			token.Status.CreatedAt = result.CreatedAt
+		}
+		if result.UpdatedAt != "" {
+			token.Status.UpdatedAt = result.UpdatedAt
+		}
+		if result.LastSeenAt != "" {
+			token.Status.LastSeenAt = result.LastSeenAt
+		}
+		token.Status.ClientSecretVersion = result.ClientSecretVersion
 		token.Status.State = "Ready"
 		meta.SetStatusCondition(&token.Status.Conditions, metav1.Condition{
 			Type:               "Ready",

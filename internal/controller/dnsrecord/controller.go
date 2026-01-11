@@ -258,101 +258,49 @@ func (r *DNSRecordReconciler) reconcileDNSRecord(ctx context.Context, record *ne
 	return r.updateStatusSuccess(ctx, record, result)
 }
 
-func (r *DNSRecordReconciler) buildRecordData(data *networkingv1alpha2.DNSRecordData) map[string]interface{} {
-	result := make(map[string]interface{})
-
-	// SRV record data
-	if data.Service != "" {
-		result["service"] = data.Service
-	}
-	if data.Proto != "" {
-		result["proto"] = data.Proto
-	}
-	if data.Weight != 0 {
-		result["weight"] = data.Weight
-	}
-	if data.Port != 0 {
-		result["port"] = data.Port
-	}
-	if data.Target != "" {
-		result["target"] = data.Target
+func (*DNSRecordReconciler) buildRecordData(data *networkingv1alpha2.DNSRecordData) *cf.DNSRecordDataParams {
+	if data == nil {
+		return nil
 	}
 
-	// CAA record data
-	if data.Flags != 0 {
-		result["flags"] = data.Flags
-	}
-	if data.Tag != "" {
-		result["tag"] = data.Tag
-	}
-	if data.Value != "" {
-		result["value"] = data.Value
-	}
+	return &cf.DNSRecordDataParams{
+		// SRV record data
+		Service: data.Service,
+		Proto:   data.Proto,
+		Weight:  data.Weight,
+		Port:    data.Port,
+		Target:  data.Target,
 
-	// CERT/SSHFP/TLSA record data
-	if data.Algorithm != 0 {
-		result["algorithm"] = data.Algorithm
-	}
-	if data.Certificate != "" {
-		result["certificate"] = data.Certificate
-	}
-	if data.KeyTag != 0 {
-		result["key_tag"] = data.KeyTag
-	}
-	if data.Usage != 0 {
-		result["usage"] = data.Usage
-	}
-	if data.Selector != 0 {
-		result["selector"] = data.Selector
-	}
-	if data.MatchingType != 0 {
-		result["matching_type"] = data.MatchingType
-	}
+		// CAA record data
+		Flags: data.Flags,
+		Tag:   data.Tag,
+		Value: data.Value,
 
-	// LOC record data
-	if data.LatDegrees != 0 {
-		result["lat_degrees"] = data.LatDegrees
-	}
-	if data.LatMinutes != 0 {
-		result["lat_minutes"] = data.LatMinutes
-	}
-	if data.LatSeconds != "" {
-		result["lat_seconds"] = data.LatSeconds
-	}
-	if data.LatDirection != "" {
-		result["lat_direction"] = data.LatDirection
-	}
-	if data.LongDegrees != 0 {
-		result["long_degrees"] = data.LongDegrees
-	}
-	if data.LongMinutes != 0 {
-		result["long_minutes"] = data.LongMinutes
-	}
-	if data.LongSeconds != "" {
-		result["long_seconds"] = data.LongSeconds
-	}
-	if data.LongDirection != "" {
-		result["long_direction"] = data.LongDirection
-	}
-	if data.Altitude != "" {
-		result["altitude"] = data.Altitude
-	}
-	if data.Size != "" {
-		result["size"] = data.Size
-	}
-	if data.PrecisionHorz != "" {
-		result["precision_horz"] = data.PrecisionHorz
-	}
-	if data.PrecisionVert != "" {
-		result["precision_vert"] = data.PrecisionVert
-	}
+		// CERT/SSHFP/TLSA record data
+		Algorithm:    data.Algorithm,
+		Certificate:  data.Certificate,
+		KeyTag:       data.KeyTag,
+		Usage:        data.Usage,
+		Selector:     data.Selector,
+		MatchingType: data.MatchingType,
 
-	// URI record data
-	if data.ContentURI != "" {
-		result["content"] = data.ContentURI
-	}
+		// LOC record data
+		LatDegrees:    data.LatDegrees,
+		LatMinutes:    data.LatMinutes,
+		LatSeconds:    data.LatSeconds,
+		LatDirection:  data.LatDirection,
+		LongDegrees:   data.LongDegrees,
+		LongMinutes:   data.LongMinutes,
+		LongSeconds:   data.LongSeconds,
+		LongDirection: data.LongDirection,
+		Altitude:      data.Altitude,
+		Size:          data.Size,
+		PrecisionHorz: data.PrecisionHorz,
+		PrecisionVert: data.PrecisionVert,
 
-	return result
+		// URI record data
+		ContentURI: data.ContentURI,
+	}
 }
 
 func (r *DNSRecordReconciler) updateStatusError(ctx context.Context, record *networkingv1alpha2.DNSRecord, err error) (ctrl.Result, error) {

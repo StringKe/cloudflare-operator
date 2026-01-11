@@ -31,7 +31,7 @@ type GatewayRuleSpec struct {
 
 	// Action is what happens when the rule matches.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Enum=allow;block;log;isolate;l4_override;egress;resolve;quarantine
+	// +kubebuilder:validation:Enum=on;off;allow;block;scan;noscan;safesearch;ytrestricted;isolate;noisolate;override;l4_override;egress;resolve;quarantine
 	Action string `json:"action"`
 
 	// Filters specifies which types of traffic this rule applies to.
@@ -54,9 +54,63 @@ type GatewayRuleSpec struct {
 	// +kubebuilder:validation:Optional
 	RuleSettings *GatewayRuleSettings `json:"ruleSettings,omitempty"`
 
+	// Schedule defines when the rule is active.
+	// +kubebuilder:validation:Optional
+	Schedule *GatewayRuleSchedule `json:"schedule,omitempty"`
+
+	// Expiration defines when the rule expires (for DNS policies).
+	// +kubebuilder:validation:Optional
+	Expiration *GatewayRuleExpiration `json:"expiration,omitempty"`
+
 	// Cloudflare contains the Cloudflare API credentials.
 	// +kubebuilder:validation:Required
 	Cloudflare CloudflareDetails `json:"cloudflare"`
+}
+
+// GatewayRuleSchedule defines when a rule is active.
+type GatewayRuleSchedule struct {
+	// TimeZone is the time zone for the schedule (e.g., "America/New_York").
+	// +kubebuilder:validation:Optional
+	TimeZone string `json:"timeZone,omitempty"`
+
+	// Mon is the schedule for Monday (e.g., "09:00-17:00").
+	// +kubebuilder:validation:Optional
+	Mon string `json:"mon,omitempty"`
+
+	// Tue is the schedule for Tuesday.
+	// +kubebuilder:validation:Optional
+	Tue string `json:"tue,omitempty"`
+
+	// Wed is the schedule for Wednesday.
+	// +kubebuilder:validation:Optional
+	Wed string `json:"wed,omitempty"`
+
+	// Thu is the schedule for Thursday.
+	// +kubebuilder:validation:Optional
+	Thu string `json:"thu,omitempty"`
+
+	// Fri is the schedule for Friday.
+	// +kubebuilder:validation:Optional
+	Fri string `json:"fri,omitempty"`
+
+	// Sat is the schedule for Saturday.
+	// +kubebuilder:validation:Optional
+	Sat string `json:"sat,omitempty"`
+
+	// Sun is the schedule for Sunday.
+	// +kubebuilder:validation:Optional
+	Sun string `json:"sun,omitempty"`
+}
+
+// GatewayRuleExpiration defines when a DNS rule expires.
+type GatewayRuleExpiration struct {
+	// ExpiresAt is when the rule expires (RFC3339 format).
+	// +kubebuilder:validation:Optional
+	ExpiresAt string `json:"expiresAt,omitempty"`
+
+	// Duration is the default expiration duration (e.g., "1h", "24h").
+	// +kubebuilder:validation:Optional
+	Duration string `json:"duration,omitempty"`
 }
 
 // GatewayRuleSettings contains action-specific settings.
@@ -114,21 +168,45 @@ type GatewayRuleSettings struct {
 	// +kubebuilder:validation:Optional
 	AuditSSH *AuditSSHSettings `json:"auditSsh,omitempty"`
 
-	// ResolveDNSInternally for private DNS resolution.
+	// ResolveDNSInternally enables internal DNS resolution with view_id.
 	// +kubebuilder:validation:Optional
-	ResolveDNSInternally *bool `json:"resolveDnsInternally,omitempty"`
+	ResolveDNSInternally *ResolveDNSInternallySettings `json:"resolveDnsInternally,omitempty"`
 
-	// DNSResolverIPv4 custom resolver.
+	// ResolveDNSThroughCloudflare sends DNS to 1.1.1.1.
 	// +kubebuilder:validation:Optional
-	DNSResolverIPv4 *DNSResolver `json:"dnsResolverIpv4,omitempty"`
+	ResolveDNSThroughCloudflare *bool `json:"resolveDnsThroughCloudflare,omitempty"`
 
-	// DNSResolverIPv6 custom resolver.
+	// DNSResolvers contains custom DNS resolver settings.
 	// +kubebuilder:validation:Optional
-	DNSResolverIPv6 *DNSResolver `json:"dnsResolverIpv6,omitempty"`
+	DNSResolvers *DNSResolversSettings `json:"dnsResolvers,omitempty"`
 
 	// NotificationSettings for alerts.
 	// +kubebuilder:validation:Optional
 	NotificationSettings *NotificationSettings `json:"notificationSettings,omitempty"`
+
+	// AllowChildBypass allows child MSP accounts to bypass.
+	// +kubebuilder:validation:Optional
+	AllowChildBypass *bool `json:"allowChildBypass,omitempty"`
+
+	// BypassParentRule allows bypassing parent MSP rules.
+	// +kubebuilder:validation:Optional
+	BypassParentRule *bool `json:"bypassParentRule,omitempty"`
+
+	// IgnoreCNAMECategoryMatches ignores category at CNAME domains.
+	// +kubebuilder:validation:Optional
+	IgnoreCNAMECategoryMatches *bool `json:"ignoreCnameCategoryMatches,omitempty"`
+
+	// IPCategories enables IPs in DNS resolver category blocks.
+	// +kubebuilder:validation:Optional
+	IPCategories *bool `json:"ipCategories,omitempty"`
+
+	// IPIndicatorFeeds includes IPs in indicator feed blocks.
+	// +kubebuilder:validation:Optional
+	IPIndicatorFeeds *bool `json:"ipIndicatorFeeds,omitempty"`
+
+	// Quarantine settings for quarantine action.
+	// +kubebuilder:validation:Optional
+	Quarantine *QuarantineSettings `json:"quarantine,omitempty"`
 }
 
 // L4OverrideSettings for L4 override.
@@ -170,12 +248,51 @@ type AuditSSHSettings struct {
 	CommandLogging bool `json:"commandLogging"`
 }
 
-// DNSResolver for custom DNS.
-type DNSResolver struct {
-	IP                         string `json:"ip,omitempty"`
-	Port                       int    `json:"port,omitempty"`
-	VNetID                     string `json:"vnetId,omitempty"`
-	RouteThroughPrivateNetwork bool   `json:"routeThroughPrivateNetwork,omitempty"`
+// DNSResolversSettings contains IPv4 and IPv6 DNS resolvers.
+type DNSResolversSettings struct {
+	// IPv4 resolvers.
+	// +kubebuilder:validation:Optional
+	IPv4 []DNSResolverEntry `json:"ipv4,omitempty"`
+
+	// IPv6 resolvers.
+	// +kubebuilder:validation:Optional
+	IPv6 []DNSResolverEntry `json:"ipv6,omitempty"`
+}
+
+// DNSResolverEntry for custom DNS resolver.
+type DNSResolverEntry struct {
+	// IP is the resolver IP address.
+	IP string `json:"ip"`
+
+	// Port is the resolver port.
+	// +kubebuilder:validation:Optional
+	Port int `json:"port,omitempty"`
+
+	// VNetID is the virtual network ID.
+	// +kubebuilder:validation:Optional
+	VNetID string `json:"vnetId,omitempty"`
+
+	// RouteThroughPrivateNetwork routes through private network.
+	// +kubebuilder:validation:Optional
+	RouteThroughPrivateNetwork *bool `json:"routeThroughPrivateNetwork,omitempty"`
+}
+
+// ResolveDNSInternallySettings for internal DNS resolution.
+type ResolveDNSInternallySettings struct {
+	// ViewID is the DNS view ID for internal resolution.
+	// +kubebuilder:validation:Optional
+	ViewID string `json:"viewId,omitempty"`
+
+	// Fallback determines behavior when internal resolution fails.
+	// +kubebuilder:validation:Optional
+	Fallback *bool `json:"fallback,omitempty"`
+}
+
+// QuarantineSettings for quarantine action.
+type QuarantineSettings struct {
+	// FileTypes to quarantine.
+	// +kubebuilder:validation:Optional
+	FileTypes []string `json:"fileTypes,omitempty"`
 }
 
 // NotificationSettings for alerts.

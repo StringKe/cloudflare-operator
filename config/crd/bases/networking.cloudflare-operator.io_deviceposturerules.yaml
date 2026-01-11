@@ -142,8 +142,14 @@ spec:
                     items:
                       type: string
                     type: array
+                  checkPrivateKey:
+                    description: CheckPrivateKey checks if private key is present.
+                    type: boolean
+                  cn:
+                    description: Cn is an alias for CommonName.
+                    type: string
                   commonName:
-                    description: CommonName for client certificate checks.
+                    description: CommonName (CN) for client certificate checks.
                     type: string
                   complianceStatus:
                     description: ComplianceStatus is the Intune compliance status.
@@ -171,15 +177,29 @@ spec:
                   domain:
                     description: Domain is the expected domain for domain-joined checks.
                     type: string
+                  eidLastSeen:
+                    description: EidLastSeen is for enterprise ID last seen time.
+                    type: string
                   enabled:
                     description: Enabled checks if feature is enabled.
                     type: boolean
                   exists:
                     description: Exists checks if file exists.
                     type: boolean
+                  extendedKeyUsage:
+                    description: ExtendedKeyUsage for certificate key usage.
+                    items:
+                      type: string
+                    type: array
                   id:
                     description: ID is a generic identifier for integrations.
                     type: string
+                  infected:
+                    description: Infected checks if device is infected.
+                    type: boolean
+                  isActive:
+                    description: IsActive checks if the device is active.
+                    type: boolean
                   issueCount:
                     description: IssueCount is the number of issues for SentinelOne.
                     type: integer
@@ -187,6 +207,24 @@ spec:
                     description: LastSeen is the maximum time since device was last
                       seen.
                     type: string
+                  locations:
+                    description: Locations for location-based checks.
+                    items:
+                      description: DevicePostureLocation for location-based posture
+                        checks.
+                      properties:
+                        paths:
+                          description: Paths for location paths.
+                          items:
+                            type: string
+                          type: array
+                        trustStores:
+                          description: TrustStores for trust store locations.
+                          items:
+                            type: string
+                          type: array
+                      type: object
+                    type: array
                   networkStatus:
                     description: NetworkStatus checks for network connection.
                     enum:
@@ -194,6 +232,12 @@ spec:
                     - disconnected
                     - disconnecting
                     - connecting
+                    type: string
+                  operatingSystem:
+                    description: OperatingSystem for operating system name.
+                    type: string
+                  operationalState:
+                    description: OperationalState for device operational state.
                     type: string
                   operator:
                     description: Operator is the version comparison operator.
@@ -204,11 +248,20 @@ spec:
                     - '>='
                     - ==
                     type: string
+                  os:
+                    description: OS for operating system checks.
+                    type: string
                   osDistroName:
                     description: OSDistroName is the OS distribution name.
                     type: string
                   osDistroRevision:
                     description: OSDistroRevision is the OS distribution revision.
+                    type: string
+                  osVersionExtra:
+                    description: OSVersionExtra for additional OS version info.
+                    type: string
+                  overall:
+                    description: Overall risk assessment.
                     type: string
                   path:
                     description: Path is the file path to check.
@@ -216,9 +269,29 @@ spec:
                   requireAll:
                     description: RequireAll requires all conditions to match.
                     type: boolean
+                  riskLevel:
+                    description: RiskLevel for risk assessment.
+                    enum:
+                    - low
+                    - medium
+                    - high
+                    - critical
+                    type: string
                   running:
                     description: Running checks if application is running.
                     type: boolean
+                  score:
+                    description: Score for risk/posture scoring.
+                    type: integer
+                  scoreOperator:
+                    description: ScoreOperator for score comparisons.
+                    enum:
+                    - <
+                    - <=
+                    - '>'
+                    - '>='
+                    - ==
+                    type: string
                   sensorConfig:
                     description: SensorConfig checks sensor configuration.
                     enum:
@@ -229,9 +302,15 @@ spec:
                   sha256:
                     description: Sha256 is the expected file hash.
                     type: string
+                  state:
+                    description: State for device state checks.
+                    type: string
                   thumbprint:
                     description: Thumbprint is the certificate thumbprint.
                     type: string
+                  totalScore:
+                    description: TotalScore for total risk scoring.
+                    type: integer
                   version:
                     description: Version is the minimum version.
                     type: string
@@ -285,12 +364,15 @@ spec:
                 - os_version
                 - domain_joined
                 - client_certificate
+                - client_certificate_v2
                 - unique_client_id
                 - kolide
                 - tanium_s2s
                 - crowdstrike_s2s
+                - sentinelone_s2s
                 - intune
                 - workspace_one
+                - custom_s2s
                 type: string
             required:
             - cloudflare

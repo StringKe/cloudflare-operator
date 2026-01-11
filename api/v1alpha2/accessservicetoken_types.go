@@ -67,6 +67,22 @@ type AccessServiceTokenStatus struct {
 	// +kubebuilder:validation:Optional
 	ExpiresAt string `json:"expiresAt,omitempty"`
 
+	// CreatedAt is when the token was created.
+	// +kubebuilder:validation:Optional
+	CreatedAt string `json:"createdAt,omitempty"`
+
+	// UpdatedAt is when the token was last updated.
+	// +kubebuilder:validation:Optional
+	UpdatedAt string `json:"updatedAt,omitempty"`
+
+	// LastSeenAt is when the token was last used.
+	// +kubebuilder:validation:Optional
+	LastSeenAt string `json:"lastSeenAt,omitempty"`
+
+	// ClientSecretVersion is the current version of the client secret.
+	// +kubebuilder:validation:Optional
+	ClientSecretVersion int64 `json:"clientSecretVersion,omitempty"`
+
 	// SecretName is the name of the Secret containing credentials.
 	// +kubebuilder:validation:Optional
 	SecretName string `json:"secretName,omitempty"`

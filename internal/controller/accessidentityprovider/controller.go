@@ -126,6 +126,11 @@ func (r *AccessIdentityProviderReconciler) reconcileIdentityProvider(ctx context
 		params.Config = r.buildConfig(idp.Spec.Config)
 	}
 
+	// Build SCIM config if present
+	if idp.Spec.ScimConfig != nil {
+		params.ScimConfig = r.buildScimConfig(idp.Spec.ScimConfig)
+	}
+
 	var result *cf.AccessIdentityProviderResult
 	var err error
 
@@ -179,7 +184,10 @@ func (r *AccessIdentityProviderReconciler) buildConfig(config *networkingv1alpha
 	if config.CertsURL != "" {
 		result.CertsURL = config.CertsURL
 	}
-	if len(config.IdPPublicCerts) > 0 {
+	// Handle IdP public cert - prefer single cert field, fallback to array
+	if config.IdPPublicCert != "" {
+		result.IdpPublicCert = config.IdPPublicCert
+	} else if len(config.IdPPublicCerts) > 0 {
 		result.IdpPublicCert = config.IdPPublicCerts[0]
 	}
 	if config.SSOTargetURL != "" {
@@ -196,6 +204,9 @@ func (r *AccessIdentityProviderReconciler) buildConfig(config *networkingv1alpha
 	}
 	if len(config.Scopes) > 0 {
 		result.Scopes = config.Scopes
+	}
+	if len(config.Attributes) > 0 {
+		result.Attributes = config.Attributes
 	}
 	if config.DirectoryID != "" {
 		result.DirectoryID = config.DirectoryID
@@ -224,6 +235,9 @@ func (r *AccessIdentityProviderReconciler) buildConfig(config *networkingv1alpha
 	if config.OktaAccount != "" {
 		result.OktaAccount = config.OktaAccount
 	}
+	if config.OktaAuthorizationServerID != "" {
+		result.OktaAuthorizationServerID = config.OktaAuthorizationServerID
+	}
 	if config.OneloginAccount != "" {
 		result.OneloginAccount = config.OneloginAccount
 	}
@@ -238,6 +252,33 @@ func (r *AccessIdentityProviderReconciler) buildConfig(config *networkingv1alpha
 	}
 	if config.RedirectURL != "" {
 		result.RedirectURL = config.RedirectURL
+	}
+
+	return result
+}
+
+func (*AccessIdentityProviderReconciler) buildScimConfig(
+	config *networkingv1alpha2.IdentityProviderScimConfig,
+) cloudflare.AccessIdentityProviderScimConfiguration {
+	result := cloudflare.AccessIdentityProviderScimConfiguration{}
+
+	if config.Enabled != nil {
+		result.Enabled = *config.Enabled
+	}
+	if config.Secret != "" {
+		result.Secret = config.Secret
+	}
+	if config.UserDeprovision != nil {
+		result.UserDeprovision = *config.UserDeprovision
+	}
+	if config.SeatDeprovision != nil {
+		result.SeatDeprovision = *config.SeatDeprovision
+	}
+	if config.GroupMemberDeprovision != nil {
+		result.GroupMemberDeprovision = *config.GroupMemberDeprovision
+	}
+	if config.IdentityUpdateBehavior != "" {
+		result.IdentityUpdateBehavior = config.IdentityUpdateBehavior
 	}
 
 	return result

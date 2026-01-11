@@ -19,7 +19,154 @@ type DNSRecordParams struct {
 	Priority *int
 	Comment  string
 	Tags     []string
-	Data     map[string]interface{}
+	Data     *DNSRecordDataParams
+}
+
+// DNSRecordDataParams contains structured data for special DNS record types.
+type DNSRecordDataParams struct {
+	// For SRV records
+	Service string
+	Proto   string
+	Weight  int
+	Port    int
+	Target  string
+
+	// For CAA records
+	Flags int
+	Tag   string
+	Value string
+
+	// For CERT/SSHFP/TLSA records
+	Algorithm    int
+	Certificate  string
+	KeyTag       int
+	Usage        int
+	Selector     int
+	MatchingType int
+
+	// For LOC records
+	LatDegrees    int
+	LatMinutes    int
+	LatSeconds    string
+	LatDirection  string
+	LongDegrees   int
+	LongMinutes   int
+	LongSeconds   string
+	LongDirection string
+	Altitude      string
+	Size          string
+	PrecisionHorz string
+	PrecisionVert string
+
+	// For URI records
+	ContentURI string
+}
+
+// convertDataToMap converts DNSRecordDataParams to map[string]interface{} for SDK.
+//
+//nolint:revive // cognitive complexity is acceptable for this conversion
+func convertDataToMap(data *DNSRecordDataParams) map[string]interface{} {
+	if data == nil {
+		return nil
+	}
+
+	result := make(map[string]interface{})
+
+	// SRV fields
+	if data.Service != "" {
+		result["service"] = data.Service
+	}
+	if data.Proto != "" {
+		result["proto"] = data.Proto
+	}
+	if data.Weight != 0 {
+		result["weight"] = data.Weight
+	}
+	if data.Port != 0 {
+		result["port"] = data.Port
+	}
+	if data.Target != "" {
+		result["target"] = data.Target
+	}
+
+	// CAA fields
+	if data.Flags != 0 {
+		result["flags"] = data.Flags
+	}
+	if data.Tag != "" {
+		result["tag"] = data.Tag
+	}
+	if data.Value != "" {
+		result["value"] = data.Value
+	}
+
+	// CERT/SSHFP/TLSA fields
+	if data.Algorithm != 0 {
+		result["algorithm"] = data.Algorithm
+	}
+	if data.Certificate != "" {
+		result["certificate"] = data.Certificate
+	}
+	if data.KeyTag != 0 {
+		result["key_tag"] = data.KeyTag
+	}
+	if data.Usage != 0 {
+		result["usage"] = data.Usage
+	}
+	if data.Selector != 0 {
+		result["selector"] = data.Selector
+	}
+	if data.MatchingType != 0 {
+		result["matching_type"] = data.MatchingType
+	}
+
+	// LOC fields
+	if data.LatDegrees != 0 {
+		result["lat_degrees"] = data.LatDegrees
+	}
+	if data.LatMinutes != 0 {
+		result["lat_minutes"] = data.LatMinutes
+	}
+	if data.LatSeconds != "" {
+		result["lat_seconds"] = data.LatSeconds
+	}
+	if data.LatDirection != "" {
+		result["lat_direction"] = data.LatDirection
+	}
+	if data.LongDegrees != 0 {
+		result["long_degrees"] = data.LongDegrees
+	}
+	if data.LongMinutes != 0 {
+		result["long_minutes"] = data.LongMinutes
+	}
+	if data.LongSeconds != "" {
+		result["long_seconds"] = data.LongSeconds
+	}
+	if data.LongDirection != "" {
+		result["long_direction"] = data.LongDirection
+	}
+	if data.Altitude != "" {
+		result["altitude"] = data.Altitude
+	}
+	if data.Size != "" {
+		result["size"] = data.Size
+	}
+	if data.PrecisionHorz != "" {
+		result["precision_horz"] = data.PrecisionHorz
+	}
+	if data.PrecisionVert != "" {
+		result["precision_vert"] = data.PrecisionVert
+	}
+
+	// URI fields
+	if data.ContentURI != "" {
+		result["content"] = data.ContentURI
+	}
+
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 // DNSRecordResult contains the result of a DNS record operation.
@@ -61,7 +208,7 @@ func (c *API) CreateDNSRecord(params DNSRecordParams) (*DNSRecordResult, error) 
 	}
 
 	if params.Data != nil {
-		createParams.Data = params.Data
+		createParams.Data = convertDataToMap(params.Data)
 	}
 
 	record, err := c.CloudflareClient.CreateDNSRecord(ctx, rc, createParams)
@@ -139,7 +286,7 @@ func (c *API) UpdateDNSRecord(zoneID, recordID string, params DNSRecordParams) (
 	}
 
 	if params.Data != nil {
-		updateParams.Data = params.Data
+		updateParams.Data = convertDataToMap(params.Data)
 	}
 
 	record, err := c.CloudflareClient.UpdateDNSRecord(ctx, rc, updateParams)
@@ -265,7 +412,7 @@ func (c *API) CreateDNSRecordInZone(zoneID string, params DNSRecordParams) (*DNS
 	}
 
 	if params.Data != nil {
-		createParams.Data = params.Data
+		createParams.Data = convertDataToMap(params.Data)
 	}
 
 	record, err := c.CloudflareClient.CreateDNSRecord(ctx, rc, createParams)
@@ -316,7 +463,7 @@ func (c *API) UpdateDNSRecordInZone(zoneID, recordID string, params DNSRecordPar
 	}
 
 	if params.Data != nil {
-		updateParams.Data = params.Data
+		updateParams.Data = convertDataToMap(params.Data)
 	}
 
 	record, err := c.CloudflareClient.UpdateDNSRecord(ctx, rc, updateParams)

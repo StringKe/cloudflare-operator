@@ -142,7 +142,17 @@ func (r *GatewayRuleReconciler) reconcileGatewayRule(ctx context.Context, rule *
 
 	// Build rule settings
 	if rule.Spec.RuleSettings != nil {
-		params.RuleSettings = r.buildRuleSettings(rule.Spec.RuleSettings)
+		params.RuleSettings = buildRuleSettings(rule.Spec.RuleSettings)
+	}
+
+	// Build schedule
+	if rule.Spec.Schedule != nil {
+		params.Schedule = buildSchedule(rule.Spec.Schedule)
+	}
+
+	// Build expiration
+	if rule.Spec.Expiration != nil {
+		params.Expiration = buildExpiration(rule.Spec.Expiration)
 	}
 
 	var result *cf.GatewayRuleResult
@@ -180,93 +190,146 @@ func (r *GatewayRuleReconciler) reconcileGatewayRule(ctx context.Context, rule *
 	return r.updateStatusSuccess(ctx, rule, result)
 }
 
-func (r *GatewayRuleReconciler) buildRuleSettings(settings *networkingv1alpha2.GatewayRuleSettings) map[string]interface{} {
-	result := make(map[string]interface{})
+// buildRuleSettings converts CRD rule settings to API params.
+//
+//nolint:revive // cognitive complexity is acceptable for this conversion
+func buildRuleSettings(settings *networkingv1alpha2.GatewayRuleSettings) *cf.GatewayRuleSettingsParams {
+	if settings == nil {
+		return nil
+	}
 
-	if settings.BlockPageEnabled != nil {
-		result["block_page_enabled"] = *settings.BlockPageEnabled
+	result := &cf.GatewayRuleSettingsParams{
+		BlockPageEnabled:                settings.BlockPageEnabled,
+		BlockReason:                     settings.BlockReason,
+		OverrideIPs:                     settings.OverrideIPs,
+		OverrideHost:                    settings.OverrideHost,
+		InsecureDisableDNSSECValidation: settings.InsecureDisableDNSSECValidation,
+		UntrustedCertAction:             settings.UntrustedCertificateAction,
+		ResolveDNSThroughCloudflare:     settings.ResolveDNSThroughCloudflare,
+		AllowChildBypass:                settings.AllowChildBypass,
+		BypassParentRule:                settings.BypassParentRule,
+		IgnoreCNAMECategoryMatches:      settings.IgnoreCNAMECategoryMatches,
+		IPCategories:                    settings.IPCategories,
+		IPIndicatorFeeds:                settings.IPIndicatorFeeds,
 	}
-	if settings.BlockReason != "" {
-		result["block_reason"] = settings.BlockReason
-	}
-	if settings.OverrideIPs != nil {
-		result["override_ips"] = settings.OverrideIPs
-	}
-	if settings.OverrideHost != "" {
-		result["override_host"] = settings.OverrideHost
-	}
+
 	if settings.L4Override != nil {
-		result["l4override"] = map[string]interface{}{
-			"ip":   settings.L4Override.IP,
-			"port": settings.L4Override.Port,
+		result.L4Override = &cf.GatewayL4OverrideParams{
+			IP:   settings.L4Override.IP,
+			Port: settings.L4Override.Port,
 		}
 	}
 	if settings.BISOAdminControls != nil {
-		bisoMap := make(map[string]interface{})
-		if settings.BISOAdminControls.DisablePrinting != nil {
-			bisoMap["dp"] = *settings.BISOAdminControls.DisablePrinting
+		result.BISOAdminControls = &cf.GatewayBISOAdminControlsParams{
+			DisablePrinting:             settings.BISOAdminControls.DisablePrinting,
+			DisableCopyPaste:            settings.BISOAdminControls.DisableCopyPaste,
+			DisableDownload:             settings.BISOAdminControls.DisableDownload,
+			DisableUpload:               settings.BISOAdminControls.DisableUpload,
+			DisableKeyboard:             settings.BISOAdminControls.DisableKeyboard,
+			DisableClipboardRedirection: settings.BISOAdminControls.DisableClipboardRedirection,
 		}
-		if settings.BISOAdminControls.DisableCopyPaste != nil {
-			bisoMap["dcp"] = *settings.BISOAdminControls.DisableCopyPaste
-		}
-		if settings.BISOAdminControls.DisableDownload != nil {
-			bisoMap["dd"] = *settings.BISOAdminControls.DisableDownload
-		}
-		if settings.BISOAdminControls.DisableUpload != nil {
-			bisoMap["du"] = *settings.BISOAdminControls.DisableUpload
-		}
-		if settings.BISOAdminControls.DisableKeyboard != nil {
-			bisoMap["dk"] = *settings.BISOAdminControls.DisableKeyboard
-		}
-		result["biso_admin_controls"] = bisoMap
 	}
 	if settings.CheckSession != nil {
-		result["check_session"] = map[string]interface{}{
-			"enforce":  settings.CheckSession.Enforce,
-			"duration": settings.CheckSession.Duration,
+		result.CheckSession = &cf.GatewayCheckSessionParams{
+			Enforce:  settings.CheckSession.Enforce,
+			Duration: settings.CheckSession.Duration,
 		}
 	}
 	if settings.AddHeaders != nil {
-		result["add_headers"] = settings.AddHeaders
-	}
-	if settings.InsecureDisableDNSSECValidation != nil {
-		result["insecure_disable_dnssec_validation"] = *settings.InsecureDisableDNSSECValidation
+		result.AddHeaders = settings.AddHeaders
 	}
 	if settings.Egress != nil {
-		egressMap := make(map[string]interface{})
-		if settings.Egress.IPv4 != "" {
-			egressMap["ipv4"] = settings.Egress.IPv4
+		result.Egress = &cf.GatewayEgressParams{
+			IPv4:         settings.Egress.IPv4,
+			IPv6:         settings.Egress.IPv6,
+			IPv4Fallback: settings.Egress.IPv4Fallback,
 		}
-		if settings.Egress.IPv6 != "" {
-			egressMap["ipv6"] = settings.Egress.IPv6
-		}
-		if settings.Egress.IPv4Fallback != "" {
-			egressMap["ipv4_fallback"] = settings.Egress.IPv4Fallback
-		}
-		result["egress"] = egressMap
 	}
 	if settings.PayloadLog != nil {
-		result["payload_log"] = map[string]interface{}{
-			"enabled": settings.PayloadLog.Enabled,
+		result.PayloadLog = &cf.GatewayPayloadLogParams{
+			Enabled: settings.PayloadLog.Enabled,
 		}
 	}
-	if settings.UntrustedCertificateAction != "" {
-		result["untrusted_cert"] = map[string]interface{}{
-			"action": settings.UntrustedCertificateAction,
+	if settings.AuditSSH != nil {
+		result.AuditSSH = &cf.GatewayAuditSSHParams{
+			CommandLogging: settings.AuditSSH.CommandLogging,
 		}
 	}
 	if settings.ResolveDNSInternally != nil {
-		result["resolve_dns_internally"] = *settings.ResolveDNSInternally
+		fallback := ""
+		if settings.ResolveDNSInternally.Fallback != nil && *settings.ResolveDNSInternally.Fallback {
+			fallback = "public_dns"
+		}
+		result.ResolveDNSInternally = &cf.GatewayResolveDNSInternallyParams{
+			ViewID:   settings.ResolveDNSInternally.ViewID,
+			Fallback: fallback,
+		}
+	}
+	if settings.DNSResolvers != nil {
+		result.DNSResolvers = &cf.GatewayDNSResolversParams{}
+		if len(settings.DNSResolvers.IPv4) > 0 {
+			result.DNSResolvers.IPv4 = make([]cf.GatewayDNSResolverEntryParams, 0, len(settings.DNSResolvers.IPv4))
+			for _, r := range settings.DNSResolvers.IPv4 {
+				result.DNSResolvers.IPv4 = append(result.DNSResolvers.IPv4, cf.GatewayDNSResolverEntryParams{
+					IP:                         r.IP,
+					Port:                       r.Port,
+					VNetID:                     r.VNetID,
+					RouteThroughPrivateNetwork: r.RouteThroughPrivateNetwork,
+				})
+			}
+		}
+		if len(settings.DNSResolvers.IPv6) > 0 {
+			result.DNSResolvers.IPv6 = make([]cf.GatewayDNSResolverEntryParams, 0, len(settings.DNSResolvers.IPv6))
+			for _, r := range settings.DNSResolvers.IPv6 {
+				result.DNSResolvers.IPv6 = append(result.DNSResolvers.IPv6, cf.GatewayDNSResolverEntryParams{
+					IP:                         r.IP,
+					Port:                       r.Port,
+					VNetID:                     r.VNetID,
+					RouteThroughPrivateNetwork: r.RouteThroughPrivateNetwork,
+				})
+			}
+		}
 	}
 	if settings.NotificationSettings != nil {
-		result["notification_settings"] = map[string]interface{}{
-			"enabled":     settings.NotificationSettings.Enabled,
-			"msg":         settings.NotificationSettings.Message,
-			"support_url": settings.NotificationSettings.SupportURL,
+		result.NotificationSettings = &cf.GatewayNotificationSettingsParams{
+			Enabled:    settings.NotificationSettings.Enabled,
+			Message:    settings.NotificationSettings.Message,
+			SupportURL: settings.NotificationSettings.SupportURL,
+		}
+	}
+	if settings.Quarantine != nil {
+		result.Quarantine = &cf.GatewayQuarantineParams{
+			FileTypes: settings.Quarantine.FileTypes,
 		}
 	}
 
 	return result
+}
+
+func buildSchedule(schedule *networkingv1alpha2.GatewayRuleSchedule) *cf.GatewayRuleScheduleParams {
+	if schedule == nil {
+		return nil
+	}
+	return &cf.GatewayRuleScheduleParams{
+		TimeZone: schedule.TimeZone,
+		Mon:      schedule.Mon,
+		Tue:      schedule.Tue,
+		Wed:      schedule.Wed,
+		Thu:      schedule.Thu,
+		Fri:      schedule.Fri,
+		Sat:      schedule.Sat,
+		Sun:      schedule.Sun,
+	}
+}
+
+func buildExpiration(expiration *networkingv1alpha2.GatewayRuleExpiration) *cf.GatewayRuleExpirationParams {
+	if expiration == nil {
+		return nil
+	}
+	return &cf.GatewayRuleExpirationParams{
+		ExpiresAt: expiration.ExpiresAt,
+		Duration:  expiration.Duration,
+	}
 }
 
 func (r *GatewayRuleReconciler) updateStatusError(ctx context.Context, rule *networkingv1alpha2.GatewayRule, err error) (ctrl.Result, error) {

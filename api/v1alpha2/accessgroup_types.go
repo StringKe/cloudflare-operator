@@ -14,18 +14,22 @@ type AccessGroupSpec struct {
 	// +kubebuilder:validation:MaxLength=255
 	Name string `json:"name,omitempty"`
 
-	// Include defines rules that users must match to be included.
+	// Include defines rules that users must match to be included (OR logic).
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinItems=1
 	Include []AccessGroupRule `json:"include"`
 
-	// Exclude defines rules that exclude users even if they match include rules.
+	// Exclude defines rules that exclude users even if they match include rules (NOT logic).
 	// +kubebuilder:validation:Optional
 	Exclude []AccessGroupRule `json:"exclude,omitempty"`
 
-	// Require defines rules that all users must match in addition to include rules.
+	// Require defines rules that all users must match in addition to include rules (AND logic).
 	// +kubebuilder:validation:Optional
 	Require []AccessGroupRule `json:"require,omitempty"`
+
+	// IsDefault indicates whether this is the default group.
+	// +kubebuilder:validation:Optional
+	IsDefault *bool `json:"isDefault,omitempty"`
 
 	// Cloudflare contains the Cloudflare API credentials.
 	// +kubebuilder:validation:Required
@@ -42,6 +46,10 @@ type AccessGroupRule struct {
 	// +kubebuilder:validation:Optional
 	EmailDomain *AccessGroupEmailDomainRule `json:"emailDomain,omitempty"`
 
+	// EmailList matches emails from a predefined list.
+	// +kubebuilder:validation:Optional
+	EmailList *AccessGroupEmailListRule `json:"emailList,omitempty"`
+
 	// Everyone matches all users.
 	// +kubebuilder:validation:Optional
 	Everyone bool `json:"everyone,omitempty"`
@@ -49,6 +57,10 @@ type AccessGroupRule struct {
 	// IPRanges matches users from specific IP ranges.
 	// +kubebuilder:validation:Optional
 	IPRanges *AccessGroupIPRangesRule `json:"ipRanges,omitempty"`
+
+	// IPList matches users from a predefined IP list.
+	// +kubebuilder:validation:Optional
+	IPList *AccessGroupIPListRule `json:"ipList,omitempty"`
 
 	// Country matches users from specific countries.
 	// +kubebuilder:validation:Optional
@@ -90,6 +102,10 @@ type AccessGroupRule struct {
 	// +kubebuilder:validation:Optional
 	Azure *AccessGroupAzureRule `json:"azure,omitempty"`
 
+	// Okta matches users from Okta groups.
+	// +kubebuilder:validation:Optional
+	Okta *AccessGroupOktaRule `json:"okta,omitempty"`
+
 	// OIDC matches users based on OIDC claims.
 	// +kubebuilder:validation:Optional
 	OIDC *AccessGroupOIDCRule `json:"oidc,omitempty"`
@@ -97,6 +113,18 @@ type AccessGroupRule struct {
 	// SAML matches users based on SAML attributes.
 	// +kubebuilder:validation:Optional
 	SAML *AccessGroupSAMLRule `json:"saml,omitempty"`
+
+	// AuthMethod enforces different MFA options.
+	// +kubebuilder:validation:Optional
+	AuthMethod *AccessGroupAuthMethodRule `json:"authMethod,omitempty"`
+
+	// AuthContext matches Azure Authentication Context.
+	// +kubebuilder:validation:Optional
+	AuthContext *AccessGroupAuthContextRule `json:"authContext,omitempty"`
+
+	// LoginMethod matches a specific identity provider.
+	// +kubebuilder:validation:Optional
+	LoginMethod *AccessGroupLoginMethodRule `json:"loginMethod,omitempty"`
 
 	// ExternalEvaluation calls an external endpoint for evaluation.
 	// +kubebuilder:validation:Optional
@@ -113,9 +141,21 @@ type AccessGroupEmailDomainRule struct {
 	Domain string `json:"domain"`
 }
 
+// AccessGroupEmailListRule matches emails from a predefined list.
+type AccessGroupEmailListRule struct {
+	// ID is the Cloudflare ID of the email list.
+	ID string `json:"id"`
+}
+
 // AccessGroupIPRangesRule matches IP ranges.
 type AccessGroupIPRangesRule struct {
 	IP []string `json:"ip"`
+}
+
+// AccessGroupIPListRule matches IPs from a predefined list.
+type AccessGroupIPListRule struct {
+	// ID is the Cloudflare ID of the IP list.
+	ID string `json:"id"`
 }
 
 // AccessGroupCountryRule matches countries.
@@ -160,6 +200,36 @@ type AccessGroupGitHubRule struct {
 type AccessGroupAzureRule struct {
 	ID                 string `json:"id"`
 	IdentityProviderID string `json:"identityProviderId"`
+}
+
+// AccessGroupOktaRule matches Okta groups.
+type AccessGroupOktaRule struct {
+	// Name is the Okta group name.
+	Name string `json:"name"`
+	// IdentityProviderID is the Cloudflare ID of the Okta identity provider.
+	IdentityProviderID string `json:"identityProviderId"`
+}
+
+// AccessGroupAuthMethodRule enforces MFA options.
+type AccessGroupAuthMethodRule struct {
+	// AuthMethod is the authentication method type (e.g., "mfa").
+	AuthMethod string `json:"authMethod"`
+}
+
+// AccessGroupAuthContextRule matches Azure Authentication Context.
+type AccessGroupAuthContextRule struct {
+	// ID is the Azure Authentication Context ID.
+	ID string `json:"id"`
+	// AcID is the Azure AD Conditional Access Policy ID.
+	AcID string `json:"acId"`
+	// IdentityProviderID is the Cloudflare ID of the Azure identity provider.
+	IdentityProviderID string `json:"identityProviderId"`
+}
+
+// AccessGroupLoginMethodRule matches a specific identity provider.
+type AccessGroupLoginMethodRule struct {
+	// ID is the Cloudflare ID of the identity provider.
+	ID string `json:"id"`
 }
 
 // AccessGroupOIDCRule matches OIDC claims.

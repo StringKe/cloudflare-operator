@@ -152,21 +152,59 @@ func (r *Reconciler) reconcileApplication() error {
 	params := cf.AccessApplicationParams{
 		Name:                     appName,
 		Domain:                   r.app.Spec.Domain,
+		SelfHostedDomains:        r.app.Spec.SelfHostedDomains,
+		DomainType:               r.app.Spec.DomainType,
+		PrivateAddress:           r.app.Spec.PrivateAddress,
 		Type:                     r.app.Spec.Type,
 		SessionDuration:          r.app.Spec.SessionDuration,
 		AllowedIdps:              allowedIdps,
 		AutoRedirectToIdentity:   &r.app.Spec.AutoRedirectToIdentity,
 		EnableBindingCookie:      r.app.Spec.EnableBindingCookie,
 		HttpOnlyCookieAttribute:  r.app.Spec.HttpOnlyCookieAttribute,
+		PathCookieAttribute:      r.app.Spec.PathCookieAttribute,
 		SameSiteCookieAttribute:  r.app.Spec.SameSiteCookieAttribute,
 		LogoURL:                  r.app.Spec.LogoURL,
 		SkipInterstitial:         r.app.Spec.SkipInterstitial,
+		OptionsPreflightBypass:   r.app.Spec.OptionsPreflightBypass,
 		AppLauncherVisible:       r.app.Spec.AppLauncherVisible,
 		ServiceAuth401Redirect:   r.app.Spec.ServiceAuth401Redirect,
 		CustomDenyMessage:        r.app.Spec.CustomDenyMessage,
 		CustomDenyURL:            r.app.Spec.CustomDenyURL,
+		CustomNonIdentityDenyURL: r.app.Spec.CustomNonIdentityDenyURL,
 		AllowAuthenticateViaWarp: r.app.Spec.AllowAuthenticateViaWarp,
 		Tags:                     r.app.Spec.Tags,
+		CustomPages:              r.app.Spec.CustomPages,
+		GatewayRules:             r.app.Spec.GatewayRules,
+	}
+
+	// Convert Destinations
+	if len(r.app.Spec.Destinations) > 0 {
+		params.Destinations = convertDestinationsFromCRD(r.app.Spec.Destinations)
+	}
+
+	// Convert CORS headers
+	if r.app.Spec.CorsHeaders != nil {
+		params.CorsHeaders = convertCorsHeadersFromCRD(r.app.Spec.CorsHeaders)
+	}
+
+	// Convert SaaS app config
+	if r.app.Spec.SaasApp != nil {
+		params.SaasApp = convertSaasAppFromCRD(r.app.Spec.SaasApp)
+	}
+
+	// Convert SCIM config
+	if r.app.Spec.SCIMConfig != nil {
+		params.SCIMConfig = convertSCIMConfigFromCRD(r.app.Spec.SCIMConfig)
+	}
+
+	// Convert App Launcher customization
+	if r.app.Spec.AppLauncherCustomization != nil {
+		params.AppLauncherCustomization = convertAppLauncherCustomizationFromCRD(r.app.Spec.AppLauncherCustomization)
+	}
+
+	// Convert Target contexts
+	if len(r.app.Spec.TargetContexts) > 0 {
+		params.TargetContexts = convertTargetContextsFromCRD(r.app.Spec.TargetContexts)
 	}
 
 	if r.app.Status.ApplicationID != "" {
@@ -254,6 +292,8 @@ func (r *Reconciler) updateStatus(result *cf.AccessApplicationResult, resolvedPo
 		r.app.Status.AUD = result.AUD
 		r.app.Status.AccountID = r.cfAPI.ValidAccountId
 		r.app.Status.Domain = result.Domain
+		r.app.Status.SelfHostedDomains = result.SelfHostedDomains
+		r.app.Status.SaasAppClientID = result.SaasAppClientID
 		r.app.Status.State = "active"
 		r.app.Status.ObservedGeneration = r.app.Generation
 		r.app.Status.ResolvedPolicies = resolvedPolicies
@@ -440,7 +480,7 @@ func (r *Reconciler) syncPolicies(applicationID string, desired map[int]resolved
 			Name:          policy.getPolicyName(r.app.GetAccessApplicationName(), precedence),
 			Decision:      decision,
 			Precedence:    precedence,
-			Include:       []interface{}{cf.BuildGroupIncludeRule(policy.groupID)},
+			Include:       []cf.AccessGroupRuleParams{cf.BuildGroupIncludeRule(policy.groupID)},
 		}
 
 		if policy.ref.SessionDuration != "" {
@@ -630,4 +670,228 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.findAccessApplicationsForAccessGroup),
 		).
 		Complete(r)
+}
+
+// ============================================================================
+// CRD to CF Params conversion helper functions
+// ============================================================================
+
+// convertDestinationsFromCRD converts CRD destinations to CF params.
+func convertDestinationsFromCRD(destinations []networkingv1alpha2.AccessDestination) []cf.AccessDestinationParams {
+	result := make([]cf.AccessDestinationParams, 0, len(destinations))
+	for _, dest := range destinations {
+		result = append(result, cf.AccessDestinationParams{
+			Type:       dest.Type,
+			URI:        dest.URI,
+			Hostname:   dest.Hostname,
+			CIDR:       dest.CIDR,
+			PortRange:  dest.PortRange,
+			L4Protocol: dest.L4Protocol,
+			VnetID:     dest.VnetID,
+		})
+	}
+	return result
+}
+
+// convertCorsHeadersFromCRD converts CRD CORS headers to CF params.
+func convertCorsHeadersFromCRD(cors *networkingv1alpha2.AccessApplicationCorsHeaders) *cf.AccessApplicationCorsHeadersParams {
+	if cors == nil {
+		return nil
+	}
+	return &cf.AccessApplicationCorsHeadersParams{
+		AllowedMethods:   cors.AllowedMethods,
+		AllowedOrigins:   cors.AllowedOrigins,
+		AllowedHeaders:   cors.AllowedHeaders,
+		AllowAllMethods:  cors.AllowAllMethods,
+		AllowAllHeaders:  cors.AllowAllHeaders,
+		AllowAllOrigins:  cors.AllowAllOrigins,
+		AllowCredentials: cors.AllowCredentials,
+		MaxAge:           cors.MaxAge,
+	}
+}
+
+// convertSaasAppFromCRD converts CRD SaaS app config to CF params.
+//
+//nolint:revive // cognitive complexity is acceptable for this conversion
+func convertSaasAppFromCRD(saas *networkingv1alpha2.SaasApplicationConfig) *cf.SaasApplicationParams {
+	if saas == nil {
+		return nil
+	}
+
+	result := &cf.SaasApplicationParams{
+		AuthType:                      saas.AuthType,
+		ConsumerServiceURL:            saas.ConsumerServiceURL,
+		SPEntityID:                    saas.SPEntityID,
+		NameIDFormat:                  saas.NameIDFormat,
+		DefaultRelayState:             saas.DefaultRelayState,
+		NameIDTransformJsonata:        saas.NameIDTransformJsonata,
+		SamlAttributeTransformJsonata: saas.SamlAttributeTransformJsonata,
+		RedirectURIs:                  saas.RedirectURIs,
+		GrantTypes:                    saas.GrantTypes,
+		Scopes:                        saas.Scopes,
+		AppLauncherURL:                saas.AppLauncherURL,
+		GroupFilterRegex:              saas.GroupFilterRegex,
+		AllowPKCEWithoutClientSecret:  saas.AllowPKCEWithoutClientSecret,
+		AccessTokenLifetime:           saas.AccessTokenLifetime,
+	}
+
+	// Convert SAML custom attributes
+	if len(saas.CustomAttributes) > 0 {
+		attrs := make([]cf.SAMLAttributeConfigParams, 0, len(saas.CustomAttributes))
+		for _, attr := range saas.CustomAttributes {
+			attrs = append(attrs, cf.SAMLAttributeConfigParams{
+				Name:         attr.Name,
+				NameFormat:   attr.NameFormat,
+				FriendlyName: attr.FriendlyName,
+				Required:     attr.Required,
+				Source: cf.SAMLAttributeSourceParams{
+					Name:      attr.Source.Name,
+					NameByIDP: attr.Source.NameByIDP,
+				},
+			})
+		}
+		result.CustomAttributes = attrs
+	}
+
+	// Convert OIDC custom claims
+	if len(saas.CustomClaims) > 0 {
+		claims := make([]cf.OIDCClaimConfigParams, 0, len(saas.CustomClaims))
+		for _, claim := range saas.CustomClaims {
+			claims = append(claims, cf.OIDCClaimConfigParams{
+				Name:     claim.Name,
+				Required: claim.Required,
+				Scope:    claim.Scope,
+				Source: cf.OIDCClaimSourceParams{
+					Name:      claim.Source.Name,
+					NameByIDP: claim.Source.NameByIDP,
+				},
+			})
+		}
+		result.CustomClaims = claims
+	}
+
+	// Convert refresh token options
+	if saas.RefreshTokenOptions != nil {
+		result.RefreshTokenOptions = &cf.RefreshTokenOptionsParams{
+			Lifetime: saas.RefreshTokenOptions.Lifetime,
+		}
+	}
+
+	// Convert hybrid and implicit options
+	if saas.HybridAndImplicitOptions != nil {
+		result.HybridAndImplicitOptions = &cf.HybridAndImplicitOptionsParams{
+			ReturnIDTokenFromAuthorizationEndpoint:     saas.HybridAndImplicitOptions.ReturnIDTokenFromAuthorizationEndpoint,
+			ReturnAccessTokenFromAuthorizationEndpoint: saas.HybridAndImplicitOptions.ReturnAccessTokenFromAuthorizationEndpoint,
+		}
+	}
+
+	return result
+}
+
+// convertSCIMConfigFromCRD converts CRD SCIM config to CF params.
+//
+//nolint:revive // cognitive complexity is acceptable for this conversion
+func convertSCIMConfigFromCRD(scim *networkingv1alpha2.AccessApplicationSCIMConfig) *cf.AccessApplicationSCIMConfigParams {
+	if scim == nil {
+		return nil
+	}
+
+	result := &cf.AccessApplicationSCIMConfigParams{
+		Enabled:            scim.Enabled,
+		RemoteURI:          scim.RemoteURI,
+		IDPUID:             scim.IDPUID,
+		DeactivateOnDelete: scim.DeactivateOnDelete,
+	}
+
+	// Convert authentication
+	if scim.Authentication != nil {
+		result.Authentication = &cf.SCIMAuthenticationParams{
+			Scheme:           scim.Authentication.Scheme,
+			User:             scim.Authentication.User,
+			Password:         scim.Authentication.Password,
+			Token:            scim.Authentication.Token,
+			ClientID:         scim.Authentication.ClientID,
+			ClientSecret:     scim.Authentication.ClientSecret,
+			AuthorizationURL: scim.Authentication.AuthorizationURL,
+			TokenURL:         scim.Authentication.TokenURL,
+			Scopes:           scim.Authentication.Scopes,
+		}
+	}
+
+	// Convert mappings
+	if len(scim.Mappings) > 0 {
+		mappings := make([]cf.SCIMMappingParams, 0, len(scim.Mappings))
+		for _, m := range scim.Mappings {
+			mapping := cf.SCIMMappingParams{
+				Schema:           m.Schema,
+				Enabled:          m.Enabled,
+				Filter:           m.Filter,
+				TransformJsonata: m.TransformJsonata,
+				Strictness:       m.Strictness,
+			}
+			if m.Operations != nil {
+				mapping.Operations = &cf.SCIMMappingOperationsParams{
+					Create: m.Operations.Create,
+					Update: m.Operations.Update,
+					Delete: m.Operations.Delete,
+				}
+			}
+			mappings = append(mappings, mapping)
+		}
+		result.Mappings = mappings
+	}
+
+	return result
+}
+
+// convertAppLauncherCustomizationFromCRD converts CRD app launcher customization to CF params.
+func convertAppLauncherCustomizationFromCRD(custom *networkingv1alpha2.AccessAppLauncherCustomization) *cf.AccessAppLauncherCustomizationParams {
+	if custom == nil {
+		return nil
+	}
+
+	result := &cf.AccessAppLauncherCustomizationParams{
+		AppLauncherLogoURL:       custom.AppLauncherLogoURL,
+		HeaderBackgroundColor:    custom.HeaderBackgroundColor,
+		BackgroundColor:          custom.BackgroundColor,
+		SkipAppLauncherLoginPage: custom.SkipAppLauncherLoginPage,
+	}
+
+	// Convert landing page design
+	if custom.LandingPageDesign != nil {
+		result.LandingPageDesign = &cf.AccessLandingPageDesignParams{
+			Title:           custom.LandingPageDesign.Title,
+			Message:         custom.LandingPageDesign.Message,
+			ImageURL:        custom.LandingPageDesign.ImageURL,
+			ButtonColor:     custom.LandingPageDesign.ButtonColor,
+			ButtonTextColor: custom.LandingPageDesign.ButtonTextColor,
+		}
+	}
+
+	// Convert footer links
+	if len(custom.FooterLinks) > 0 {
+		links := make([]cf.AccessFooterLinkParams, 0, len(custom.FooterLinks))
+		for _, link := range custom.FooterLinks {
+			links = append(links, cf.AccessFooterLinkParams{
+				Name: link.Name,
+				URL:  link.URL,
+			})
+		}
+		result.FooterLinks = links
+	}
+
+	return result
+}
+
+// convertTargetContextsFromCRD converts CRD target contexts to CF params.
+func convertTargetContextsFromCRD(contexts []networkingv1alpha2.AccessInfrastructureTargetContext) []cf.AccessInfrastructureTargetContextParams {
+	result := make([]cf.AccessInfrastructureTargetContextParams, 0, len(contexts))
+	for _, ctx := range contexts {
+		result = append(result, cf.AccessInfrastructureTargetContextParams{
+			TargetAttributes: ctx.TargetAttributes,
+			Port:             ctx.Port,
+			Protocol:         ctx.Protocol,
+		})
+	}
+	return result
 }

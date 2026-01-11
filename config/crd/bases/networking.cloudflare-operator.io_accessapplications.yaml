@@ -84,6 +84,70 @@ spec:
                 items:
                   type: string
                 type: array
+              appLauncherCustomization:
+                description: AppLauncherCustomization configures the appearance of
+                  the app launcher.
+                properties:
+                  appLauncherLogoUrl:
+                    description: AppLauncherLogoURL is the URL of the app launcher
+                      logo.
+                    type: string
+                  backgroundColor:
+                    description: BackgroundColor is the background color (hex format).
+                    pattern: ^#[0-9a-fA-F]{6}$
+                    type: string
+                  footerLinks:
+                    description: FooterLinks is a list of footer links.
+                    items:
+                      description: AccessFooterLink represents a footer link in the
+                        App Launcher.
+                      properties:
+                        name:
+                          description: Name is the display name of the link.
+                          maxLength: 255
+                          type: string
+                        url:
+                          description: URL is the link URL.
+                          type: string
+                      required:
+                      - name
+                      - url
+                      type: object
+                    type: array
+                  headerBackgroundColor:
+                    description: HeaderBackgroundColor is the header background color
+                      (hex format).
+                    pattern: ^#[0-9a-fA-F]{6}$
+                    type: string
+                  landingPageDesign:
+                    description: LandingPageDesign configures the landing page appearance.
+                    properties:
+                      buttonColor:
+                        description: ButtonColor is the button color (hex format).
+                        pattern: ^#[0-9a-fA-F]{6}$
+                        type: string
+                      buttonTextColor:
+                        description: ButtonTextColor is the button text color (hex
+                          format).
+                        pattern: ^#[0-9a-fA-F]{6}$
+                        type: string
+                      imageUrl:
+                        description: ImageURL is the URL of the landing page image.
+                        type: string
+                      message:
+                        description: Message is the landing page message.
+                        maxLength: 1024
+                        type: string
+                      title:
+                        description: Title is the landing page title.
+                        maxLength: 255
+                        type: string
+                    type: object
+                  skipAppLauncherLoginPage:
+                    description: SkipAppLauncherLoginPage skips the app launcher login
+                      page.
+                    type: boolean
+                type: object
               appLauncherVisible:
                 default: true
                 description: AppLauncherVisible shows the application in the App Launcher.
@@ -161,6 +225,44 @@ spec:
                       Specifying this directly is useful for multi-zone scenarios.
                     type: string
                 type: object
+              corsHeaders:
+                description: CorsHeaders configures Cross-Origin Resource Sharing
+                  (CORS) for the application.
+                properties:
+                  allowAllHeaders:
+                    description: AllowAllHeaders allows all headers.
+                    type: boolean
+                  allowAllMethods:
+                    description: AllowAllMethods allows all HTTP methods.
+                    type: boolean
+                  allowAllOrigins:
+                    description: AllowAllOrigins allows all origins.
+                    type: boolean
+                  allowCredentials:
+                    description: AllowCredentials allows credentials.
+                    type: boolean
+                  allowedHeaders:
+                    description: AllowedHeaders is a list of allowed headers.
+                    items:
+                      type: string
+                    type: array
+                  allowedMethods:
+                    description: AllowedMethods is a list of allowed HTTP methods.
+                    items:
+                      type: string
+                    type: array
+                  allowedOrigins:
+                    description: AllowedOrigins is a list of allowed origins.
+                    items:
+                      type: string
+                    type: array
+                  maxAge:
+                    description: MaxAge is the maximum age for CORS preflight cache
+                      in seconds.
+                    maximum: 86400
+                    minimum: 0
+                    type: integer
+                type: object
               customDenyMessage:
                 description: CustomDenyMessage is a custom message shown when access
                   is denied.
@@ -170,12 +272,80 @@ spec:
                 description: CustomDenyURL is a custom URL to redirect to when access
                   is denied.
                 type: string
+              customNonIdentityDenyUrl:
+                description: CustomNonIdentityDenyURL is a custom URL for non-identity
+                  deny.
+                type: string
+              customPages:
+                description: CustomPages is a list of custom page IDs to use for the
+                  application.
+                items:
+                  type: string
+                type: array
+              destinations:
+                description: |-
+                  Destinations specifies the destination configurations for the application.
+                  This is more flexible than SelfHostedDomains and supports both public and private destinations.
+                items:
+                  description: AccessDestination represents a destination for an Access
+                    Application.
+                  properties:
+                    cidr:
+                      description: CIDR is the destination CIDR for private destinations.
+                      type: string
+                    hostname:
+                      description: Hostname is the destination hostname for private
+                        destinations.
+                      type: string
+                    l4Protocol:
+                      description: L4Protocol specifies the Layer 4 protocol for private
+                        destinations.
+                      enum:
+                      - tcp
+                      - udp
+                      type: string
+                    portRange:
+                      description: PortRange specifies the port range for private
+                        destinations (e.g., "80", "80-443").
+                      type: string
+                    type:
+                      description: Type specifies the destination type (public or
+                        private).
+                      enum:
+                      - public
+                      - private
+                      type: string
+                    uri:
+                      description: |-
+                        URI is the destination URI for public destinations.
+                        Required for public destinations.
+                      type: string
+                    vnetId:
+                      description: VnetID is the Virtual Network ID for private destinations.
+                      type: string
+                  required:
+                  - type
+                  type: object
+                maxItems: 50
+                type: array
               domain:
                 description: Domain is the primary domain/URL for the application.
+                type: string
+              domainType:
+                description: DomainType specifies the type of domain (public or private).
+                enum:
+                - public
+                - private
                 type: string
               enableBindingCookie:
                 description: EnableBindingCookie enables the binding cookie.
                 type: boolean
+              gatewayRules:
+                description: GatewayRules is a list of Gateway rule IDs associated
+                  with the application.
+                items:
+                  type: string
+                type: array
               httpOnlyCookieAttribute:
                 description: HttpOnlyCookieAttribute sets the HttpOnly attribute on
                   the cookie.
@@ -189,6 +359,13 @@ spec:
                   If not specified, the Kubernetes resource name will be used.
                 maxLength: 255
                 type: string
+              optionsPreflightBypass:
+                description: OptionsPreflightBypass allows CORS preflight requests
+                  to bypass Access authentication.
+                type: boolean
+              pathCookieAttribute:
+                description: PathCookieAttribute sets the Path attribute on the cookie.
+                type: boolean
               policies:
                 description: Policies defines the access policies for this application.
                 items:
@@ -247,6 +424,173 @@ spec:
                       type: string
                   type: object
                 type: array
+              privateAddress:
+                description: PrivateAddress is the private address for private applications.
+                type: string
+              saasApp:
+                description: SaasApp configures the SaaS application settings (for
+                  type=saas).
+                properties:
+                  accessTokenLifetime:
+                    description: AccessTokenLifetime is the lifetime of the access
+                      token.
+                    type: string
+                  allowPkceWithoutClientSecret:
+                    description: AllowPKCEWithoutClientSecret allows PKCE without
+                      a client secret.
+                    type: boolean
+                  appLauncherUrl:
+                    description: AppLauncherURL is the URL to launch the app from
+                      the app launcher.
+                    type: string
+                  authType:
+                    description: AuthType specifies the authentication type (saml
+                      or oidc).
+                    enum:
+                    - saml
+                    - oidc
+                    type: string
+                  consumerServiceUrl:
+                    description: ConsumerServiceURL is the SAML consumer service URL.
+                    type: string
+                  customAttributes:
+                    description: CustomAttributes defines custom SAML attributes.
+                    items:
+                      description: SAMLAttributeConfig represents a custom SAML attribute.
+                      properties:
+                        friendlyName:
+                          description: FriendlyName is the friendly name of the attribute.
+                          type: string
+                        name:
+                          description: Name is the attribute name.
+                          type: string
+                        nameFormat:
+                          description: NameFormat is the attribute name format.
+                          type: string
+                        required:
+                          description: Required indicates if this attribute is required.
+                          type: boolean
+                        source:
+                          description: Source specifies the source of the attribute
+                            value.
+                          properties:
+                            name:
+                              description: Name is the name of the source attribute.
+                              type: string
+                            nameByIdp:
+                              additionalProperties:
+                                type: string
+                              description: NameByIDP is a map of IdP name to attribute
+                                name.
+                              type: object
+                          required:
+                          - name
+                          type: object
+                      required:
+                      - name
+                      - source
+                      type: object
+                    type: array
+                  customClaims:
+                    description: CustomClaims defines custom OIDC claims.
+                    items:
+                      description: OIDCClaimConfig represents a custom OIDC claim.
+                      properties:
+                        name:
+                          description: Name is the claim name.
+                          type: string
+                        required:
+                          description: Required indicates if this claim is required.
+                          type: boolean
+                        scope:
+                          description: Scope is the scope for this claim.
+                          type: string
+                        source:
+                          description: Source specifies the source of the claim value.
+                          properties:
+                            name:
+                              description: Name is the name of the source attribute.
+                              type: string
+                            nameByIdp:
+                              additionalProperties:
+                                type: string
+                              description: NameByIDP is a map of IdP name to claim
+                                name.
+                              type: object
+                          required:
+                          - name
+                          type: object
+                      required:
+                      - name
+                      - source
+                      type: object
+                    type: array
+                  defaultRelayState:
+                    description: DefaultRelayState is the default relay state for
+                      SAML.
+                    type: string
+                  grantTypes:
+                    description: GrantTypes is a list of allowed grant types for OIDC.
+                    items:
+                      type: string
+                    type: array
+                  groupFilterRegex:
+                    description: GroupFilterRegex is a regex for filtering groups
+                      in OIDC claims.
+                    type: string
+                  hybridAndImplicitOptions:
+                    description: HybridAndImplicitOptions configures hybrid and implicit
+                      flow options.
+                    properties:
+                      returnAccessTokenFromAuthorizationEndpoint:
+                        description: |-
+                          ReturnAccessTokenFromAuthorizationEndpoint indicates whether to return an access token
+                          from the authorization endpoint.
+                        type: boolean
+                      returnIdTokenFromAuthorizationEndpoint:
+                        description: |-
+                          ReturnIDTokenFromAuthorizationEndpoint indicates whether to return an ID token
+                          from the authorization endpoint.
+                        type: boolean
+                    type: object
+                  nameIdFormat:
+                    description: NameIDFormat is the SAML name ID format.
+                    enum:
+                    - id
+                    - email
+                    type: string
+                  nameIdTransformJsonata:
+                    description: NameIDTransformJsonata is a JSONata expression for
+                      transforming the name ID.
+                    type: string
+                  redirectUris:
+                    description: RedirectURIs is a list of allowed redirect URIs for
+                      OIDC.
+                    items:
+                      type: string
+                    type: array
+                  refreshTokenOptions:
+                    description: RefreshTokenOptions configures refresh token behavior.
+                    properties:
+                      lifetime:
+                        description: Lifetime is the lifetime of the refresh token.
+                        type: string
+                    type: object
+                  samlAttributeTransformJsonata:
+                    description: SamlAttributeTransformJsonata is a JSONata expression
+                      for transforming SAML attributes.
+                    type: string
+                  scopes:
+                    description: Scopes is a list of allowed scopes for OIDC.
+                    items:
+                      type: string
+                    type: array
+                  spEntityId:
+                    description: SPEntityID is the SAML service provider entity ID.
+                    type: string
+                required:
+                - authType
+                type: object
               sameSiteCookieAttribute:
                 description: SameSiteCookieAttribute sets the SameSite attribute on
                   the cookie.
@@ -255,6 +599,121 @@ spec:
                 - lax
                 - none
                 type: string
+              scimConfig:
+                description: SCIMConfig configures SCIM provisioning for the application.
+                properties:
+                  authentication:
+                    description: Authentication configures SCIM authentication.
+                    properties:
+                      authorizationUrl:
+                        description: AuthorizationURL is the OAuth authorization URL.
+                        type: string
+                      clientId:
+                        description: ClientID is the OAuth client ID.
+                        type: string
+                      clientSecret:
+                        description: |-
+                          ClientSecret is the OAuth client secret.
+                          Should be stored in a Secret and referenced.
+                        type: string
+                      password:
+                        description: |-
+                          Password is the password for HTTP basic authentication.
+                          Should be stored in a Secret and referenced.
+                        type: string
+                      scheme:
+                        description: Scheme is the authentication scheme (httpbasic,
+                          oauthbearertoken, oauth2).
+                        enum:
+                        - httpbasic
+                        - oauthbearertoken
+                        - oauth2
+                        type: string
+                      scopes:
+                        description: Scopes is a list of OAuth scopes.
+                        items:
+                          type: string
+                        type: array
+                      token:
+                        description: |-
+                          Token is the bearer token for OAuth bearer token authentication.
+                          Should be stored in a Secret and referenced.
+                        type: string
+                      tokenUrl:
+                        description: TokenURL is the OAuth token URL.
+                        type: string
+                      user:
+                        description: User is the username for HTTP basic authentication.
+                        type: string
+                    required:
+                    - scheme
+                    type: object
+                  deactivateOnDelete:
+                    description: DeactivateOnDelete deactivates users on delete instead
+                      of deleting.
+                    type: boolean
+                  enabled:
+                    description: Enabled enables SCIM provisioning.
+                    type: boolean
+                  idpUid:
+                    description: IDPUID is the identity provider UID for SCIM.
+                    type: string
+                  mappings:
+                    description: Mappings defines SCIM attribute mappings.
+                    items:
+                      description: SCIMMapping represents a SCIM attribute mapping.
+                      properties:
+                        enabled:
+                          description: Enabled enables this mapping.
+                          type: boolean
+                        filter:
+                          description: Filter is a SCIM filter expression.
+                          type: string
+                        operations:
+                          description: Operations configures which SCIM operations
+                            are supported.
+                          properties:
+                            create:
+                              description: Create enables the create operation.
+                              type: boolean
+                            delete:
+                              description: Delete enables the delete operation.
+                              type: boolean
+                            update:
+                              description: Update enables the update operation.
+                              type: boolean
+                          type: object
+                        schema:
+                          description: Schema is the SCIM schema (e.g., "urn:ietf:params:scim:schemas:core:2.0:User").
+                          type: string
+                        strictness:
+                          description: Strictness specifies how strictly to enforce
+                            the schema.
+                          enum:
+                          - strict
+                          - loose
+                          type: string
+                        transformJsonata:
+                          description: TransformJsonata is a JSONata expression for
+                            transforming the mapping.
+                          type: string
+                      required:
+                      - schema
+                      type: object
+                    type: array
+                  remoteUri:
+                    description: RemoteURI is the remote SCIM endpoint URI.
+                    type: string
+                type: object
+              selfHostedDomains:
+                description: |-
+                  SelfHostedDomains is a list of additional domains for the application.
+                  This allows protecting multiple domains with a single Access Application.
+                  Each domain should be a fully qualified domain name (e.g., "app.example.com" or "app.example.com/path").
+                items:
+                  type: string
+                maxItems: 50
+                type: array
               serviceAuth401Redirect:
                 description: ServiceAuth401Redirect redirects unauthorized service
                   auth requests.
@@ -272,6 +731,38 @@ spec:
                 items:
                   type: string
                 type: array
+              targetContexts:
+                description: TargetContexts specifies the target criteria for infrastructure
+                  applications.
+                items:
+                  description: AccessInfrastructureTargetContext specifies target
+                    criteria for infrastructure applications.
+                  properties:
+                    port:
+                      description: Port is the target port.
+                      maximum: 65535
+                      minimum: 1
+                      type: integer
+                    protocol:
+                      description: Protocol is the target protocol (SSH, RDP, etc.).
+                      enum:
+                      - SSH
+                      - RDP
+                      type: string
+                    targetAttributes:
+                      additionalProperties:
+                        items:
+                          type: string
+                        type: array
+                      description: TargetAttributes is a map of target attribute names
+                        to their allowed values.
+                      type: object
+                  required:
+                  - port
+                  - protocol
+                  - targetAttributes
+                  type: object
+                type: array
               type:
                 default: self_hosted
                 description: Type is the application type.
@@ -285,6 +776,7 @@ spec:
                 - biso
                 - bookmark
                 - dash_sso
+                - infrastructure
                 type: string
             required:
             - cloudflare
@@ -364,7 +856,7 @@ spec:
                 - type
                 x-kubernetes-list-type: map
               domain:
-                description: Domain is the configured domain.
+                description: Domain is the primary configured domain.
                 type: string
               observedGeneration:
                 description: ObservedGeneration is the most recent generation observed.
@@ -412,6 +904,16 @@ spec:
                 x-kubernetes-list-map-keys:
                 - precedence
                 x-kubernetes-list-type: map
+              saasAppClientId:
+                description: SaasAppClientID is the OIDC client ID (for SaaS applications
+                  with OIDC).
+                type: string
+              selfHostedDomains:
+                description: SelfHostedDomains is the list of all configured domains
+                  (from Cloudflare API response).
+                items:
+                  type: string
+                type: array
               state:
                 description: State indicates the current state of the application.
                 type: string

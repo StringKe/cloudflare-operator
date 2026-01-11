@@ -174,6 +174,11 @@ type R2NotificationRule struct {
 	Description string   `json:"description,omitempty"`
 }
 
+// r2RulesRequest is a typed request body for R2 API endpoints that accept rules.
+type r2RulesRequest[T any] struct {
+	Rules []T `json:"rules"`
+}
+
 // GetR2CORS retrieves the CORS configuration for an R2 bucket
 func (api *API) GetR2CORS(ctx context.Context, bucketName string) ([]R2CORSRule, error) {
 	if api.CloudflareClient == nil {
@@ -213,7 +218,7 @@ func (api *API) SetR2CORS(ctx context.Context, bucketName string, rules []R2CORS
 	}
 
 	endpoint := fmt.Sprintf("/accounts/%s/r2/buckets/%s/cors", accountID, bucketName)
-	body := map[string]interface{}{"rules": rules}
+	body := r2RulesRequest[R2CORSRule]{Rules: rules}
 	if _, err := api.CloudflareClient.Raw(ctx, "PUT", endpoint, body, nil); err != nil {
 		return fmt.Errorf("failed to set CORS: %w", err)
 	}
@@ -279,7 +284,7 @@ func (api *API) SetR2Lifecycle(ctx context.Context, bucketName string, rules []R
 	}
 
 	endpoint := fmt.Sprintf("/accounts/%s/r2/buckets/%s/lifecycle", accountID, bucketName)
-	body := map[string]interface{}{"rules": rules}
+	body := r2RulesRequest[R2LifecycleRule]{Rules: rules}
 	if _, err := api.CloudflareClient.Raw(ctx, "PUT", endpoint, body, nil); err != nil {
 		return fmt.Errorf("failed to set lifecycle: %w", err)
 	}
@@ -358,7 +363,7 @@ func (api *API) SetR2Notification(
 		"/accounts/%s/event_notifications/r2/%s/configuration/queues/%s",
 		accountID, bucketName, queueID,
 	)
-	body := map[string]interface{}{"rules": rules}
+	body := r2RulesRequest[R2NotificationRule]{Rules: rules}
 	if _, err := api.CloudflareClient.Raw(ctx, "PUT", endpoint, body, nil); err != nil {
 		return fmt.Errorf("failed to set notification: %w", err)
 	}

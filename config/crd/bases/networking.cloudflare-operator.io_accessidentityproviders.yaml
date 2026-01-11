@@ -131,6 +131,11 @@ spec:
                   appsDomain:
                     description: AppsDomain is the Google Workspace domain.
                     type: string
+                  attributes:
+                    description: Attributes are custom attributes to include in tokens.
+                    items:
+                      type: string
+                    type: array
                   authUrl:
                     description: AuthURL is the authorization URL (OIDC/OAuth).
                     type: string
@@ -190,9 +195,14 @@ spec:
                       - headerName
                       type: object
                     type: array
+                  idpPublicCert:
+                    description: IdPPublicCert is the IdP's public certificate for
+                      SAML (single cert).
+                    type: string
                   idpPublicCerts:
-                    description: IdPPublicCerts are the IdP's public certificates
-                      for SAML.
+                    description: |-
+                      IdPPublicCerts are the IdP's public certificates for SAML (multiple certs).
+                      Deprecated: Use IdPPublicCert instead.
                     items:
                       type: string
                     type: array
@@ -201,6 +211,10 @@ spec:
                     type: string
                   oktaAccount:
                     description: OktaAccount is the Okta organization URL.
+                    type: string
+                  oktaAuthorizationServerId:
+                    description: OktaAuthorizationServerID is the Okta authorization
+                      server ID.
                     type: string
                   oneloginAccount:
                     description: OneloginAccount is the OneLogin subdomain.
@@ -253,6 +267,35 @@ spec:
                 description: Name of the Identity Provider in Cloudflare.
                 maxLength: 255
                 type: string
+              scimConfig:
+                description: ScimConfig contains SCIM provisioning configuration.
+                properties:
+                  enabled:
+                    description: Enabled enables SCIM provisioning.
+                    type: boolean
+                  groupMemberDeprovision:
+                    description: GroupMemberDeprovision enables automatic group member
+                      deprovisioning.
+                    type: boolean
+                  identityUpdateBehavior:
+                    description: IdentityUpdateBehavior controls how identity updates
+                      are handled.
+                    enum:
+                    - automatic
+                    - reauth
+                    - no_action
+                    type: string
+                  seatDeprovision:
+                    description: SeatDeprovision enables automatic seat deprovisioning.
+                    type: boolean
+                  secret:
+                    description: Secret is the SCIM secret (should use a Secret reference
+                      in production).
+                    type: string
+                  userDeprovision:
+                    description: UserDeprovision enables automatic user deprovisioning.
+                    type: boolean
+                type: object
               type:
                 description: Type is the identity provider type.
                 enum:

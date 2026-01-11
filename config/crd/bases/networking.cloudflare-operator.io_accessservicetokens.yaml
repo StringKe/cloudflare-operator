@@ -168,6 +168,11 @@ spec:
               clientId:
                 description: ClientID is the Service Token Client ID.
                 type: string
+              clientSecretVersion:
+                description: ClientSecretVersion is the current version of the client
+                  secret.
+                format: int64
+                type: integer
               conditions:
                 description: Conditions represent the latest available observations.
                 items:
@@ -228,8 +233,14 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              createdAt:
+                description: CreatedAt is when the token was created.
+                type: string
               expiresAt:
                 description: ExpiresAt is when the token expires.
+                type: string
+              lastSeenAt:
+                description: LastSeenAt is when the token was last used.
                 type: string
               observedGeneration:
                 description: ObservedGeneration is the most recent generation observed.
@@ -243,6 +254,9 @@ spec:
                 type: string
               tokenId:
                 description: TokenID is the Cloudflare Service Token ID.
+                type: string
+              updatedAt:
+                description: UpdatedAt is when the token was last updated.
                 type: string
             type: object
         type: object

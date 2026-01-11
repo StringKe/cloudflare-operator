@@ -14,21 +14,192 @@ import (
 type AccessApplicationParams struct {
 	Name                     string
 	Domain                   string
-	Type                     string // self_hosted, saas, ssh, vnc, app_launcher, warp, biso, bookmark, dash_sso
+	SelfHostedDomains        []string
+	Destinations             []AccessDestinationParams
+	DomainType               string
+	PrivateAddress           string
+	Type                     string // self_hosted, saas, ssh, vnc, app_launcher, warp, biso, bookmark, dash_sso, infrastructure
 	SessionDuration          string
 	AllowedIdps              []string
 	AutoRedirectToIdentity   *bool
 	EnableBindingCookie      *bool
 	HttpOnlyCookieAttribute  *bool
+	PathCookieAttribute      *bool
 	SameSiteCookieAttribute  string
 	LogoURL                  string
 	SkipInterstitial         *bool
+	OptionsPreflightBypass   *bool
 	AppLauncherVisible       *bool
 	ServiceAuth401Redirect   *bool
 	CustomDenyMessage        string
 	CustomDenyURL            string
+	CustomNonIdentityDenyURL string
 	AllowAuthenticateViaWarp *bool
 	Tags                     []string
+	CustomPages              []string
+	GatewayRules             []string
+	CorsHeaders              *AccessApplicationCorsHeadersParams
+	SaasApp                  *SaasApplicationParams
+	SCIMConfig               *AccessApplicationSCIMConfigParams
+	AppLauncherCustomization *AccessAppLauncherCustomizationParams
+	TargetContexts           []AccessInfrastructureTargetContextParams
+}
+
+// AccessDestinationParams represents a destination configuration.
+type AccessDestinationParams struct {
+	Type       string // public, private
+	URI        string
+	Hostname   string
+	CIDR       string
+	PortRange  string
+	L4Protocol string
+	VnetID     string
+}
+
+// AccessApplicationCorsHeadersParams represents CORS settings.
+type AccessApplicationCorsHeadersParams struct {
+	AllowedMethods   []string
+	AllowedOrigins   []string
+	AllowedHeaders   []string
+	AllowAllMethods  bool
+	AllowAllHeaders  bool
+	AllowAllOrigins  bool
+	AllowCredentials bool
+	MaxAge           int
+}
+
+// SaasApplicationParams represents SaaS application configuration.
+type SaasApplicationParams struct {
+	AuthType                      string // saml, oidc
+	ConsumerServiceURL            string
+	SPEntityID                    string
+	NameIDFormat                  string
+	DefaultRelayState             string
+	CustomAttributes              []SAMLAttributeConfigParams
+	NameIDTransformJsonata        string
+	SamlAttributeTransformJsonata string
+	RedirectURIs                  []string
+	GrantTypes                    []string
+	Scopes                        []string
+	AppLauncherURL                string
+	GroupFilterRegex              string
+	CustomClaims                  []OIDCClaimConfigParams
+	AllowPKCEWithoutClientSecret  *bool
+	AccessTokenLifetime           string
+	RefreshTokenOptions           *RefreshTokenOptionsParams
+	HybridAndImplicitOptions      *HybridAndImplicitOptionsParams
+}
+
+// SAMLAttributeConfigParams represents a SAML attribute configuration.
+type SAMLAttributeConfigParams struct {
+	Name         string
+	NameFormat   string
+	Source       SAMLAttributeSourceParams
+	FriendlyName string
+	Required     bool
+}
+
+// SAMLAttributeSourceParams represents the source of a SAML attribute.
+type SAMLAttributeSourceParams struct {
+	Name      string
+	NameByIDP map[string]string
+}
+
+// OIDCClaimConfigParams represents an OIDC claim configuration.
+type OIDCClaimConfigParams struct {
+	Name     string
+	Source   OIDCClaimSourceParams
+	Required bool
+	Scope    string
+}
+
+// OIDCClaimSourceParams represents the source of an OIDC claim.
+type OIDCClaimSourceParams struct {
+	Name      string
+	NameByIDP map[string]string
+}
+
+// RefreshTokenOptionsParams represents refresh token options.
+type RefreshTokenOptionsParams struct {
+	Lifetime string
+}
+
+// HybridAndImplicitOptionsParams represents hybrid and implicit flow options.
+type HybridAndImplicitOptionsParams struct {
+	ReturnIDTokenFromAuthorizationEndpoint     *bool
+	ReturnAccessTokenFromAuthorizationEndpoint *bool
+}
+
+// AccessApplicationSCIMConfigParams represents SCIM configuration.
+type AccessApplicationSCIMConfigParams struct {
+	Enabled            *bool
+	RemoteURI          string
+	Authentication     *SCIMAuthenticationParams
+	IDPUID             string
+	DeactivateOnDelete *bool
+	Mappings           []SCIMMappingParams
+}
+
+// SCIMAuthenticationParams represents SCIM authentication.
+type SCIMAuthenticationParams struct {
+	Scheme           string // httpbasic, oauthbearertoken, oauth2
+	User             string
+	Password         string
+	Token            string
+	ClientID         string
+	ClientSecret     string
+	AuthorizationURL string
+	TokenURL         string
+	Scopes           []string
+}
+
+// SCIMMappingParams represents a SCIM mapping.
+type SCIMMappingParams struct {
+	Schema           string
+	Enabled          *bool
+	Filter           string
+	TransformJsonata string
+	Operations       *SCIMMappingOperationsParams
+	Strictness       string
+}
+
+// SCIMMappingOperationsParams represents SCIM mapping operations.
+type SCIMMappingOperationsParams struct {
+	Create *bool
+	Update *bool
+	Delete *bool
+}
+
+// AccessAppLauncherCustomizationParams represents app launcher customization.
+type AccessAppLauncherCustomizationParams struct {
+	LandingPageDesign        *AccessLandingPageDesignParams
+	AppLauncherLogoURL       string
+	HeaderBackgroundColor    string
+	BackgroundColor          string
+	FooterLinks              []AccessFooterLinkParams
+	SkipAppLauncherLoginPage *bool
+}
+
+// AccessLandingPageDesignParams represents landing page design.
+type AccessLandingPageDesignParams struct {
+	Title           string
+	Message         string
+	ImageURL        string
+	ButtonColor     string
+	ButtonTextColor string
+}
+
+// AccessFooterLinkParams represents a footer link.
+type AccessFooterLinkParams struct {
+	Name string
+	URL  string
+}
+
+// AccessInfrastructureTargetContextParams represents target context for infrastructure apps.
+type AccessInfrastructureTargetContextParams struct {
+	TargetAttributes map[string][]string
+	Port             int
+	Protocol         string
 }
 
 // AccessApplicationResult contains the result of an Access Application operation.
@@ -37,10 +208,12 @@ type AccessApplicationResult struct {
 	AUD                    string
 	Name                   string
 	Domain                 string
+	SelfHostedDomains      []string
 	Type                   string
 	SessionDuration        string
 	AllowedIdps            []string
 	AutoRedirectToIdentity bool
+	SaasAppClientID        string
 }
 
 // CreateAccessApplication creates a new Access Application.
@@ -54,21 +227,70 @@ func (c *API) CreateAccessApplication(params AccessApplicationParams) (*AccessAp
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	createParams := cloudflare.CreateAccessApplicationParams{
-		Name:                    params.Name,
-		Domain:                  params.Domain,
-		Type:                    cloudflare.AccessApplicationType(params.Type),
-		SessionDuration:         params.SessionDuration,
-		AllowedIdps:             params.AllowedIdps,
-		AutoRedirectToIdentity:  params.AutoRedirectToIdentity,
-		EnableBindingCookie:     params.EnableBindingCookie,
-		HttpOnlyCookieAttribute: params.HttpOnlyCookieAttribute,
-		SameSiteCookieAttribute: params.SameSiteCookieAttribute,
-		LogoURL:                 params.LogoURL,
-		SkipInterstitial:        params.SkipInterstitial,
-		AppLauncherVisible:      params.AppLauncherVisible,
-		ServiceAuth401Redirect:  params.ServiceAuth401Redirect,
-		CustomDenyMessage:       params.CustomDenyMessage,
-		CustomDenyURL:           params.CustomDenyURL,
+		Name:                     params.Name,
+		Domain:                   params.Domain,
+		Type:                     cloudflare.AccessApplicationType(params.Type),
+		SessionDuration:          params.SessionDuration,
+		AllowedIdps:              params.AllowedIdps,
+		AutoRedirectToIdentity:   params.AutoRedirectToIdentity,
+		EnableBindingCookie:      params.EnableBindingCookie,
+		HttpOnlyCookieAttribute:  params.HttpOnlyCookieAttribute,
+		PathCookieAttribute:      params.PathCookieAttribute,
+		SameSiteCookieAttribute:  params.SameSiteCookieAttribute,
+		LogoURL:                  params.LogoURL,
+		SkipInterstitial:         params.SkipInterstitial,
+		OptionsPreflightBypass:   params.OptionsPreflightBypass,
+		AppLauncherVisible:       params.AppLauncherVisible,
+		ServiceAuth401Redirect:   params.ServiceAuth401Redirect,
+		CustomDenyMessage:        params.CustomDenyMessage,
+		CustomDenyURL:            params.CustomDenyURL,
+		CustomNonIdentityDenyURL: params.CustomNonIdentityDenyURL,
+		PrivateAddress:           params.PrivateAddress,
+	}
+
+	// Set domain type
+	if params.DomainType != "" {
+		createParams.DomainType = cloudflare.AccessDestinationType(params.DomainType)
+	}
+
+	// Set destinations
+	if len(params.Destinations) > 0 {
+		createParams.Destinations = convertDestinationsToCloudflare(params.Destinations)
+	}
+
+	// Set CORS headers
+	if params.CorsHeaders != nil {
+		createParams.CorsHeaders = convertCorsHeadersToCloudflare(params.CorsHeaders)
+	}
+
+	// Set SaaS app configuration
+	if params.SaasApp != nil {
+		createParams.SaasApplication = convertSaasAppToCloudflare(params.SaasApp)
+	}
+
+	// Set SCIM config
+	if params.SCIMConfig != nil {
+		createParams.SCIMConfig = convertSCIMConfigToCloudflare(params.SCIMConfig)
+	}
+
+	// Set app launcher customization
+	if params.AppLauncherCustomization != nil {
+		createParams.AccessAppLauncherCustomization = convertAppLauncherCustomizationToCloudflare(params.AppLauncherCustomization)
+	}
+
+	// Set target contexts for infrastructure apps
+	if len(params.TargetContexts) > 0 {
+		contexts := convertTargetContextsToCloudflare(params.TargetContexts)
+		createParams.TargetContexts = &contexts
+	}
+
+	// Set gateway rules
+	if len(params.GatewayRules) > 0 {
+		gatewayRules := make([]cloudflare.AccessApplicationGatewayRule, 0, len(params.GatewayRules))
+		for _, ruleID := range params.GatewayRules {
+			gatewayRules = append(gatewayRules, cloudflare.AccessApplicationGatewayRule{ID: ruleID})
+		}
+		createParams.GatewayRules = gatewayRules
 	}
 
 	if params.AllowAuthenticateViaWarp != nil {
@@ -76,6 +298,9 @@ func (c *API) CreateAccessApplication(params AccessApplicationParams) (*AccessAp
 	}
 	if len(params.Tags) > 0 {
 		createParams.Tags = params.Tags
+	}
+	if len(params.CustomPages) > 0 {
+		createParams.CustomPages = params.CustomPages
 	}
 
 	app, err := c.CloudflareClient.CreateAccessApplication(ctx, rc, createParams)
@@ -86,21 +311,7 @@ func (c *API) CreateAccessApplication(params AccessApplicationParams) (*AccessAp
 
 	c.Log.Info("Access Application created", "id", app.ID, "name", app.Name)
 
-	autoRedirect := false
-	if app.AutoRedirectToIdentity != nil {
-		autoRedirect = *app.AutoRedirectToIdentity
-	}
-
-	return &AccessApplicationResult{
-		ID:                     app.ID,
-		AUD:                    app.AUD,
-		Name:                   app.Name,
-		Domain:                 app.Domain,
-		Type:                   string(app.Type),
-		SessionDuration:        app.SessionDuration,
-		AllowedIdps:            app.AllowedIdps,
-		AutoRedirectToIdentity: autoRedirect,
-	}, nil
+	return convertAccessApplicationToResult(app, c.ValidAccountId), nil
 }
 
 // GetAccessApplication retrieves an Access Application by ID.
@@ -119,21 +330,7 @@ func (c *API) GetAccessApplication(applicationID string) (*AccessApplicationResu
 		return nil, err
 	}
 
-	autoRedirect := false
-	if app.AutoRedirectToIdentity != nil {
-		autoRedirect = *app.AutoRedirectToIdentity
-	}
-
-	return &AccessApplicationResult{
-		ID:                     app.ID,
-		AUD:                    app.AUD,
-		Name:                   app.Name,
-		Domain:                 app.Domain,
-		Type:                   string(app.Type),
-		SessionDuration:        app.SessionDuration,
-		AllowedIdps:            app.AllowedIdps,
-		AutoRedirectToIdentity: autoRedirect,
-	}, nil
+	return convertAccessApplicationToResult(app, c.ValidAccountId), nil
 }
 
 // UpdateAccessApplication updates an existing Access Application.
@@ -147,22 +344,71 @@ func (c *API) UpdateAccessApplication(applicationID string, params AccessApplica
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	updateParams := cloudflare.UpdateAccessApplicationParams{
-		ID:                      applicationID,
-		Name:                    params.Name,
-		Domain:                  params.Domain,
-		Type:                    cloudflare.AccessApplicationType(params.Type),
-		SessionDuration:         params.SessionDuration,
-		AllowedIdps:             params.AllowedIdps,
-		AutoRedirectToIdentity:  params.AutoRedirectToIdentity,
-		EnableBindingCookie:     params.EnableBindingCookie,
-		HttpOnlyCookieAttribute: params.HttpOnlyCookieAttribute,
-		SameSiteCookieAttribute: params.SameSiteCookieAttribute,
-		LogoURL:                 params.LogoURL,
-		SkipInterstitial:        params.SkipInterstitial,
-		AppLauncherVisible:      params.AppLauncherVisible,
-		ServiceAuth401Redirect:  params.ServiceAuth401Redirect,
-		CustomDenyMessage:       params.CustomDenyMessage,
-		CustomDenyURL:           params.CustomDenyURL,
+		ID:                       applicationID,
+		Name:                     params.Name,
+		Domain:                   params.Domain,
+		Type:                     cloudflare.AccessApplicationType(params.Type),
+		SessionDuration:          params.SessionDuration,
+		AllowedIdps:              params.AllowedIdps,
+		AutoRedirectToIdentity:   params.AutoRedirectToIdentity,
+		EnableBindingCookie:      params.EnableBindingCookie,
+		HttpOnlyCookieAttribute:  params.HttpOnlyCookieAttribute,
+		PathCookieAttribute:      params.PathCookieAttribute,
+		SameSiteCookieAttribute:  params.SameSiteCookieAttribute,
+		LogoURL:                  params.LogoURL,
+		SkipInterstitial:         params.SkipInterstitial,
+		OptionsPreflightBypass:   params.OptionsPreflightBypass,
+		AppLauncherVisible:       params.AppLauncherVisible,
+		ServiceAuth401Redirect:   params.ServiceAuth401Redirect,
+		CustomDenyMessage:        params.CustomDenyMessage,
+		CustomDenyURL:            params.CustomDenyURL,
+		CustomNonIdentityDenyURL: params.CustomNonIdentityDenyURL,
+		PrivateAddress:           params.PrivateAddress,
+	}
+
+	// Set domain type
+	if params.DomainType != "" {
+		updateParams.DomainType = cloudflare.AccessDestinationType(params.DomainType)
+	}
+
+	// Set destinations
+	if len(params.Destinations) > 0 {
+		updateParams.Destinations = convertDestinationsToCloudflare(params.Destinations)
+	}
+
+	// Set CORS headers
+	if params.CorsHeaders != nil {
+		updateParams.CorsHeaders = convertCorsHeadersToCloudflare(params.CorsHeaders)
+	}
+
+	// Set SaaS app configuration
+	if params.SaasApp != nil {
+		updateParams.SaasApplication = convertSaasAppToCloudflare(params.SaasApp)
+	}
+
+	// Set SCIM config
+	if params.SCIMConfig != nil {
+		updateParams.SCIMConfig = convertSCIMConfigToCloudflare(params.SCIMConfig)
+	}
+
+	// Set app launcher customization
+	if params.AppLauncherCustomization != nil {
+		updateParams.AccessAppLauncherCustomization = convertAppLauncherCustomizationToCloudflare(params.AppLauncherCustomization)
+	}
+
+	// Set target contexts for infrastructure apps
+	if len(params.TargetContexts) > 0 {
+		contexts := convertTargetContextsToCloudflare(params.TargetContexts)
+		updateParams.TargetContexts = &contexts
+	}
+
+	// Set gateway rules
+	if len(params.GatewayRules) > 0 {
+		gatewayRules := make([]cloudflare.AccessApplicationGatewayRule, 0, len(params.GatewayRules))
+		for _, ruleID := range params.GatewayRules {
+			gatewayRules = append(gatewayRules, cloudflare.AccessApplicationGatewayRule{ID: ruleID})
+		}
+		updateParams.GatewayRules = gatewayRules
 	}
 
 	if params.AllowAuthenticateViaWarp != nil {
@@ -170,6 +416,9 @@ func (c *API) UpdateAccessApplication(applicationID string, params AccessApplica
 	}
 	if len(params.Tags) > 0 {
 		updateParams.Tags = params.Tags
+	}
+	if len(params.CustomPages) > 0 {
+		updateParams.CustomPages = params.CustomPages
 	}
 
 	app, err := c.CloudflareClient.UpdateAccessApplication(ctx, rc, updateParams)
@@ -180,21 +429,7 @@ func (c *API) UpdateAccessApplication(applicationID string, params AccessApplica
 
 	c.Log.Info("Access Application updated", "id", app.ID, "name", app.Name)
 
-	autoRedirect := false
-	if app.AutoRedirectToIdentity != nil {
-		autoRedirect = *app.AutoRedirectToIdentity
-	}
-
-	return &AccessApplicationResult{
-		ID:                     app.ID,
-		AUD:                    app.AUD,
-		Name:                   app.Name,
-		Domain:                 app.Domain,
-		Type:                   string(app.Type),
-		SessionDuration:        app.SessionDuration,
-		AllowedIdps:            app.AllowedIdps,
-		AutoRedirectToIdentity: autoRedirect,
-	}, nil
+	return convertAccessApplicationToResult(app, c.ValidAccountId), nil
 }
 
 // DeleteAccessApplication deletes an Access Application.
@@ -219,14 +454,14 @@ func (c *API) DeleteAccessApplication(applicationID string) error {
 
 // AccessPolicyParams contains parameters for creating/updating an Access Policy.
 type AccessPolicyParams struct {
-	ApplicationID   string  // Required: The Application ID this policy belongs to
-	Name            string  // Policy name
-	Decision        string  // allow, deny, bypass, non_identity
-	Precedence      int     // Order of evaluation (lower = higher priority)
-	Include         []any   // Include rules (e.g., group references)
-	Exclude         []any   // Exclude rules
-	Require         []any   // Require rules
-	SessionDuration *string // Optional session duration override
+	ApplicationID   string                  // Required: The Application ID this policy belongs to
+	Name            string                  // Policy name
+	Decision        string                  // allow, deny, bypass, non_identity
+	Precedence      int                     // Order of evaluation (lower = higher priority)
+	Include         []AccessGroupRuleParams // Include rules (e.g., group references)
+	Exclude         []AccessGroupRuleParams // Exclude rules
+	Require         []AccessGroupRuleParams // Require rules
+	SessionDuration *string                 // Optional session duration override
 }
 
 // AccessPolicyResult contains the result of an Access Policy operation.
@@ -252,9 +487,9 @@ func (c *API) CreateAccessPolicy(params AccessPolicyParams) (*AccessPolicyResult
 		Name:          params.Name,
 		Decision:      params.Decision,
 		Precedence:    params.Precedence,
-		Include:       params.Include,
-		Exclude:       params.Exclude,
-		Require:       params.Require,
+		Include:       ConvertRulesToSDK(params.Include),
+		Exclude:       ConvertRulesToSDK(params.Exclude),
+		Require:       ConvertRulesToSDK(params.Require),
 	}
 
 	if params.SessionDuration != nil {
@@ -323,9 +558,9 @@ func (c *API) UpdateAccessPolicy(policyID string, params AccessPolicyParams) (*A
 		Name:          params.Name,
 		Decision:      params.Decision,
 		Precedence:    params.Precedence,
-		Include:       params.Include,
-		Exclude:       params.Exclude,
-		Require:       params.Require,
+		Include:       ConvertRulesToSDK(params.Include),
+		Exclude:       ConvertRulesToSDK(params.Exclude),
+		Require:       ConvertRulesToSDK(params.Require),
 	}
 
 	if params.SessionDuration != nil {
@@ -406,22 +641,224 @@ func (c *API) ListAccessPolicies(applicationID string) ([]AccessPolicyResult, er
 	return results, nil
 }
 
+// AccessGroupRuleParams represents a typed Access Group rule for SDK conversion.
+// Each rule should have exactly one field set.
+type AccessGroupRuleParams struct {
+	Email                *AccessGroupEmailRuleParams
+	EmailDomain          *AccessGroupEmailDomainRuleParams
+	EmailList            *AccessGroupEmailListRuleParams
+	Everyone             bool
+	IPRanges             *AccessGroupIPRangesRuleParams
+	IPList               *AccessGroupIPListRuleParams
+	Country              *AccessGroupCountryRuleParams
+	Group                *AccessGroupGroupRuleParams
+	ServiceToken         *AccessGroupServiceTokenRuleParams
+	AnyValidServiceToken bool
+	Certificate          bool
+	CommonName           *AccessGroupCommonNameRuleParams
+	DevicePosture        *AccessGroupDevicePostureRuleParams
+	GSuite               *AccessGroupGSuiteRuleParams
+	GitHub               *AccessGroupGitHubRuleParams
+	Azure                *AccessGroupAzureRuleParams
+	Okta                 *AccessGroupOktaRuleParams
+	OIDC                 *AccessGroupOIDCRuleParams
+	SAML                 *AccessGroupSAMLRuleParams
+	AuthMethod           *AccessGroupAuthMethodRuleParams
+	AuthContext          *AccessGroupAuthContextRuleParams
+	LoginMethod          *AccessGroupLoginMethodRuleParams
+	ExternalEvaluation   *AccessGroupExternalEvaluationRuleParams
+}
+
+// Rule params types
+type AccessGroupEmailRuleParams struct{ Email string }
+type AccessGroupEmailDomainRuleParams struct{ Domain string }
+type AccessGroupEmailListRuleParams struct{ ID string }
+type AccessGroupIPRangesRuleParams struct{ IP []string }
+type AccessGroupIPListRuleParams struct{ ID string }
+type AccessGroupCountryRuleParams struct{ Country []string }
+type AccessGroupGroupRuleParams struct{ ID string }
+type AccessGroupServiceTokenRuleParams struct{ TokenID string }
+type AccessGroupCommonNameRuleParams struct{ CommonName string }
+type AccessGroupDevicePostureRuleParams struct{ IntegrationUID string }
+type AccessGroupGSuiteRuleParams struct {
+	Email              string
+	IdentityProviderID string
+}
+type AccessGroupGitHubRuleParams struct {
+	Name               string
+	Teams              []string
+	IdentityProviderID string
+}
+type AccessGroupAzureRuleParams struct {
+	ID                 string
+	IdentityProviderID string
+}
+type AccessGroupOktaRuleParams struct {
+	Name               string
+	IdentityProviderID string
+}
+type AccessGroupOIDCRuleParams struct {
+	ClaimName          string
+	ClaimValue         string
+	IdentityProviderID string
+}
+type AccessGroupSAMLRuleParams struct {
+	AttributeName      string
+	AttributeValue     string
+	IdentityProviderID string
+}
+type AccessGroupAuthMethodRuleParams struct{ AuthMethod string }
+type AccessGroupAuthContextRuleParams struct {
+	ID                 string
+	AcID               string
+	IdentityProviderID string
+}
+type AccessGroupLoginMethodRuleParams struct{ ID string }
+type AccessGroupExternalEvaluationRuleParams struct {
+	EvaluateURL string
+	KeysURL     string
+}
+
+// convertRuleToSDK converts a typed rule to SDK-compatible map format.
+//
+//nolint:revive // cognitive complexity is acceptable for this conversion
+func convertRuleToSDK(rule AccessGroupRuleParams) map[string]interface{} {
+	result := make(map[string]interface{})
+
+	if rule.Email != nil {
+		result["email"] = map[string]string{"email": rule.Email.Email}
+	}
+	if rule.EmailDomain != nil {
+		result["email_domain"] = map[string]string{"domain": rule.EmailDomain.Domain}
+	}
+	if rule.EmailList != nil {
+		result["email_list"] = map[string]string{"id": rule.EmailList.ID}
+	}
+	if rule.Everyone {
+		result["everyone"] = struct{}{}
+	}
+	if rule.IPRanges != nil && len(rule.IPRanges.IP) > 0 {
+		result["ip"] = map[string]string{"ip": rule.IPRanges.IP[0]}
+	}
+	if rule.IPList != nil {
+		result["ip_list"] = map[string]string{"id": rule.IPList.ID}
+	}
+	if rule.Country != nil && len(rule.Country.Country) > 0 {
+		result["geo"] = map[string]string{"country_code": rule.Country.Country[0]}
+	}
+	if rule.Group != nil {
+		result["group"] = map[string]string{"id": rule.Group.ID}
+	}
+	if rule.ServiceToken != nil {
+		result["service_token"] = map[string]string{"token_id": rule.ServiceToken.TokenID}
+	}
+	if rule.AnyValidServiceToken {
+		result["any_valid_service_token"] = struct{}{}
+	}
+	if rule.Certificate {
+		result["certificate"] = struct{}{}
+	}
+	if rule.CommonName != nil {
+		result["common_name"] = map[string]string{"common_name": rule.CommonName.CommonName}
+	}
+	if rule.DevicePosture != nil {
+		result["device_posture"] = map[string]string{"integration_uid": rule.DevicePosture.IntegrationUID}
+	}
+	if rule.GSuite != nil {
+		result["gsuite"] = map[string]interface{}{
+			"email":                rule.GSuite.Email,
+			"identity_provider_id": rule.GSuite.IdentityProviderID,
+		}
+	}
+	if rule.GitHub != nil {
+		ghMap := map[string]interface{}{
+			"name":                 rule.GitHub.Name,
+			"identity_provider_id": rule.GitHub.IdentityProviderID,
+		}
+		if len(rule.GitHub.Teams) > 0 {
+			ghMap["teams"] = rule.GitHub.Teams
+		}
+		result["github_organization"] = ghMap
+	}
+	if rule.Azure != nil {
+		result["azure_ad"] = map[string]interface{}{
+			"id":                   rule.Azure.ID,
+			"identity_provider_id": rule.Azure.IdentityProviderID,
+		}
+	}
+	if rule.Okta != nil {
+		result["okta"] = map[string]interface{}{
+			"name":                 rule.Okta.Name,
+			"identity_provider_id": rule.Okta.IdentityProviderID,
+		}
+	}
+	if rule.OIDC != nil {
+		result["oidc"] = map[string]interface{}{
+			"claim_name":           rule.OIDC.ClaimName,
+			"claim_value":          rule.OIDC.ClaimValue,
+			"identity_provider_id": rule.OIDC.IdentityProviderID,
+		}
+	}
+	if rule.SAML != nil {
+		result["saml"] = map[string]interface{}{
+			"attribute_name":       rule.SAML.AttributeName,
+			"attribute_value":      rule.SAML.AttributeValue,
+			"identity_provider_id": rule.SAML.IdentityProviderID,
+		}
+	}
+	if rule.AuthMethod != nil {
+		result["auth_method"] = map[string]string{"auth_method": rule.AuthMethod.AuthMethod}
+	}
+	if rule.AuthContext != nil {
+		result["auth_context"] = map[string]interface{}{
+			"id":                   rule.AuthContext.ID,
+			"ac_id":                rule.AuthContext.AcID,
+			"identity_provider_id": rule.AuthContext.IdentityProviderID,
+		}
+	}
+	if rule.LoginMethod != nil {
+		result["login_method"] = map[string]string{"id": rule.LoginMethod.ID}
+	}
+	if rule.ExternalEvaluation != nil {
+		result["external_evaluation"] = map[string]string{
+			"evaluate_url": rule.ExternalEvaluation.EvaluateURL,
+			"keys_url":     rule.ExternalEvaluation.KeysURL,
+		}
+	}
+
+	return result
+}
+
+// ConvertRulesToSDK converts typed rules to SDK-compatible format.
+func ConvertRulesToSDK(rules []AccessGroupRuleParams) []interface{} {
+	if len(rules) == 0 {
+		return nil
+	}
+	result := make([]interface{}, 0, len(rules))
+	for _, rule := range rules {
+		ruleMap := convertRuleToSDK(rule)
+		if len(ruleMap) > 0 {
+			result = append(result, ruleMap)
+		}
+	}
+	return result
+}
+
 // BuildGroupIncludeRule constructs an include rule that references an Access Group.
 // This uses the "group" rule type with the group's UUID.
-func BuildGroupIncludeRule(groupID string) map[string]any {
-	return map[string]any{
-		"group": map[string]string{
-			"id": groupID,
-		},
+func BuildGroupIncludeRule(groupID string) AccessGroupRuleParams {
+	return AccessGroupRuleParams{
+		Group: &AccessGroupGroupRuleParams{ID: groupID},
 	}
 }
 
 // AccessGroupParams contains parameters for creating/updating an Access Group.
 type AccessGroupParams struct {
-	Name    string
-	Include []interface{}
-	Exclude []interface{}
-	Require []interface{}
+	Name      string
+	Include   []AccessGroupRuleParams
+	Exclude   []AccessGroupRuleParams
+	Require   []AccessGroupRuleParams
+	IsDefault *bool
 }
 
 // AccessGroupResult contains the result of an Access Group operation.
@@ -442,9 +879,9 @@ func (c *API) CreateAccessGroup(params AccessGroupParams) (*AccessGroupResult, e
 
 	createParams := cloudflare.CreateAccessGroupParams{
 		Name:    params.Name,
-		Include: params.Include,
-		Exclude: params.Exclude,
-		Require: params.Require,
+		Include: ConvertRulesToSDK(params.Include),
+		Exclude: ConvertRulesToSDK(params.Exclude),
+		Require: ConvertRulesToSDK(params.Require),
 	}
 
 	group, err := c.CloudflareClient.CreateAccessGroup(ctx, rc, createParams)
@@ -496,9 +933,9 @@ func (c *API) UpdateAccessGroup(groupID string, params AccessGroupParams) (*Acce
 	updateParams := cloudflare.UpdateAccessGroupParams{
 		ID:      groupID,
 		Name:    params.Name,
-		Include: params.Include,
-		Exclude: params.Exclude,
-		Require: params.Require,
+		Include: ConvertRulesToSDK(params.Include),
+		Exclude: ConvertRulesToSDK(params.Exclude),
+		Require: ConvertRulesToSDK(params.Require),
 	}
 
 	group, err := c.CloudflareClient.UpdateAccessGroup(ctx, rc, updateParams)
@@ -561,9 +998,10 @@ func (c *API) CreateAccessIdentityProvider(params AccessIdentityProviderParams) 
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	createParams := cloudflare.CreateAccessIdentityProviderParams{
-		Name:   params.Name,
-		Type:   params.Type,
-		Config: params.Config,
+		Name:       params.Name,
+		Type:       params.Type,
+		Config:     params.Config,
+		ScimConfig: params.ScimConfig,
 	}
 
 	idp, err := c.CloudflareClient.CreateAccessIdentityProvider(ctx, rc, createParams)
@@ -615,10 +1053,11 @@ func (c *API) UpdateAccessIdentityProvider(idpID string, params AccessIdentityPr
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	updateParams := cloudflare.UpdateAccessIdentityProviderParams{
-		ID:     idpID,
-		Name:   params.Name,
-		Type:   params.Type,
-		Config: params.Config,
+		ID:         idpID,
+		Name:       params.Name,
+		Type:       params.Type,
+		Config:     params.Config,
+		ScimConfig: params.ScimConfig,
 	}
 
 	idp, err := c.CloudflareClient.UpdateAccessIdentityProvider(ctx, rc, updateParams)
@@ -658,28 +1097,48 @@ func (c *API) DeleteAccessIdentityProvider(idpID string) error {
 
 // AccessServiceTokenResult contains the result of an Access Service Token operation.
 type AccessServiceTokenResult struct {
-	ID           string
-	TokenID      string
-	Name         string
-	ClientID     string
-	ClientSecret string
-	AccountID    string
-	ExpiresAt    string
+	ID                  string
+	TokenID             string
+	Name                string
+	ClientID            string
+	ClientSecret        string
+	AccountID           string
+	ExpiresAt           string
+	CreatedAt           string
+	UpdatedAt           string
+	LastSeenAt          string
+	ClientSecretVersion int64
 }
 
 // convertServiceToken converts a Cloudflare service token to our result type
 func (c *API) convertServiceToken(token cloudflare.AccessServiceToken) *AccessServiceTokenResult {
 	expiresAt := ""
 	if token.ExpiresAt != nil {
-		expiresAt = token.ExpiresAt.String()
+		expiresAt = token.ExpiresAt.Format("2006-01-02T15:04:05Z07:00")
+	}
+	createdAt := ""
+	if token.CreatedAt != nil {
+		createdAt = token.CreatedAt.Format("2006-01-02T15:04:05Z07:00")
+	}
+	updatedAt := ""
+	if token.UpdatedAt != nil {
+		updatedAt = token.UpdatedAt.Format("2006-01-02T15:04:05Z07:00")
+	}
+	lastSeenAt := ""
+	if token.LastSeenAt != nil {
+		lastSeenAt = token.LastSeenAt.Format("2006-01-02T15:04:05Z07:00")
 	}
 	return &AccessServiceTokenResult{
-		ID:        token.ID,
-		TokenID:   token.ID,
-		Name:      token.Name,
-		ClientID:  token.ClientID,
-		AccountID: c.ValidAccountId,
-		ExpiresAt: expiresAt,
+		ID:                  token.ID,
+		TokenID:             token.ID,
+		Name:                token.Name,
+		ClientID:            token.ClientID,
+		AccountID:           c.ValidAccountId,
+		ExpiresAt:           expiresAt,
+		CreatedAt:           createdAt,
+		UpdatedAt:           updatedAt,
+		LastSeenAt:          lastSeenAt,
+		ClientSecretVersion: token.ClientSecretVersion,
 	}
 }
 
@@ -843,6 +1302,56 @@ func (c *API) DeleteAccessServiceToken(tokenID string) error {
 	return nil
 }
 
+// DevicePostureMatchParams contains platform matching for Device Posture Rule.
+type DevicePostureMatchParams struct {
+	Platform string
+}
+
+// DevicePostureInputParams contains rule-specific input for Device Posture Rule.
+type DevicePostureInputParams struct {
+	ID               string
+	Path             string
+	Exists           *bool
+	Sha256           string
+	Thumbprint       string
+	Running          *bool
+	RequireAll       *bool
+	Enabled          *bool
+	Version          string
+	Operator         string
+	Domain           string
+	ComplianceStatus string
+	ConnectionID     string
+	LastSeen         string
+	EidLastSeen      string
+	ActiveThreats    *int
+	Infected         *bool
+	IsActive         *bool
+	NetworkStatus    string
+	SensorConfig     string
+	VersionOperator  string
+	CountOperator    string
+	ScoreOperator    string
+	IssueCount       *int
+	Score            *int
+	TotalScore       *int
+	RiskLevel        string
+	Overall          string
+	State            string
+	OperationalState string
+	OSDistroName     string
+	OSDistroRevision string
+	OSVersionExtra   string
+	OS               string
+	OperatingSystem  string
+	CertificateID    string
+	CommonName       string
+	Cn               string
+	CheckPrivateKey  *bool
+	ExtendedKeyUsage []string
+	CheckDisks       []string
+}
+
 // DevicePostureRuleParams contains parameters for a Device Posture Rule.
 type DevicePostureRuleParams struct {
 	Name        string
@@ -850,8 +1359,8 @@ type DevicePostureRuleParams struct {
 	Description string
 	Schedule    string
 	Expiration  string
-	Match       []map[string]any
-	Input       map[string]any
+	Match       []DevicePostureMatchParams
+	Input       *DevicePostureInputParams
 }
 
 // DevicePostureRuleResult contains the result of a Device Posture Rule operation.
@@ -863,134 +1372,73 @@ type DevicePostureRuleResult struct {
 	AccountID   string
 }
 
-// convertToDevicePostureRuleInput converts a map to cloudflare.DevicePostureRuleInput.
-// This function handles all supported input fields for device posture rules.
-func convertToDevicePostureRuleInput(input map[string]any) cloudflare.DevicePostureRuleInput {
+// convertToDevicePostureRuleInput converts DevicePostureInputParams to cloudflare.DevicePostureRuleInput.
+func convertToDevicePostureRuleInput(input *DevicePostureInputParams) cloudflare.DevicePostureRuleInput {
 	result := cloudflare.DevicePostureRuleInput{}
 
 	if input == nil {
 		return result
 	}
 
-	// Apply all field conversions
-	applyStringFields(input, &result)
-	applyBoolFields(input, &result)
-	applyIntFields(input, &result)
-	applySliceFields(input, &result)
-
-	return result
-}
-
-// applyStringFields sets string fields on DevicePostureRuleInput from the input map.
-func applyStringFields(input map[string]any, result *cloudflare.DevicePostureRuleInput) {
-	stringFields := map[string]*string{
-		"id":                 &result.ID,
-		"path":               &result.Path,
-		"thumbprint":         &result.Thumbprint,
-		"sha256":             &result.Sha256,
-		"version":            &result.Version,
-		"version_operator":   &result.VersionOperator,
-		"overall":            &result.Overall,
-		"sensor_config":      &result.SensorConfig,
-		"os":                 &result.Os,
-		"os_distro_name":     &result.OsDistroName,
-		"os_distro_revision": &result.OsDistroRevision,
-		"os_version_extra":   &result.OSVersionExtra,
-		"operator":           &result.Operator,
-		"domain":             &result.Domain,
-		"compliance_status":  &result.ComplianceStatus,
-		"connection_id":      &result.ConnectionID,
-		"issue_count":        &result.IssueCount,
-		"count_operator":     &result.CountOperator,
-		"score_operator":     &result.ScoreOperator,
-		"certificate_id":     &result.CertificateID,
-		"common_name":        &result.CommonName,
-		"network_status":     &result.NetworkStatus,
-		"eid_last_seen":      &result.EidLastSeen,
-		"risk_level":         &result.RiskLevel,
-		"state":              &result.State,
-		"last_seen":          &result.LastSeen,
-	}
-
-	for key, target := range stringFields {
-		if v, ok := input[key].(string); ok {
-			*target = v
-		}
-	}
+	// String fields
+	result.ID = input.ID
+	result.Path = input.Path
+	result.Sha256 = input.Sha256
+	result.Thumbprint = input.Thumbprint
+	result.Version = input.Version
+	result.Operator = input.Operator
+	result.Domain = input.Domain
+	result.ComplianceStatus = input.ComplianceStatus
+	result.ConnectionID = input.ConnectionID
+	result.LastSeen = input.LastSeen
+	result.EidLastSeen = input.EidLastSeen
+	result.NetworkStatus = input.NetworkStatus
+	result.SensorConfig = input.SensorConfig
+	result.VersionOperator = input.VersionOperator
+	result.CountOperator = input.CountOperator
+	result.ScoreOperator = input.ScoreOperator
+	result.RiskLevel = input.RiskLevel
+	result.Overall = input.Overall
+	result.State = input.State
+	result.Os = input.OS
+	result.OsDistroName = input.OSDistroName
+	result.OsDistroRevision = input.OSDistroRevision
+	result.OSVersionExtra = input.OSVersionExtra
+	result.CertificateID = input.CertificateID
+	result.CommonName = input.CommonName
 
 	// String pointer field
-	if v, ok := input["operational_state"].(string); ok {
-		result.OperationalState = &v
-	}
-}
-
-// applyBoolFields sets bool pointer fields on DevicePostureRuleInput from the input map.
-func applyBoolFields(input map[string]any, result *cloudflare.DevicePostureRuleInput) {
-	if v, ok := input["exists"].(bool); ok {
-		result.Exists = &v
-	}
-	if v, ok := input["running"].(bool); ok {
-		result.Running = &v
-	}
-	if v, ok := input["require_all"].(bool); ok {
-		result.RequireAll = &v
-	}
-	if v, ok := input["enabled"].(bool); ok {
-		result.Enabled = &v
-	}
-	if v, ok := input["infected"].(bool); ok {
-		result.Infected = &v
-	}
-	if v, ok := input["is_active"].(bool); ok {
-		result.IsActive = &v
-	}
-	if v, ok := input["check_private_key"].(bool); ok {
-		result.CheckPrivateKey = &v
-	}
-}
-
-// applyIntFields sets integer fields on DevicePostureRuleInput from the input map.
-func applyIntFields(input map[string]any, result *cloudflare.DevicePostureRuleInput) {
-	intFields := map[string]*int{
-		"total_score":    &result.TotalScore,
-		"active_threats": &result.ActiveThreats,
-		"score":          &result.Score,
+	if input.OperationalState != "" {
+		result.OperationalState = &input.OperationalState
 	}
 
-	for key, target := range intFields {
-		if v, ok := input[key].(int); ok {
-			*target = v
-		} else if v, ok := input[key].(float64); ok {
-			*target = int(v)
-		}
-	}
-}
+	// Bool pointer fields
+	result.Exists = input.Exists
+	result.Running = input.Running
+	result.RequireAll = input.RequireAll
+	result.Enabled = input.Enabled
+	result.Infected = input.Infected
+	result.IsActive = input.IsActive
+	result.CheckPrivateKey = input.CheckPrivateKey
 
-// applySliceFields sets string slice fields on DevicePostureRuleInput from the input map.
-func applySliceFields(input map[string]any, result *cloudflare.DevicePostureRuleInput) {
-	// check_disks
-	if v, ok := input["check_disks"].([]string); ok {
-		result.CheckDisks = v
-	} else if v, ok := input["check_disks"].([]any); ok {
-		result.CheckDisks = toStringSlice(v)
+	// Int fields
+	if input.TotalScore != nil {
+		result.TotalScore = *input.TotalScore
+	}
+	if input.ActiveThreats != nil {
+		result.ActiveThreats = *input.ActiveThreats
+	}
+	if input.Score != nil {
+		result.Score = *input.Score
+	}
+	if input.IssueCount != nil {
+		result.IssueCount = fmt.Sprintf("%d", *input.IssueCount)
 	}
 
-	// extended_key_usage
-	if v, ok := input["extended_key_usage"].([]string); ok {
-		result.ExtendedKeyUsage = v
-	} else if v, ok := input["extended_key_usage"].([]any); ok {
-		result.ExtendedKeyUsage = toStringSlice(v)
-	}
-}
+	// Slice fields
+	result.CheckDisks = input.CheckDisks
+	result.ExtendedKeyUsage = input.ExtendedKeyUsage
 
-// toStringSlice converts []any to []string, filtering out non-string values.
-func toStringSlice(v []any) []string {
-	result := make([]string, 0, len(v))
-	for _, item := range v {
-		if s, ok := item.(string); ok {
-			result = append(result, s)
-		}
-	}
 	return result
 }
 
@@ -1006,9 +1454,8 @@ func (c *API) CreateDevicePostureRule(params DevicePostureRuleParams) (*DevicePo
 	// Convert match to DevicePostureRuleMatch
 	var match []cloudflare.DevicePostureRuleMatch
 	for _, m := range params.Match {
-		platform, _ := m["platform"].(string)
 		match = append(match, cloudflare.DevicePostureRuleMatch{
-			Platform: platform,
+			Platform: m.Platform,
 		})
 	}
 
@@ -1078,9 +1525,8 @@ func (c *API) UpdateDevicePostureRule(ruleID string, params DevicePostureRulePar
 	// Convert match to DevicePostureRuleMatch
 	var match []cloudflare.DevicePostureRuleMatch
 	for _, m := range params.Match {
-		platform, _ := m["platform"].(string)
 		match = append(match, cloudflare.DevicePostureRuleMatch{
-			Platform: platform,
+			Platform: m.Platform,
 		})
 	}
 
@@ -1242,22 +1688,254 @@ func (c *API) ListAccessApplicationsByName(name string) (*AccessApplicationResul
 
 	for _, app := range apps {
 		if app.Name == name {
-			autoRedirect := false
-			if app.AutoRedirectToIdentity != nil {
-				autoRedirect = *app.AutoRedirectToIdentity
-			}
-			return &AccessApplicationResult{
-				ID:                     app.ID,
-				AUD:                    app.AUD,
-				Name:                   app.Name,
-				Domain:                 app.Domain,
-				Type:                   string(app.Type),
-				SessionDuration:        app.SessionDuration,
-				AllowedIdps:            app.AllowedIdps,
-				AutoRedirectToIdentity: autoRedirect,
-			}, nil
+			return convertAccessApplicationToResult(app, c.ValidAccountId), nil
 		}
 	}
 
 	return nil, fmt.Errorf("access application not found: %s", name)
+}
+
+// ============================================================================
+// Conversion helper functions for AccessApplication
+// ============================================================================
+
+// convertAccessApplicationToResult converts a Cloudflare AccessApplication to our result type.
+func convertAccessApplicationToResult(app cloudflare.AccessApplication, _ string) *AccessApplicationResult {
+	autoRedirect := false
+	if app.AutoRedirectToIdentity != nil {
+		autoRedirect = *app.AutoRedirectToIdentity
+	}
+
+	// Extract SelfHostedDomains from Destinations
+	var selfHostedDomains []string
+	for _, dest := range app.Destinations {
+		if string(dest.Type) == "public" && dest.URI != "" {
+			selfHostedDomains = append(selfHostedDomains, dest.URI)
+		}
+	}
+
+	// Extract SaaS app client ID if available
+	var saasAppClientID string
+	if app.SaasApplication != nil {
+		saasAppClientID = app.SaasApplication.ClientID
+	}
+
+	return &AccessApplicationResult{
+		ID:                     app.ID,
+		AUD:                    app.AUD,
+		Name:                   app.Name,
+		Domain:                 app.Domain,
+		SelfHostedDomains:      selfHostedDomains,
+		Type:                   string(app.Type),
+		SessionDuration:        app.SessionDuration,
+		AllowedIdps:            app.AllowedIdps,
+		AutoRedirectToIdentity: autoRedirect,
+		SaasAppClientID:        saasAppClientID,
+	}
+}
+
+// convertDestinationsToCloudflare converts destination params to Cloudflare format.
+func convertDestinationsToCloudflare(destinations []AccessDestinationParams) []cloudflare.AccessDestination {
+	result := make([]cloudflare.AccessDestination, 0, len(destinations))
+	for _, dest := range destinations {
+		result = append(result, cloudflare.AccessDestination{
+			Type:       cloudflare.AccessDestinationType(dest.Type),
+			URI:        dest.URI,
+			Hostname:   dest.Hostname,
+			CIDR:       dest.CIDR,
+			PortRange:  dest.PortRange,
+			L4Protocol: dest.L4Protocol,
+			VnetID:     dest.VnetID,
+		})
+	}
+	return result
+}
+
+// convertCorsHeadersToCloudflare converts CORS headers params to Cloudflare format.
+func convertCorsHeadersToCloudflare(cors *AccessApplicationCorsHeadersParams) *cloudflare.AccessApplicationCorsHeaders {
+	if cors == nil {
+		return nil
+	}
+	return &cloudflare.AccessApplicationCorsHeaders{
+		AllowedMethods:   cors.AllowedMethods,
+		AllowedOrigins:   cors.AllowedOrigins,
+		AllowedHeaders:   cors.AllowedHeaders,
+		AllowAllMethods:  cors.AllowAllMethods,
+		AllowAllHeaders:  cors.AllowAllHeaders,
+		AllowAllOrigins:  cors.AllowAllOrigins,
+		AllowCredentials: cors.AllowCredentials,
+		MaxAge:           cors.MaxAge,
+	}
+}
+
+// convertSaasAppToCloudflare converts SaaS app params to Cloudflare format.
+//
+//nolint:revive // cognitive complexity is acceptable for this conversion
+func convertSaasAppToCloudflare(saas *SaasApplicationParams) *cloudflare.SaasApplication {
+	if saas == nil {
+		return nil
+	}
+
+	result := &cloudflare.SaasApplication{
+		AuthType:                      saas.AuthType,
+		ConsumerServiceUrl:            saas.ConsumerServiceURL,
+		SPEntityID:                    saas.SPEntityID,
+		NameIDFormat:                  saas.NameIDFormat,
+		DefaultRelayState:             saas.DefaultRelayState,
+		NameIDTransformJsonata:        saas.NameIDTransformJsonata,
+		SamlAttributeTransformJsonata: saas.SamlAttributeTransformJsonata,
+		RedirectURIs:                  saas.RedirectURIs,
+		GrantTypes:                    saas.GrantTypes,
+		Scopes:                        saas.Scopes,
+		AppLauncherURL:                saas.AppLauncherURL,
+		GroupFilterRegex:              saas.GroupFilterRegex,
+		AllowPKCEWithoutClientSecret:  saas.AllowPKCEWithoutClientSecret,
+		AccessTokenLifetime:           saas.AccessTokenLifetime,
+	}
+
+	// Convert SAML custom attributes
+	if len(saas.CustomAttributes) > 0 {
+		attrs := make([]cloudflare.SAMLAttributeConfig, 0, len(saas.CustomAttributes))
+		for _, attr := range saas.CustomAttributes {
+			attrs = append(attrs, cloudflare.SAMLAttributeConfig{
+				Name:         attr.Name,
+				NameFormat:   attr.NameFormat,
+				FriendlyName: attr.FriendlyName,
+				Required:     attr.Required,
+				Source: cloudflare.SourceConfig{
+					Name:      attr.Source.Name,
+					NameByIDP: attr.Source.NameByIDP,
+				},
+			})
+		}
+		result.CustomAttributes = &attrs
+	}
+
+	// Convert OIDC custom claims
+	if len(saas.CustomClaims) > 0 {
+		claims := make([]cloudflare.OIDCClaimConfig, 0, len(saas.CustomClaims))
+		for _, claim := range saas.CustomClaims {
+			required := claim.Required
+			claims = append(claims, cloudflare.OIDCClaimConfig{
+				Name:     claim.Name,
+				Required: &required,
+				Scope:    claim.Scope,
+				Source: cloudflare.SourceConfig{
+					Name:      claim.Source.Name,
+					NameByIDP: claim.Source.NameByIDP,
+				},
+			})
+		}
+		result.CustomClaims = &claims
+	}
+
+	// Convert refresh token options
+	if saas.RefreshTokenOptions != nil {
+		result.RefreshTokenOptions = &cloudflare.RefreshTokenOptions{
+			Lifetime: saas.RefreshTokenOptions.Lifetime,
+		}
+	}
+
+	// Convert hybrid and implicit options
+	if saas.HybridAndImplicitOptions != nil {
+		result.HybridAndImplicitOptions = &cloudflare.AccessApplicationHybridAndImplicitOptions{
+			ReturnIDTokenFromAuthorizationEndpoint:     saas.HybridAndImplicitOptions.ReturnIDTokenFromAuthorizationEndpoint,
+			ReturnAccessTokenFromAuthorizationEndpoint: saas.HybridAndImplicitOptions.ReturnAccessTokenFromAuthorizationEndpoint,
+		}
+	}
+
+	return result
+}
+
+// convertSCIMConfigToCloudflare converts SCIM config params to Cloudflare format.
+//
+//nolint:revive // cognitive complexity is acceptable for this conversion
+func convertSCIMConfigToCloudflare(scim *AccessApplicationSCIMConfigParams) *cloudflare.AccessApplicationSCIMConfig {
+	if scim == nil {
+		return nil
+	}
+
+	result := &cloudflare.AccessApplicationSCIMConfig{
+		Enabled:            scim.Enabled,
+		RemoteURI:          scim.RemoteURI,
+		IdPUID:             scim.IDPUID,
+		DeactivateOnDelete: scim.DeactivateOnDelete,
+	}
+
+	// Convert authentication - this is complex due to polymorphic types
+	// For now, we skip authentication conversion as it requires special handling
+	// TODO: Implement proper SCIM authentication conversion
+
+	// Convert mappings
+	if len(scim.Mappings) > 0 {
+		mappings := make([]*cloudflare.AccessApplicationScimMapping, 0, len(scim.Mappings))
+		for _, m := range scim.Mappings {
+			mapping := &cloudflare.AccessApplicationScimMapping{
+				Schema:           m.Schema,
+				Enabled:          m.Enabled,
+				Filter:           m.Filter,
+				TransformJsonata: m.TransformJsonata,
+				Strictness:       m.Strictness,
+			}
+			if m.Operations != nil {
+				mapping.Operations = &cloudflare.AccessApplicationScimMappingOperations{
+					Create: m.Operations.Create,
+					Update: m.Operations.Update,
+					Delete: m.Operations.Delete,
+				}
+			}
+			mappings = append(mappings, mapping)
+		}
+		result.Mappings = mappings
+	}
+
+	return result
+}
+
+// convertAppLauncherCustomizationToCloudflare converts app launcher customization to Cloudflare format.
+func convertAppLauncherCustomizationToCloudflare(custom *AccessAppLauncherCustomizationParams) cloudflare.AccessAppLauncherCustomization {
+	result := cloudflare.AccessAppLauncherCustomization{
+		LogoURL:                  custom.AppLauncherLogoURL,
+		HeaderBackgroundColor:    custom.HeaderBackgroundColor,
+		BackgroundColor:          custom.BackgroundColor,
+		SkipAppLauncherLoginPage: custom.SkipAppLauncherLoginPage,
+	}
+
+	// Convert landing page design
+	if custom.LandingPageDesign != nil {
+		result.LandingPageDesign = cloudflare.AccessLandingPageDesign{
+			Title:           custom.LandingPageDesign.Title,
+			Message:         custom.LandingPageDesign.Message,
+			ImageURL:        custom.LandingPageDesign.ImageURL,
+			ButtonColor:     custom.LandingPageDesign.ButtonColor,
+			ButtonTextColor: custom.LandingPageDesign.ButtonTextColor,
+		}
+	}
+
+	// Convert footer links
+	if len(custom.FooterLinks) > 0 {
+		links := make([]cloudflare.AccessFooterLink, 0, len(custom.FooterLinks))
+		for _, link := range custom.FooterLinks {
+			links = append(links, cloudflare.AccessFooterLink{
+				Name: link.Name,
+				URL:  link.URL,
+			})
+		}
+		result.FooterLinks = links
+	}
+
+	return result
+}
+
+// convertTargetContextsToCloudflare converts target contexts to Cloudflare format.
+func convertTargetContextsToCloudflare(contexts []AccessInfrastructureTargetContextParams) []cloudflare.AccessInfrastructureTargetContext {
+	result := make([]cloudflare.AccessInfrastructureTargetContext, 0, len(contexts))
+	for _, ctx := range contexts {
+		result = append(result, cloudflare.AccessInfrastructureTargetContext{
+			TargetAttributes: ctx.TargetAttributes,
+			Port:             ctx.Port,
+			Protocol:         cloudflare.AccessInfrastructureProtocol(ctx.Protocol),
+		})
+	}
+	return result
 }
