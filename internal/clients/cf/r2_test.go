@@ -35,7 +35,8 @@ func TestR2RulesRequest(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Contains(t, parsed, "rules")
-		rulesArr := parsed["rules"].([]interface{})
+		rulesArr, ok := parsed["rules"].([]interface{})
+		require.True(t, ok, "rules should be []interface{}")
 		assert.Len(t, rulesArr, 1)
 	})
 

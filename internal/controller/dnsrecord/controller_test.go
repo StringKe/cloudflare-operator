@@ -10,9 +10,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
-	cf "github.com/StringKe/cloudflare-operator/internal/clients/cf"
+	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 )
 
+//nolint:revive // cognitive-complexity: table-driven test with many test cases
 func TestBuildRecordData(t *testing.T) {
 	reconciler := &DNSRecordReconciler{}
 
