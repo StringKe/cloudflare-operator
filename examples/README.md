@@ -128,6 +128,8 @@ kubectl apply -f examples/scenarios/multi-cluster-access/
 
 ## API Version Reference / API 版本参考
 
+### Core Resources / 核心资源
+
 | Resource | API Version | Scope |
 |----------|-------------|-------|
 | Tunnel | `networking.cloudflare-operator.io/v1alpha2` | Namespaced |
@@ -136,6 +138,13 @@ kubectl apply -f examples/scenarios/multi-cluster-access/
 | VirtualNetwork | `networking.cloudflare-operator.io/v1alpha2` | Cluster |
 | NetworkRoute | `networking.cloudflare-operator.io/v1alpha2` | Cluster |
 | PrivateService | `networking.cloudflare-operator.io/v1alpha2` | Namespaced |
+| DNSRecord | `networking.cloudflare-operator.io/v1alpha2` | Namespaced |
+| CloudflareDomain | `networking.cloudflare-operator.io/v1alpha2` | Cluster |
+
+### Access & Gateway / 访问与网关
+
+| Resource | API Version | Scope |
+|----------|-------------|-------|
 | AccessApplication | `networking.cloudflare-operator.io/v1alpha2` | Namespaced |
 | AccessGroup | `networking.cloudflare-operator.io/v1alpha2` | Cluster |
 | AccessIdentityProvider | `networking.cloudflare-operator.io/v1alpha2` | Cluster |
@@ -145,8 +154,37 @@ kubectl apply -f examples/scenarios/multi-cluster-access/
 | GatewayConfiguration | `networking.cloudflare-operator.io/v1alpha2` | Cluster |
 | DeviceSettingsPolicy | `networking.cloudflare-operator.io/v1alpha2` | Cluster |
 | DevicePostureRule | `networking.cloudflare-operator.io/v1alpha2` | Cluster |
-| DNSRecord | `networking.cloudflare-operator.io/v1alpha2` | Namespaced |
-| WARPConnector | `networking.cloudflare-operator.io/v1alpha2` | Cluster |
+| WARPConnector | `networking.cloudflare-operator.io/v1alpha2` | Namespaced |
+
+### R2 Storage / R2 存储 (v0.20.0+)
+
+| Resource | API Version | Scope |
+|----------|-------------|-------|
+| R2Bucket | `networking.cloudflare-operator.io/v1alpha2` | Namespaced |
+| R2BucketDomain | `networking.cloudflare-operator.io/v1alpha2` | Namespaced |
+| R2BucketNotification | `networking.cloudflare-operator.io/v1alpha2` | Namespaced |
+
+### Rules Engine / 规则引擎 (v0.20.0+)
+
+| Resource | API Version | Scope |
+|----------|-------------|-------|
+| ZoneRuleset | `networking.cloudflare-operator.io/v1alpha2` | Namespaced |
+| TransformRule | `networking.cloudflare-operator.io/v1alpha2` | Namespaced |
+| RedirectRule | `networking.cloudflare-operator.io/v1alpha2` | Namespaced |
+
+### SSL/TLS & Registrar / SSL/TLS 与域名注册 (v0.20.0+)
+
+| Resource | API Version | Scope |
+|----------|-------------|-------|
+| OriginCACertificate | `networking.cloudflare-operator.io/v1alpha2` | Namespaced |
+| DomainRegistration | `networking.cloudflare-operator.io/v1alpha2` | Cluster |
+
+### Kubernetes Integration / Kubernetes 集成 (v0.18.0+)
+
+| Resource | API Version | Scope |
+|----------|-------------|-------|
+| TunnelIngressClassConfig | `networking.cloudflare-operator.io/v1alpha2` | Cluster |
+| TunnelGatewayClassConfig | `networking.cloudflare-operator.io/v1alpha2` | Cluster |
 
 ## Notes / 注意事项
 

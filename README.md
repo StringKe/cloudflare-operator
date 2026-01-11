@@ -35,7 +35,7 @@
 
 </div>
 
-> **Note**: This project is currently in Alpha (v0.18.x). This is **NOT** an official Cloudflare product. It uses the [Cloudflare API](https://api.cloudflare.com/) and [cloudflared](https://github.com/cloudflare/cloudflared) to automate Zero Trust configuration on Kubernetes.
+> **Note**: This project is currently in Alpha (v0.21.x). This is **NOT** an official Cloudflare product. It uses the [Cloudflare API](https://api.cloudflare.com/) and [cloudflared](https://github.com/cloudflare/cloudflared) to automate Zero Trust configuration on Kubernetes.
 >
 > This project is a fork of [adyanth/cloudflare-operator](https://github.com/adyanth/cloudflare-operator) with extended Zero Trust features and improvements.
 
@@ -228,7 +228,8 @@ tunnelRef:
 | CRD | API Version | Scope | Description |
 |-----|-------------|-------|-------------|
 | DNSRecord | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | DNS record management |
-| WARPConnector | `networking.cloudflare-operator.io/v1alpha2` | Cluster | WARP connector deployment |
+| WARPConnector | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | WARP connector deployment |
+| AccessTunnel | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | Access tunnel configuration |
 
 ### SSL/TLS & Certificates
 

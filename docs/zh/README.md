@@ -79,13 +79,14 @@ flowchart TB
     Edge <-->|隧道| Deployment
 ```
 
-## CRD 摘要
+## CRD 摘要 (共 30 个)
 
-### 核心凭证
+### 凭证与配置
 
 | CRD | 作用域 | 说明 |
 |-----|--------|------|
 | `CloudflareCredentials` | Cluster | 共享 API 凭证配置 |
+| `CloudflareDomain` | Cluster | Zone 设置 (SSL/TLS, 缓存, 安全, WAF) |
 
 ### 隧道管理
 
@@ -102,7 +103,7 @@ flowchart TB
 | `VirtualNetwork` | Cluster | 流量隔离网络 |
 | `NetworkRoute` | Cluster | 通过隧道路由 CIDR |
 | `PrivateService` | Namespaced | 通过私有 IP 暴露服务 |
-| `WARPConnector` | Cluster | 站点间 WARP 连接器 |
+| `WARPConnector` | Namespaced | 站点间 WARP 连接器 |
 
 ### 访问控制
 
@@ -135,11 +136,39 @@ flowchart TB
 |-----|--------|------|
 | `DNSRecord` | Namespaced | DNS 记录管理 |
 
+### SSL/TLS 与证书
+
+| CRD | 作用域 | 说明 |
+|-----|--------|------|
+| `OriginCACertificate` | Namespaced | Cloudflare Origin CA 证书 (自动创建 K8s Secret) |
+
+### R2 存储
+
+| CRD | 作用域 | 说明 |
+|-----|--------|------|
+| `R2Bucket` | Namespaced | R2 存储桶 (支持生命周期规则) |
+| `R2BucketDomain` | Namespaced | R2 存储桶自定义域名 |
+| `R2BucketNotification` | Namespaced | R2 存储桶事件通知 |
+
+### 规则引擎
+
+| CRD | 作用域 | 说明 |
+|-----|--------|------|
+| `ZoneRuleset` | Namespaced | Zone 规则集 (WAF, 速率限制等) |
+| `TransformRule` | Namespaced | URL 重写与请求头修改 |
+| `RedirectRule` | Namespaced | URL 重定向规则 |
+
+### 域名注册 (企业版)
+
+| CRD | 作用域 | 说明 |
+|-----|--------|------|
+| `DomainRegistration` | Cluster | 域名注册设置 |
+
 ### Kubernetes 集成
 
 | CRD | 作用域 | 说明 |
 |-----|--------|------|
-| `TunnelIngressClassConfig` | Namespaced | Ingress 集成配置 |
+| `TunnelIngressClassConfig` | Cluster | Ingress 集成配置 |
 | `TunnelGatewayClassConfig` | Cluster | Gateway API 集成配置 |
 
 > **说明**：Operator 还支持原生 Kubernetes `Ingress` 和 Gateway API（`Gateway`、`HTTPRoute`、`TCPRoute`、`UDPRoute`）资源，需配置相应的 IngressClass 或 GatewayClass。
@@ -163,7 +192,30 @@ Operator 根据 CRD 作用域使用不同的 Secret 查找规则：
 
 ## 版本信息
 
-- 当前版本：v0.18.x (Alpha)
+- 当前版本：v0.21.x (Alpha)
 - API 版本：`networking.cloudflare-operator.io/v1alpha2`
 - Kubernetes：v1.28+
 - Go：1.24+
+
+## 版本变更 (v0.18.0 → v0.21.0)
+
+### v0.21.0 - 类型安全改进
+- 将所有 `interface{}`/`any` 类型替换为精确类型结构体
+- 30+ 类型化结构体用于 Access 规则、Gateway 设置、DNS 记录数据
+- 新增 200+ 单元测试覆盖类型转换函数
+
+### v0.20.0 - 新增 CRD
+- **R2 存储**：R2Bucket、R2BucketDomain、R2BucketNotification
+- **规则引擎**：ZoneRuleset、TransformRule、RedirectRule
+- **SSL/TLS**：OriginCACertificate (自动创建 K8s Secret)
+- **域名注册**：DomainRegistration (企业版)
+- OpenSSF Scorecard 安全合规改进
+
+### v0.19.0 - 多 Zone 支持
+- **CloudflareDomain** CRD 用于 Zone 设置 (SSL/TLS, 缓存, 安全, WAF)
+- DNSRecord 资源支持多 Zone DNS
+
+### v0.18.0 - Kubernetes 集成
+- 原生 Kubernetes Ingress 控制器支持
+- Gateway API 支持 (Gateway, HTTPRoute, TCPRoute, UDPRoute)
+- TunnelIngressClassConfig 和 TunnelGatewayClassConfig CRD

@@ -79,13 +79,14 @@ flowchart TB
     Edge <-->|tunnel| Deployment
 ```
 
-## CRD Summary
+## CRD Summary (30 Total)
 
-### Core Credentials
+### Credentials & Configuration
 
 | CRD | Scope | Description |
 |-----|-------|-------------|
 | `CloudflareCredentials` | Cluster | Shared API credential configuration |
+| `CloudflareDomain` | Cluster | Zone settings (SSL/TLS, Cache, Security, WAF) |
 
 ### Tunnel Management
 
@@ -102,7 +103,7 @@ flowchart TB
 | `VirtualNetwork` | Cluster | Traffic isolation network |
 | `NetworkRoute` | Cluster | Route CIDR through tunnel |
 | `PrivateService` | Namespaced | Expose Service via private IP |
-| `WARPConnector` | Cluster | WARP connector for site-to-site |
+| `WARPConnector` | Namespaced | WARP connector for site-to-site |
 
 ### Access Control
 
@@ -135,11 +136,39 @@ flowchart TB
 |-----|-------|-------------|
 | `DNSRecord` | Namespaced | DNS record management |
 
+### SSL/TLS & Certificates
+
+| CRD | Scope | Description |
+|-----|-------|-------------|
+| `OriginCACertificate` | Namespaced | Cloudflare Origin CA certificate with auto K8s Secret |
+
+### R2 Storage
+
+| CRD | Scope | Description |
+|-----|-------|-------------|
+| `R2Bucket` | Namespaced | R2 storage bucket with lifecycle rules |
+| `R2BucketDomain` | Namespaced | Custom domain for R2 bucket |
+| `R2BucketNotification` | Namespaced | Event notifications for R2 bucket |
+
+### Rules Engine
+
+| CRD | Scope | Description |
+|-----|-------|-------------|
+| `ZoneRuleset` | Namespaced | Zone ruleset (WAF, rate limiting, etc.) |
+| `TransformRule` | Namespaced | URL rewrite & header modification |
+| `RedirectRule` | Namespaced | URL redirect rules |
+
+### Registrar (Enterprise)
+
+| CRD | Scope | Description |
+|-----|-------|-------------|
+| `DomainRegistration` | Cluster | Domain registration settings |
+
 ### Kubernetes Integration
 
 | CRD | Scope | Description |
 |-----|-------|-------------|
-| `TunnelIngressClassConfig` | Namespaced | Configuration for Ingress integration |
+| `TunnelIngressClassConfig` | Cluster | Configuration for Ingress integration |
 | `TunnelGatewayClassConfig` | Cluster | Configuration for Gateway API integration |
 
 > **Note**: The operator also supports native Kubernetes `Ingress` and Gateway API (`Gateway`, `HTTPRoute`, `TCPRoute`, `UDPRoute`) resources when configured with the appropriate IngressClass or GatewayClass.
@@ -163,7 +192,30 @@ See [Namespace Restrictions](namespace-restrictions.md) for detailed information
 
 ## Version Information
 
-- Current Version: v0.18.x (Alpha)
+- Current Version: v0.21.x (Alpha)
 - API Version: `networking.cloudflare-operator.io/v1alpha2`
 - Kubernetes: v1.28+
 - Go: 1.24+
+
+## Recent Changes (v0.18.0 → v0.21.0)
+
+### v0.21.0 - Type Safety Improvements
+- Replaced all `interface{}`/`any` types with precise typed structs
+- 30+ typed structs for Access rules, Gateway settings, DNS record data
+- 200+ new unit tests for type conversion functions
+
+### v0.20.0 - New CRDs
+- **R2 Storage**: R2Bucket, R2BucketDomain, R2BucketNotification
+- **Rules Engine**: ZoneRuleset, TransformRule, RedirectRule
+- **SSL/TLS**: OriginCACertificate (with auto K8s Secret)
+- **Registrar**: DomainRegistration (Enterprise)
+- OpenSSF Scorecard security compliance improvements
+
+### v0.19.0 - Multi-Zone Support
+- **CloudflareDomain** CRD for zone settings (SSL/TLS, Cache, Security, WAF)
+- Multi-zone DNS support for DNSRecord resources
+
+### v0.18.0 - Kubernetes Integration
+- Native Kubernetes Ingress controller support
+- Gateway API support (Gateway, HTTPRoute, TCPRoute, UDPRoute)
+- TunnelIngressClassConfig and TunnelGatewayClassConfig CRDs
