@@ -36,6 +36,7 @@ Cloudflare Operator 常见任务的操作指南。
 
 - [使用 Ingress 与 Cloudflare Tunnel](ingress-integration.md)
 - [Gateway API 集成](gateway-api-integration.md)
+- [Istio 服务网格集成](istio-integration.md)
 
 ## 高级主题
 

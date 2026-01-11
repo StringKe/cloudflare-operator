@@ -36,6 +36,7 @@ How-to guides for common tasks with the Cloudflare Operator.
 
 - [Using Ingress with Cloudflare Tunnels](ingress-integration.md)
 - [Gateway API Integration](gateway-api-integration.md)
+- [Istio Service Mesh Integration](istio-integration.md)
 
 ## Advanced Topics
 
