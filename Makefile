@@ -137,6 +137,10 @@ lint-fix: golangci-lint
 build: manifests generate fmt vet ## Build manager binary.
 	go build -o bin/manager cmd/main.go
 
+.PHONY: release-snapshot
+release-snapshot: ## Build release binaries locally (no publish)
+	goreleaser release --snapshot --clean
+
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./cmd/main.go

@@ -4,15 +4,15 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.18.x  | :white_check_mark: |
-| 0.17.x  | :white_check_mark: |
-| < 0.17  | :x:                |
+| 0.21.x  | :white_check_mark: |
+| 0.20.x  | :white_check_mark: |
+| < 0.20  | :x:                |
 
 ## Reporting a Vulnerability / 报告漏洞
 
-If you discover a security vulnerability in this project, please report it responsibly.
+If you discover a security vulnerability in this project, please report it responsibly following our coordinated vulnerability disclosure process.
 
-如果你在此项目中发现安全漏洞，请负责任地报告。
+如果你在此项目中发现安全漏洞，请遵循我们的协调漏洞披露流程进行负责任的报告。
 
 ### How to Report / 如何报告
 
@@ -20,27 +20,56 @@ If you discover a security vulnerability in this project, please report it respo
 
 **不要**为安全漏洞开公开的 GitHub issue。
 
-Instead, please:
-请采用以下方式：
+Instead, please use one of the following methods:
+请采用以下方式之一：
 
-1. **Email**: Send details to the maintainers (check repository for contact info)
-   **邮件**：将详情发送给维护者（查看仓库获取联系信息）
+1. **GitHub Private Vulnerability Reporting (Recommended)**
+   Report directly via: <https://github.com/StringKe/cloudflare-operator/security/advisories/new>
 
-2. **GitHub Security Advisory**: Use GitHub's private vulnerability reporting feature
-   **GitHub 安全公告**：使用 GitHub 的私密漏洞报告功能
+   **GitHub 私密漏洞报告（推荐）**
+   直接通过以下链接报告：<https://github.com/StringKe/cloudflare-operator/security/advisories/new>
+
+2. **Email**
+   Send vulnerability details to: **stringke.me@gmail.com**
+
+   **邮件**
+   将漏洞详情发送至：**stringke.me@gmail.com**
 
 ### What to Include / 需包含的信息
 
 - Description of the vulnerability / 漏洞描述
 - Steps to reproduce / 复现步骤
 - Potential impact / 潜在影响
+- Affected versions / 受影响的版本
 - Suggested fix (if any) / 建议的修复方案（如有）
+
+### Coordinated Vulnerability Disclosure / 协调漏洞披露
+
+We follow the principle of Coordinated Vulnerability Disclosure (CVD):
+
+我们遵循协调漏洞披露 (CVD) 原则：
+
+1. **Private Reporting**: Vulnerabilities are reported privately to maintainers
+   **私密报告**：漏洞私密报告给维护者
+
+2. **Assessment**: We assess the vulnerability severity and impact
+   **评估**：我们评估漏洞的严重性和影响
+
+3. **Fix Development**: We develop and test a fix
+   **修复开发**：我们开发并测试修复方案
+
+4. **Public Disclosure**: After the fix is released, we publicly disclose the vulnerability
+   **公开披露**：修复发布后，我们公开披露漏洞信息
 
 ### Response Timeline / 响应时间
 
 - **Initial response**: Within 48 hours / 初始响应：48 小时内
 - **Status update**: Within 7 days / 状态更新：7 天内
-- **Fix timeline**: Depends on severity / 修复时间：取决于严重程度
+- **Vulnerability assessment**: Within 14 days / 漏洞评估：14 天内
+- **Fix for critical vulnerabilities**: Within 30 days / 关键漏洞修复：30 天内
+- **Fix for high/medium vulnerabilities**: Within 90 days / 高/中危漏洞修复：90 天内
+- **Public disclosure**: After fix is released or 90 days, whichever comes first
+  **公开披露**：修复发布后或 90 天后（以先到者为准）
 
 ## Security Best Practices / 安全最佳实践
 
