@@ -449,6 +449,7 @@ func (c *API) UpdateAccessApplication(applicationID string, params AccessApplica
 }
 
 // DeleteAccessApplication deletes an Access Application.
+// This method is idempotent - returns nil if the application is already deleted.
 func (c *API) DeleteAccessApplication(applicationID string) error {
 	if _, err := c.GetAccountId(); err != nil {
 		c.Log.Error(err, "error getting account ID")
@@ -460,6 +461,10 @@ func (c *API) DeleteAccessApplication(applicationID string) error {
 
 	err := c.CloudflareClient.DeleteAccessApplication(ctx, rc, applicationID)
 	if err != nil {
+		if IsNotFoundError(err) {
+			c.Log.Info("Access Application already deleted (not found)", "id", applicationID)
+			return nil
+		}
 		c.Log.Error(err, "error deleting access application", "id", applicationID)
 		return err
 	}
@@ -602,6 +607,7 @@ func (c *API) UpdateAccessPolicy(policyID string, params AccessPolicyParams) (*A
 }
 
 // DeleteAccessPolicy deletes an Access Policy.
+// This method is idempotent - returns nil if the policy is already deleted.
 func (c *API) DeleteAccessPolicy(applicationID, policyID string) error {
 	if _, err := c.GetAccountId(); err != nil {
 		c.Log.Error(err, "error getting account ID")
@@ -616,6 +622,11 @@ func (c *API) DeleteAccessPolicy(applicationID, policyID string) error {
 		PolicyID:      policyID,
 	})
 	if err != nil {
+		if IsNotFoundError(err) {
+			c.Log.Info("Access Policy already deleted (not found)",
+				"applicationId", applicationID, "policyId", policyID)
+			return nil
+		}
 		c.Log.Error(err, "error deleting access policy",
 			"applicationId", applicationID, "policyId", policyID)
 		return err
@@ -969,6 +980,7 @@ func (c *API) UpdateAccessGroup(groupID string, params AccessGroupParams) (*Acce
 }
 
 // DeleteAccessGroup deletes an Access Group.
+// This method is idempotent - returns nil if the group is already deleted.
 func (c *API) DeleteAccessGroup(groupID string) error {
 	if _, err := c.GetAccountId(); err != nil {
 		c.Log.Error(err, "error getting account ID")
@@ -980,6 +992,10 @@ func (c *API) DeleteAccessGroup(groupID string) error {
 
 	err := c.CloudflareClient.DeleteAccessGroup(ctx, rc, groupID)
 	if err != nil {
+		if IsNotFoundError(err) {
+			c.Log.Info("Access Group already deleted (not found)", "id", groupID)
+			return nil
+		}
 		c.Log.Error(err, "error deleting access group", "id", groupID)
 		return err
 	}
@@ -1092,6 +1108,7 @@ func (c *API) UpdateAccessIdentityProvider(idpID string, params AccessIdentityPr
 }
 
 // DeleteAccessIdentityProvider deletes an Access Identity Provider.
+// This method is idempotent - returns nil if the identity provider is already deleted.
 func (c *API) DeleteAccessIdentityProvider(idpID string) error {
 	if _, err := c.GetAccountId(); err != nil {
 		c.Log.Error(err, "error getting account ID")
@@ -1103,6 +1120,10 @@ func (c *API) DeleteAccessIdentityProvider(idpID string) error {
 
 	_, err := c.CloudflareClient.DeleteAccessIdentityProvider(ctx, rc, idpID)
 	if err != nil {
+		if IsNotFoundError(err) {
+			c.Log.Info("Access Identity Provider already deleted (not found)", "id", idpID)
+			return nil
+		}
 		c.Log.Error(err, "error deleting access identity provider", "id", idpID)
 		return err
 	}
@@ -1299,6 +1320,7 @@ func (c *API) RefreshAccessServiceToken(tokenID string) (*AccessServiceTokenResu
 }
 
 // DeleteAccessServiceToken deletes an Access Service Token.
+// This method is idempotent - returns nil if the service token is already deleted.
 func (c *API) DeleteAccessServiceToken(tokenID string) error {
 	if _, err := c.GetAccountId(); err != nil {
 		c.Log.Error(err, "error getting account ID")
@@ -1310,6 +1332,10 @@ func (c *API) DeleteAccessServiceToken(tokenID string) error {
 
 	_, err := c.CloudflareClient.DeleteAccessServiceToken(ctx, rc, tokenID)
 	if err != nil {
+		if IsNotFoundError(err) {
+			c.Log.Info("Access Service Token already deleted (not found)", "id", tokenID)
+			return nil
+		}
 		c.Log.Error(err, "error deleting access service token", "id", tokenID)
 		return err
 	}
@@ -1578,6 +1604,7 @@ func (c *API) UpdateDevicePostureRule(ruleID string, params DevicePostureRulePar
 }
 
 // DeleteDevicePostureRule deletes a Device Posture Rule.
+// This method is idempotent - returns nil if the rule is already deleted.
 func (c *API) DeleteDevicePostureRule(ruleID string) error {
 	if _, err := c.GetAccountId(); err != nil {
 		c.Log.Error(err, "error getting account ID")
@@ -1588,6 +1615,10 @@ func (c *API) DeleteDevicePostureRule(ruleID string) error {
 
 	err := c.CloudflareClient.DeleteDevicePostureRule(ctx, c.ValidAccountId, ruleID)
 	if err != nil {
+		if IsNotFoundError(err) {
+			c.Log.Info("Device Posture Rule already deleted (not found)", "id", ruleID)
+			return nil
+		}
 		c.Log.Error(err, "error deleting device posture rule", "id", ruleID)
 		return err
 	}

@@ -165,7 +165,8 @@ func (api *API) UpdateR2CustomDomain(
 	return &result, nil
 }
 
-// DeleteR2CustomDomain removes a custom domain from an R2 bucket
+// DeleteR2CustomDomain removes a custom domain from an R2 bucket.
+// This method is idempotent - returns nil if the custom domain is already deleted.
 func (api *API) DeleteR2CustomDomain(ctx context.Context, bucketName, domain string) error {
 	if api.CloudflareClient == nil {
 		return errClientNotInitialized
@@ -182,9 +183,14 @@ func (api *API) DeleteR2CustomDomain(ctx context.Context, bucketName, domain str
 	)
 
 	if _, err := api.CloudflareClient.Raw(ctx, http.MethodDelete, endpoint, nil, nil); err != nil {
+		if IsNotFoundError(err) {
+			api.Log.Info("R2 Custom domain already deleted (not found)", "bucket", bucketName, "domain", domain)
+			return nil
+		}
 		return fmt.Errorf("failed to delete custom domain: %w", err)
 	}
 
+	api.Log.Info("R2 Custom domain deleted", "bucket", bucketName, "domain", domain)
 	return nil
 }
 

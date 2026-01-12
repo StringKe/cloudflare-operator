@@ -116,7 +116,8 @@ func (api *API) ListR2Buckets(ctx context.Context) ([]R2BucketResult, error) {
 	return results, nil
 }
 
-// DeleteR2Bucket deletes an R2 bucket
+// DeleteR2Bucket deletes an R2 bucket.
+// This method is idempotent - returns nil if the bucket is already deleted.
 func (api *API) DeleteR2Bucket(ctx context.Context, bucketName string) error {
 	if api.CloudflareClient == nil {
 		return errClientNotInitialized
@@ -129,9 +130,14 @@ func (api *API) DeleteR2Bucket(ctx context.Context, bucketName string) error {
 
 	rc := cloudflare.AccountIdentifier(accountID)
 	if err := api.CloudflareClient.DeleteR2Bucket(ctx, rc, bucketName); err != nil {
+		if IsNotFoundError(err) {
+			api.Log.Info("R2 Bucket already deleted (not found)", "bucket", bucketName)
+			return nil
+		}
 		return fmt.Errorf("failed to delete R2 bucket: %w", err)
 	}
 
+	api.Log.Info("R2 Bucket deleted", "bucket", bucketName)
 	return nil
 }
 
@@ -226,7 +232,8 @@ func (api *API) SetR2CORS(ctx context.Context, bucketName string, rules []R2CORS
 	return nil
 }
 
-// DeleteR2CORS deletes the CORS configuration for an R2 bucket
+// DeleteR2CORS deletes the CORS configuration for an R2 bucket.
+// This method is idempotent - returns nil if the CORS config is already deleted.
 func (api *API) DeleteR2CORS(ctx context.Context, bucketName string) error {
 	if api.CloudflareClient == nil {
 		return errClientNotInitialized
@@ -239,9 +246,14 @@ func (api *API) DeleteR2CORS(ctx context.Context, bucketName string) error {
 
 	endpoint := fmt.Sprintf("/accounts/%s/r2/buckets/%s/cors", accountID, bucketName)
 	if _, err := api.CloudflareClient.Raw(ctx, "DELETE", endpoint, nil, nil); err != nil {
+		if IsNotFoundError(err) {
+			api.Log.Info("R2 CORS config already deleted (not found)", "bucket", bucketName)
+			return nil
+		}
 		return fmt.Errorf("failed to delete CORS: %w", err)
 	}
 
+	api.Log.Info("R2 CORS config deleted", "bucket", bucketName)
 	return nil
 }
 
@@ -292,7 +304,8 @@ func (api *API) SetR2Lifecycle(ctx context.Context, bucketName string, rules []R
 	return nil
 }
 
-// DeleteR2Lifecycle deletes the lifecycle rules for an R2 bucket
+// DeleteR2Lifecycle deletes the lifecycle rules for an R2 bucket.
+// This method is idempotent - returns nil if the lifecycle rules are already deleted.
 func (api *API) DeleteR2Lifecycle(ctx context.Context, bucketName string) error {
 	if api.CloudflareClient == nil {
 		return errClientNotInitialized
@@ -305,9 +318,14 @@ func (api *API) DeleteR2Lifecycle(ctx context.Context, bucketName string) error 
 
 	endpoint := fmt.Sprintf("/accounts/%s/r2/buckets/%s/lifecycle", accountID, bucketName)
 	if _, err := api.CloudflareClient.Raw(ctx, "DELETE", endpoint, nil, nil); err != nil {
+		if IsNotFoundError(err) {
+			api.Log.Info("R2 Lifecycle rules already deleted (not found)", "bucket", bucketName)
+			return nil
+		}
 		return fmt.Errorf("failed to delete lifecycle: %w", err)
 	}
 
+	api.Log.Info("R2 Lifecycle rules deleted", "bucket", bucketName)
 	return nil
 }
 
@@ -371,7 +389,8 @@ func (api *API) SetR2Notification(
 	return nil
 }
 
-// DeleteR2Notification deletes notification rules for an R2 bucket and queue
+// DeleteR2Notification deletes notification rules for an R2 bucket and queue.
+// This method is idempotent - returns nil if the notification rules are already deleted.
 func (api *API) DeleteR2Notification(ctx context.Context, bucketName, queueID string) error {
 	if api.CloudflareClient == nil {
 		return errClientNotInitialized
@@ -387,9 +406,14 @@ func (api *API) DeleteR2Notification(ctx context.Context, bucketName, queueID st
 		accountID, bucketName, queueID,
 	)
 	if _, err := api.CloudflareClient.Raw(ctx, "DELETE", endpoint, nil, nil); err != nil {
+		if IsNotFoundError(err) {
+			api.Log.Info("R2 Notification rules already deleted (not found)", "bucket", bucketName, "queueId", queueID)
+			return nil
+		}
 		return fmt.Errorf("failed to delete notification: %w", err)
 	}
 
+	api.Log.Info("R2 Notification rules deleted", "bucket", bucketName, "queueId", queueID)
 	return nil
 }
 

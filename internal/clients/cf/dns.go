@@ -314,12 +314,17 @@ func (c *API) UpdateDNSRecord(zoneID, recordID string, params DNSRecordParams) (
 }
 
 // DeleteDNSRecord deletes a DNS record.
+// This method is idempotent - returns nil if the record is already deleted.
 func (c *API) DeleteDNSRecord(zoneID, recordID string) error {
 	ctx := context.Background()
 	rc := cloudflare.ZoneIdentifier(zoneID)
 
 	err := c.CloudflareClient.DeleteDNSRecord(ctx, rc, recordID)
 	if err != nil {
+		if IsNotFoundError(err) {
+			c.Log.Info("DNS Record already deleted (not found)", "id", recordID)
+			return nil
+		}
 		c.Log.Error(err, "error deleting DNS record", "id", recordID)
 		return err
 	}
@@ -491,12 +496,17 @@ func (c *API) UpdateDNSRecordInZone(zoneID, recordID string, params DNSRecordPar
 }
 
 // DeleteDNSRecordInZone deletes a DNS record in the specified zone.
+// This method is idempotent - returns nil if the record is already deleted.
 func (c *API) DeleteDNSRecordInZone(zoneID, recordID string) error {
 	ctx := context.Background()
 	rc := cloudflare.ZoneIdentifier(zoneID)
 
 	err := c.CloudflareClient.DeleteDNSRecord(ctx, rc, recordID)
 	if err != nil {
+		if IsNotFoundError(err) {
+			c.Log.Info("DNS Record already deleted (not found)", "zoneId", zoneID, "id", recordID)
+			return nil
+		}
 		c.Log.Error(err, "error deleting DNS record in zone", "zoneId", zoneID, "id", recordID)
 		return err
 	}

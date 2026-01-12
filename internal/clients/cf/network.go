@@ -183,6 +183,7 @@ func (c *API) UpdateVirtualNetwork(virtualNetworkID string, params VirtualNetwor
 }
 
 // DeleteVirtualNetwork deletes a Virtual Network.
+// This method is idempotent - returns nil if the virtual network is already deleted.
 func (c *API) DeleteVirtualNetwork(virtualNetworkID string) error {
 	if _, err := c.GetAccountId(); err != nil {
 		c.Log.Error(err, "error getting account ID")
@@ -194,6 +195,10 @@ func (c *API) DeleteVirtualNetwork(virtualNetworkID string) error {
 
 	err := c.CloudflareClient.DeleteTunnelVirtualNetwork(ctx, rc, virtualNetworkID)
 	if err != nil {
+		if IsNotFoundError(err) {
+			c.Log.Info("Virtual Network already deleted (not found)", "id", virtualNetworkID)
+			return nil
+		}
 		c.Log.Error(err, "error deleting virtual network", "id", virtualNetworkID)
 		return err
 	}
@@ -306,6 +311,7 @@ func (c *API) UpdateTunnelRoute(network string, params TunnelRouteParams) (*Tunn
 }
 
 // DeleteTunnelRoute deletes a Tunnel Route.
+// This method is idempotent - returns nil if the route is already deleted.
 func (c *API) DeleteTunnelRoute(network, virtualNetworkID string) error {
 	if _, err := c.GetAccountId(); err != nil {
 		c.Log.Error(err, "error getting account ID")
@@ -322,6 +328,10 @@ func (c *API) DeleteTunnelRoute(network, virtualNetworkID string) error {
 
 	err := c.CloudflareClient.DeleteTunnelRoute(ctx, rc, params)
 	if err != nil {
+		if IsNotFoundError(err) {
+			c.Log.Info("Tunnel Route already deleted (not found)", "network", network, "virtualNetworkId", virtualNetworkID)
+			return nil
+		}
 		c.Log.Error(err, "error deleting tunnel route", "network", network, "virtualNetworkId", virtualNetworkID)
 		return err
 	}

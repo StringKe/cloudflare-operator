@@ -152,7 +152,8 @@ func (api *API) ListRulesets(ctx context.Context, zoneID string) ([]RulesetResul
 	return results, nil
 }
 
-// DeleteRuleset deletes a ruleset
+// DeleteRuleset deletes a ruleset.
+// This method is idempotent - returns nil if the ruleset is already deleted.
 func (api *API) DeleteRuleset(ctx context.Context, zoneID, rulesetID string) error {
 	if api.CloudflareClient == nil {
 		return errClientNotInitialized
@@ -160,8 +161,13 @@ func (api *API) DeleteRuleset(ctx context.Context, zoneID, rulesetID string) err
 
 	rc := cloudflare.ZoneIdentifier(zoneID)
 	if err := api.CloudflareClient.DeleteRuleset(ctx, rc, rulesetID); err != nil {
+		if IsNotFoundError(err) {
+			api.Log.Info("Ruleset already deleted (not found)", "zoneId", zoneID, "rulesetId", rulesetID)
+			return nil
+		}
 		return fmt.Errorf("failed to delete ruleset: %w", err)
 	}
 
+	api.Log.Info("Ruleset deleted", "zoneId", zoneID, "rulesetId", rulesetID)
 	return nil
 }

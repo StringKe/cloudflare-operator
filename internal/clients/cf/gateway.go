@@ -459,6 +459,7 @@ func (c *API) UpdateGatewayRule(ruleID string, params GatewayRuleParams) (*Gatew
 }
 
 // DeleteGatewayRule deletes a Gateway Rule.
+// This method is idempotent - returns nil if the rule is already deleted.
 func (c *API) DeleteGatewayRule(ruleID string) error {
 	if _, err := c.GetAccountId(); err != nil {
 		c.Log.Error(err, "error getting account ID")
@@ -469,6 +470,10 @@ func (c *API) DeleteGatewayRule(ruleID string) error {
 
 	err := c.CloudflareClient.TeamsDeleteRule(ctx, c.ValidAccountId, ruleID)
 	if err != nil {
+		if IsNotFoundError(err) {
+			c.Log.Info("Gateway Rule already deleted (not found)", "id", ruleID)
+			return nil
+		}
 		c.Log.Error(err, "error deleting gateway rule", "id", ruleID)
 		return err
 	}
@@ -600,6 +605,7 @@ func (c *API) UpdateGatewayList(listID string, params GatewayListParams) (*Gatew
 }
 
 // DeleteGatewayList deletes a Gateway List.
+// This method is idempotent - returns nil if the list is already deleted.
 func (c *API) DeleteGatewayList(listID string) error {
 	if _, err := c.GetAccountId(); err != nil {
 		c.Log.Error(err, "error getting account ID")
@@ -610,6 +616,10 @@ func (c *API) DeleteGatewayList(listID string) error {
 
 	err := c.CloudflareClient.DeleteTeamsList(ctx, cloudflare.AccountIdentifier(c.ValidAccountId), listID)
 	if err != nil {
+		if IsNotFoundError(err) {
+			c.Log.Info("Gateway List already deleted (not found)", "id", listID)
+			return nil
+		}
 		c.Log.Error(err, "error deleting gateway list", "id", listID)
 		return err
 	}

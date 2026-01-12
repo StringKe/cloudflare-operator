@@ -92,6 +92,7 @@ func (c *API) GetWARPConnectorToken(connectorID string) (*WARPConnectorTokenResu
 }
 
 // DeleteWARPConnector deletes a WARP Connector.
+// This method is idempotent - returns nil if the connector is already deleted.
 func (c *API) DeleteWARPConnector(connectorID string) error {
 	if _, err := c.GetAccountId(); err != nil {
 		c.Log.Error(err, "error getting account ID")
@@ -103,6 +104,10 @@ func (c *API) DeleteWARPConnector(connectorID string) error {
 
 	err := c.CloudflareClient.DeleteTunnel(ctx, rc, connectorID)
 	if err != nil {
+		if IsNotFoundError(err) {
+			c.Log.Info("WARP Connector already deleted (not found)", "id", connectorID)
+			return nil
+		}
 		c.Log.Error(err, "error deleting WARP connector", "id", connectorID)
 		return err
 	}

@@ -91,7 +91,8 @@ func (c *API) CreateTunnel() (string, string, error) {
 	return tunnel.ID, string(creds), err
 }
 
-// DeleteTunnel deletes a Cloudflare Tunnel
+// DeleteTunnel deletes a Cloudflare Tunnel.
+// This method is idempotent - returns nil if the tunnel is already deleted.
 func (c *API) DeleteTunnel() error {
 	// Only validate Account and Tunnel - Zone/Domain is NOT required for deletion
 	if _, err := c.GetAccountId(); err != nil {
@@ -99,6 +100,11 @@ func (c *API) DeleteTunnel() error {
 		return err
 	}
 	if _, err := c.GetTunnelId(); err != nil {
+		// If tunnel ID cannot be resolved, it might already be deleted
+		if IsNotFoundError(err) {
+			c.Log.Info("Tunnel already deleted (not found during ID resolution)", "tunnelId", c.TunnelId, "tunnelName", c.TunnelName)
+			return nil
+		}
 		c.Log.Error(err, "Error validating tunnel ID for deletion")
 		return err
 	}
@@ -109,17 +115,27 @@ func (c *API) DeleteTunnel() error {
 	// Deletes any inactive connections on a tunnel
 	err := c.CloudflareClient.CleanupTunnelConnections(ctx, rc, c.ValidTunnelId)
 	if err != nil {
-		c.Log.Error(err, "error cleaning tunnel connections", "tunnelId", c.TunnelId)
-		return err
+		// Ignore not found errors - tunnel might already be deleted
+		if !IsNotFoundError(err) {
+			c.Log.Error(err, "error cleaning tunnel connections", "tunnelId", c.TunnelId)
+			return err
+		}
+		c.Log.Info("Tunnel already deleted (not found during connection cleanup)", "tunnelId", c.ValidTunnelId)
+		return nil
 	}
 
 	ctx = context.Background()
 	err = c.CloudflareClient.DeleteTunnel(ctx, rc, c.ValidTunnelId)
 	if err != nil {
+		if IsNotFoundError(err) {
+			c.Log.Info("Tunnel already deleted (not found)", "tunnelId", c.ValidTunnelId)
+			return nil
+		}
 		c.Log.Error(err, "error deleting tunnel", "tunnelId", c.TunnelId)
 		return err
 	}
 
+	c.Log.Info("Tunnel deleted successfully", "tunnelId", c.ValidTunnelId)
 	return nil
 }
 
@@ -400,7 +416,8 @@ func (c *API) InsertOrUpdateCName(fqdn, dnsId string) (string, error) {
 	}
 }
 
-// DeleteDNSId deletes DNS entry for the given dnsId
+// DeleteDNSId deletes DNS entry for the given dnsId.
+// This method is idempotent - returns nil if the record is already deleted.
 func (c *API) DeleteDNSId(fqdn, dnsId string, created bool) error {
 	// Do not delete if we did not create the DNS in this cycle
 	if !created {
@@ -412,10 +429,15 @@ func (c *API) DeleteDNSId(fqdn, dnsId string, created bool) error {
 	err := c.CloudflareClient.DeleteDNSRecord(ctx, rc, dnsId)
 
 	if err != nil {
+		if IsNotFoundError(err) {
+			c.Log.Info("DNS record already deleted (not found)", "dnsId", dnsId, "fqdn", fqdn)
+			return nil
+		}
 		c.Log.Error(err, "error deleting DNS record, check fqdn", "dnsId", dnsId, "fqdn", fqdn)
 		return err
 	}
 
+	c.Log.Info("DNS record deleted successfully", "dnsId", dnsId, "fqdn", fqdn)
 	return nil
 }
 
