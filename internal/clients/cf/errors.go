@@ -83,7 +83,20 @@ func IsNotFoundError(err error) bool {
 	return strings.Contains(errStr, "not found") ||
 		strings.Contains(errStr, "does not exist") ||
 		strings.Contains(errStr, "no such") ||
-		strings.Contains(errStr, "404")
+		strings.Contains(errStr, "404") ||
+		// Cloudflare Access API specific "not found" errors
+		strings.Contains(errStr, "unknown_application") || // 11021
+		strings.Contains(errStr, "unknown_group") || // Access group not found
+		strings.Contains(errStr, "unknown_policy") || // Access policy not found
+		strings.Contains(errStr, "unknown_identity_provider") || // IdP not found
+		strings.Contains(errStr, "unknown_service_token") || // Service token not found
+		// Cloudflare Tunnel API specific errors
+		strings.Contains(errStr, "tunnel not found") ||
+		strings.Contains(errStr, "route not found") ||
+		strings.Contains(errStr, "virtual network not found") ||
+		// General Cloudflare API patterns
+		strings.Contains(errStr, "resource_not_found") ||
+		strings.Contains(errStr, "could not find")
 }
 
 // IsConflictError checks if the error indicates a resource conflict

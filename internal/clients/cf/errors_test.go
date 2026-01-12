@@ -92,6 +92,54 @@ func TestIsNotFoundError(t *testing.T) {
 			err:  errors.New("Resource NOT FOUND"),
 			want: true,
 		},
+		// Cloudflare Access API specific errors
+		{
+			name: "access api unknown_application error (11021)",
+			err:  errors.New("error from makeRequest: access.api.error.unknown_application (11021)"),
+			want: true,
+		},
+		{
+			name: "access api unknown_group error",
+			err:  errors.New("access.api.error.unknown_group"),
+			want: true,
+		},
+		{
+			name: "access api unknown_policy error",
+			err:  errors.New("access.api.error.unknown_policy"),
+			want: true,
+		},
+		{
+			name: "access api unknown_identity_provider error",
+			err:  errors.New("access.api.error.unknown_identity_provider"),
+			want: true,
+		},
+		{
+			name: "access api unknown_service_token error",
+			err:  errors.New("access.api.error.unknown_service_token"),
+			want: true,
+		},
+		// Cloudflare Tunnel API specific errors
+		{
+			name: "tunnel api route not found",
+			err:  errors.New("route not found"),
+			want: true,
+		},
+		{
+			name: "tunnel api virtual network not found",
+			err:  errors.New("virtual network not found"),
+			want: true,
+		},
+		// General Cloudflare API patterns
+		{
+			name: "resource_not_found pattern",
+			err:  errors.New("resource_not_found: the specified resource does not exist"),
+			want: true,
+		},
+		{
+			name: "could not find pattern",
+			err:  errors.New("could not find the requested tunnel"),
+			want: true,
+		},
 		{
 			name: "unrelated error",
 			err:  errors.New("connection timeout"),
