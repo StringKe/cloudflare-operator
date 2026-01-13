@@ -388,6 +388,16 @@ func (r *Reconciler) rebuildTunnelConfig(
 		return fmt.Errorf("failed to update ConfigMap: %w", err)
 	}
 
+	// Sync configuration to Cloudflare API (for Access Application domain validation)
+	// This is critical for AccessApplication to validate that domains are in tunnel destinations
+	if err := r.syncTunnelConfigToAPI(ctx, tunnel, rules, config); err != nil {
+		// Log error but don't fail - local ConfigMap is updated, cloudflared will work
+		// AccessApplication creation may fail until next successful sync
+		logger.Error(err, "Failed to sync tunnel configuration to Cloudflare API",
+			"tunnel", tunnel.GetName(),
+			"note", "AccessApplication domain validation may fail until next successful sync")
+	}
+
 	// Update TunnelIngressClassConfig status
 	if err := r.updateConfigStatus(ctx, config, len(allIngresses)); err != nil {
 		logger.Error(err, "Failed to update TunnelIngressClassConfig status")
@@ -846,4 +856,50 @@ func (r *Reconciler) findIngressesForService(ctx context.Context, obj client.Obj
 	}
 
 	return requests
+}
+
+// syncTunnelConfigToAPI syncs the tunnel configuration to Cloudflare API.
+// This is necessary for AccessApplication domain validation - Cloudflare Access API
+// validates that domains are registered as public hostnames in the tunnel configuration.
+// Without this sync, AccessApplication creation fails with "domain not included in destinations".
+func (r *Reconciler) syncTunnelConfigToAPI(
+	ctx context.Context,
+	tunnel TunnelInterface,
+	rules []cf.UnvalidatedIngressRule,
+	config *networkingv1alpha2.TunnelIngressClassConfig,
+) error {
+	logger := log.FromContext(ctx)
+
+	// Get tunnel ID
+	tunnelID := tunnel.GetStatus().TunnelId
+	if tunnelID == "" {
+		logger.Info("Tunnel ID not available, skipping API sync")
+		return nil
+	}
+
+	// Initialize API client
+	apiClient, err := r.initAPIClient(ctx, tunnel, config)
+	if err != nil {
+		return fmt.Errorf("failed to initialize API client: %w", err)
+	}
+
+	// Get WarpRouting config from tunnel spec
+	var warpRouting *cf.WarpRoutingConfig
+	if tunnel.GetSpec().EnableWarpRouting {
+		warpRouting = &cf.WarpRoutingConfig{
+			Enabled: true,
+		}
+	}
+
+	// Sync to Cloudflare API
+	if err := apiClient.SyncTunnelConfigurationToAPI(tunnelID, rules, warpRouting); err != nil {
+		return fmt.Errorf("failed to sync tunnel configuration: %w", err)
+	}
+
+	logger.Info("Tunnel configuration synced to Cloudflare API",
+		"tunnel", tunnel.GetName(),
+		"tunnelId", tunnelID,
+		"ingressRules", len(rules))
+
+	return nil
 }
