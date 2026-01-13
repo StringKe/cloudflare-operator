@@ -10,6 +10,7 @@ import (
 	"github.com/cloudflare/cloudflare-go"
 )
 
+// nolint:revive // cognitive complexity is acceptable for table-driven tests
 func TestConvertLocalRulesToSDK(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -90,6 +91,7 @@ func TestConvertLocalRulesToSDK(t *testing.T) {
 	}
 }
 
+// nolint:revive // cyclomatic complexity is acceptable for table-driven tests
 func TestConvertOriginRequest(t *testing.T) {
 	timeout := 30 * time.Second
 
