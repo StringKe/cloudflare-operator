@@ -1,8 +1,6 @@
 package controller
 
 import (
-	"crypto/md5"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -21,7 +19,6 @@ import (
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/yaml"
 )
 
 const (
@@ -666,14 +663,24 @@ func createManagedResources(r GenericTunnelReconciler) (ctrl.Result, error) {
 		r.GetLog().Error(errors.New("empty tunnel creds"), "skipping updating the tunnel secret")
 	}
 
-	// Check if ConfigMap already exists, else create it
-	cm := configMapForTunnel(r)
-	if err := k8s.MergeOrApply(r, cm); err != nil {
+	// Get tunnel token for remotely-managed mode
+	// Token is used to start cloudflared with --token flag
+	tunnelID := r.GetTunnel().GetStatus().TunnelId
+	token, err := r.GetCfAPI().GetTunnelToken(tunnelID)
+	if err != nil {
+		r.GetLog().Error(err, "failed to get tunnel token", "tunnelId", tunnelID)
+		r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning, "FailedGetToken", "Failed to get tunnel token from Cloudflare")
+		return ctrl.Result{}, err
+	}
+
+	// Create token Secret for cloudflared to use
+	tokenSecret := tokenSecretForTunnel(r, token)
+	if err := k8s.Apply(r, tokenSecret); err != nil {
 		return ctrl.Result{}, err
 	}
 
 	// Apply patch to deployment
-	dep := deploymentForTunnel(r, cm.Data[configmapKey])
+	dep := deploymentForTunnel(r)
 	if err := k8s.StrategicPatch(dep, r.GetTunnel().GetSpec().DeployPatch, dep); err != nil {
 		r.GetLog().Error(err, "unable to patch deployment, check patch")
 		r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning, "FailedPatch", "Failed to patch deployment, check patch")
@@ -687,46 +694,24 @@ func createManagedResources(r GenericTunnelReconciler) (ctrl.Result, error) {
 	return ctrl.Result{}, nil
 }
 
-// configMapForTunnel returns a tunnel ConfigMap object
-func configMapForTunnel(r GenericTunnelReconciler) *corev1.ConfigMap {
+// tokenSecretForTunnel returns a Secret containing the tunnel token for cloudflared --token mode
+func tokenSecretForTunnel(r GenericTunnelReconciler, token string) *corev1.Secret {
 	ls := labelsForTunnel(r.GetTunnel())
-	noTlsVerify := r.GetTunnel().GetSpec().NoTlsVerify
-	originRequest := cf.OriginRequestConfig{
-		NoTLSVerify: &noTlsVerify,
-	}
-	if r.GetTunnel().GetSpec().OriginCaPool != "" {
-		defaultCaPool := "/etc/cloudflared/certs/tls.crt"
-		originRequest.CAPool = &defaultCaPool
-	}
-	initialConfigBytes, _ := yaml.Marshal(cf.Configuration{
-		TunnelId:      r.GetTunnel().GetStatus().TunnelId,
-		SourceFile:    "/etc/cloudflared/creds/credentials.json",
-		Metrics:       "0.0.0.0:2000",
-		NoAutoUpdate:  true,
-		OriginRequest: originRequest,
-		WarpRouting: cf.WarpRoutingConfig{
-			Enabled: r.GetTunnel().GetSpec().EnableWarpRouting,
-		},
-		Ingress: []cf.UnvalidatedIngressRule{{
-			Service: r.GetTunnel().GetSpec().FallbackTarget,
-		}},
-	})
-
-	cm := &corev1.ConfigMap{
+	sec := &corev1.Secret{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: corev1.SchemeGroupVersion.String(),
-			Kind:       "ConfigMap",
+			Kind:       "Secret",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      r.GetTunnel().GetName(),
+			Name:      r.GetTunnel().GetName() + "-token",
 			Namespace: r.GetTunnel().GetNamespace(),
 			Labels:    ls,
 		},
-		Data: map[string]string{"config.yaml": string(initialConfigBytes)},
+		StringData: map[string]string{"token": token},
 	}
 	// Set Tunnel instance as the owner and controller
-	ctrl.SetControllerReference(r.GetTunnel().GetObject(), cm, r.GetScheme())
-	return cm
+	_ = ctrl.SetControllerReference(r.GetTunnel().GetObject(), sec, r.GetScheme())
+	return sec
 }
 
 // secretForTunnel returns a tunnel Secret object
@@ -749,43 +734,39 @@ func secretForTunnel(r GenericTunnelReconciler) *corev1.Secret {
 	return sec
 }
 
-// deploymentForTunnel returns a tunnel Deployment object
-func deploymentForTunnel(r GenericTunnelReconciler, configStr string) *appsv1.Deployment {
+// deploymentForTunnel returns a tunnel Deployment object using token mode.
+// In token mode, cloudflared uses --token flag and pulls configuration from Cloudflare cloud automatically.
+// This eliminates the need for local ConfigMap and enables real-time configuration updates.
+func deploymentForTunnel(r GenericTunnelReconciler) *appsv1.Deployment {
 	ls := labelsForTunnel(r.GetTunnel())
 	protocol := r.GetTunnel().GetSpec().Protocol
-	hash := md5.Sum([]byte(configStr))
 
-	args := []string{"tunnel", "--protocol", protocol, "--config", "/etc/cloudflared/config/config.yaml", "--metrics", "0.0.0.0:2000", "run"}
-	volumes := []corev1.Volume{{
-		Name: "creds",
-		VolumeSource: corev1.VolumeSource{
-			Secret: &corev1.SecretVolumeSource{
-				SecretName:  r.GetTunnel().GetName(),
-				DefaultMode: ptr.To(int32(420)),
-			},
-		},
-	}, {
-		Name: "config",
-		VolumeSource: corev1.VolumeSource{
-			ConfigMap: &corev1.ConfigMapVolumeSource{
-				LocalObjectReference: corev1.LocalObjectReference{Name: r.GetTunnel().GetName()},
-				Items: []corev1.KeyToPath{{
-					Key:  "config.yaml",
-					Path: "config.yaml",
-				}},
-				DefaultMode: ptr.To(int32(420)),
+	// Token mode: cloudflared uses --token to authenticate and pulls config from cloud
+	args := []string{
+		"tunnel",
+		"--protocol", protocol,
+		"--metrics", "0.0.0.0:2000",
+		"run",
+		"--token", "$(TUNNEL_TOKEN)",
+	}
+
+	// Environment variables - TUNNEL_TOKEN from Secret
+	envVars := []corev1.EnvVar{{
+		Name: "TUNNEL_TOKEN",
+		ValueFrom: &corev1.EnvVarSource{
+			SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{
+					Name: r.GetTunnel().GetName() + "-token",
+				},
+				Key: "token",
 			},
 		},
 	}}
-	volumeMounts := []corev1.VolumeMount{{
-		Name:      "config",
-		MountPath: "/etc/cloudflared/config",
-		ReadOnly:  true,
-	}, {
-		Name:      "creds",
-		MountPath: "/etc/cloudflared/creds",
-		ReadOnly:  true,
-	}}
+
+	// Volumes - only certs if needed (no ConfigMap needed in token mode)
+	var volumes []corev1.Volume
+	var volumeMounts []corev1.VolumeMount
+
 	if r.GetTunnel().GetSpec().OriginCaPool != "" {
 		volumeMounts = append(volumeMounts, corev1.VolumeMount{
 			Name:      "certs",
@@ -820,9 +801,6 @@ func deploymentForTunnel(r GenericTunnelReconciler, configStr string) *appsv1.De
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: ls,
-					Annotations: map[string]string{
-						tunnelConfigChecksum: hex.EncodeToString(hash[:]),
-					},
 				},
 				Spec: corev1.PodSpec{
 					SecurityContext: &corev1.PodSecurityContext{
@@ -835,6 +813,7 @@ func deploymentForTunnel(r GenericTunnelReconciler, configStr string) *appsv1.De
 						Image: CloudflaredLatestImage,
 						Name:  "cloudflared",
 						Args:  args,
+						Env:   envVars,
 						LivenessProbe: &corev1.Probe{
 							ProbeHandler: corev1.ProbeHandler{
 								HTTPGet: &corev1.HTTPGetAction{

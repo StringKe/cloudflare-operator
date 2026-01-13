@@ -64,7 +64,9 @@ func (c *API) CreateTunnel() (string, string, error) {
 		Name:   c.TunnelName,
 		Secret: tunnelSecret,
 		// Indicates if this is a locally or remotely configured tunnel "local" or "cloudflare"
-		ConfigSrc: "local",
+		// Use "cloudflare" for remotely-managed mode where cloudflared uses --token flag
+		// and pulls configuration from Cloudflare cloud automatically
+		ConfigSrc: "cloudflare",
 	}
 
 	ctx := context.Background()
@@ -516,6 +518,28 @@ func (c *API) GetManagedDnsTxt(fqdn string) (string, DnsManagedRecordTxt, bool, 
 		return "", DnsManagedRecordTxt{}, false, err
 	}
 	return "", DnsManagedRecordTxt{}, false, err
+}
+
+// GetTunnelToken retrieves the token for a tunnel from Cloudflare API.
+// The token is used to start cloudflared in remotely-managed mode with --token flag.
+// This allows cloudflared to automatically pull configuration from Cloudflare cloud.
+func (c *API) GetTunnelToken(tunnelID string) (string, error) {
+	if _, err := c.GetAccountId(); err != nil {
+		c.Log.Error(err, "error in getting account ID")
+		return "", err
+	}
+
+	ctx := context.Background()
+	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
+
+	token, err := c.CloudflareClient.GetTunnelToken(ctx, rc, tunnelID)
+	if err != nil {
+		c.Log.Error(err, "error getting tunnel token", "tunnelId", tunnelID)
+		return "", err
+	}
+
+	c.Log.V(1).Info("Got tunnel token", "tunnelId", tunnelID)
+	return token, nil
 }
 
 // InsertOrUpdateTXT upsert DNS TXT record for the given FQDN to point to the tunnel

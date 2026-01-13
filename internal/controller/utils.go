@@ -25,9 +25,6 @@ const (
 	tunnelProtoTCP   = "tcp"
 	tunnelProtoUDP   = "udp"
 
-	// Checksum of the config, used to restart pods in the deployment
-	tunnelConfigChecksum = "cloudflare-operator.io/checksum"
-
 	// Tunnel properties labels
 	tunnelLabel          = "cloudflare-operator.io/tunnel"
 	isClusterTunnelLabel = "cloudflare-operator.io/is-cluster-tunnel"
@@ -37,7 +34,6 @@ const (
 	tunnelAppLabel       = "cloudflare-operator.io/app"
 	tunnelDomainLabel    = "cloudflare-operator.io/domain"
 	tunnelFinalizer      = "cloudflare-operator.io/finalizer"
-	configmapKey         = "config.yaml"
 
 	// Annotation for tracking previous hostnames (PR #166 fix)
 	tunnelPreviousHostnamesAnnotation = "cloudflare-operator.io/previous-hostnames"
@@ -91,7 +87,7 @@ func getAPIDetails(
 	}
 
 	// Create Cloudflare client based on auth type
-	cloudflareClient, err := createCloudflareClientFromCreds(creds)
+	cloudflareClient, err := CreateCloudflareClientFromCreds(creds)
 	if err != nil {
 		log.Error(err, "error initializing cloudflare api client")
 		return nil, nil, err
@@ -148,8 +144,8 @@ func getAPIDetails(
 	return cfAPI, cfSecret, nil
 }
 
-// createCloudflareClientFromCreds creates a Cloudflare API client from loaded credentials.
-func createCloudflareClientFromCreds(creds *credentials.Credentials) (*cloudflare.API, error) {
+// CreateCloudflareClientFromCreds creates a Cloudflare API client from loaded credentials.
+func CreateCloudflareClientFromCreds(creds *credentials.Credentials) (*cloudflare.API, error) {
 	switch creds.AuthType {
 	case networkingv1alpha2.AuthTypeAPIToken:
 		return cloudflare.NewWithAPIToken(creds.APIToken)

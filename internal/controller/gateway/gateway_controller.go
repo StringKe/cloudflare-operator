@@ -28,9 +28,9 @@ import (
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
-	"github.com/StringKe/cloudflare-operator/internal/controller/configmap"
 	"github.com/StringKe/cloudflare-operator/internal/controller/route"
 	tunnelpkg "github.com/StringKe/cloudflare-operator/internal/controller/tunnel"
+	"github.com/StringKe/cloudflare-operator/internal/credentials"
 )
 
 // GatewayReconciler reconciles a Gateway object
@@ -121,12 +121,12 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			"Failed to build ingress rules: "+err.Error())
 	}
 
-	// Update Tunnel ConfigMap
-	cmManager := configmap.NewManager(r.Client)
-	if err := cmManager.UpdateAndRestart(ctx, tunnel, rules); err != nil {
-		r.Recorder.Event(gateway, corev1.EventTypeWarning, "ConfigMapUpdateFailed", err.Error())
-		return r.setCondition(ctx, gateway, gatewayv1.GatewayConditionProgrammed, false, "ConfigMapUpdateFailed",
-			"Failed to update ConfigMap: "+err.Error())
+	// Sync configuration to Cloudflare API
+	// In token mode, cloudflared pulls configuration from cloud automatically
+	if err := r.syncTunnelConfigToAPI(ctx, tunnel, config, rules); err != nil {
+		r.Recorder.Event(gateway, corev1.EventTypeWarning, "APISyncFailed", cf.SanitizeErrorMessage(err))
+		return r.setCondition(ctx, gateway, gatewayv1.GatewayConditionProgrammed, false, "APISyncFailed",
+			"Failed to sync configuration to Cloudflare API: "+cf.SanitizeErrorMessage(err))
 	}
 
 	// Update status
@@ -177,9 +177,9 @@ func (r *GatewayReconciler) handleDeletion(
 		if buildErr != nil {
 			logger.Error(buildErr, "Failed to build ingress rules during deletion")
 		} else {
-			cmManager := configmap.NewManager(r.Client)
-			if updateErr := cmManager.UpdateAndRestart(ctx, tunnel, rules); updateErr != nil {
-				logger.Error(updateErr, "Failed to update ConfigMap during deletion")
+			// Sync to Cloudflare API
+			if syncErr := r.syncTunnelConfigToAPI(ctx, tunnel, config, rules); syncErr != nil {
+				logger.Error(syncErr, "Failed to sync configuration to API during deletion")
 			}
 		}
 	}
@@ -720,4 +720,74 @@ func (r *GatewayReconciler) findGatewaysFromParentRefs(ctx context.Context, refs
 	}
 
 	return requests
+}
+
+// syncTunnelConfigToAPI syncs the tunnel configuration to Cloudflare API.
+// In token mode, cloudflared pulls configuration from cloud automatically.
+func (r *GatewayReconciler) syncTunnelConfigToAPI(
+	ctx context.Context,
+	tunnel tunnelpkg.Interface,
+	_ *networkingv1alpha2.TunnelGatewayClassConfig,
+	rules []cf.UnvalidatedIngressRule,
+) error {
+	logger := log.FromContext(ctx)
+
+	tunnelID := tunnel.GetStatus().TunnelId
+	if tunnelID == "" {
+		logger.Info("Tunnel ID not available, skipping API sync")
+		return nil
+	}
+
+	// Determine namespace for credentials
+	namespace := tunnel.GetNamespace()
+	if namespace == "" {
+		namespace = controller.OperatorNamespace
+	}
+
+	// Create credentials loader and load credentials
+	loader := credentials.NewLoader(r.Client, logger)
+	tunnelSpec := tunnel.GetSpec()
+	creds, err := loader.LoadFromCloudflareDetails(ctx, &tunnelSpec.Cloudflare, namespace)
+	if err != nil {
+		return fmt.Errorf("failed to load credentials: %w", err)
+	}
+
+	// Create Cloudflare client
+	cloudflareClient, err := controller.CreateCloudflareClientFromCreds(creds)
+	if err != nil {
+		return fmt.Errorf("failed to create cloudflare client: %w", err)
+	}
+
+	// Build API client
+	apiClient := &cf.API{
+		Log:              logger,
+		AccountId:        creds.AccountID,
+		AccountName:      tunnelSpec.Cloudflare.AccountName,
+		Domain:           creds.Domain,
+		ValidAccountId:   tunnel.GetStatus().AccountId,
+		ValidTunnelId:    tunnelID,
+		ValidTunnelName:  tunnel.GetStatus().TunnelName,
+		ValidZoneId:      tunnel.GetStatus().ZoneId,
+		CloudflareClient: cloudflareClient,
+	}
+
+	// Get WarpRouting config from tunnel spec
+	var warpRouting *cf.WarpRoutingConfig
+	if tunnelSpec.EnableWarpRouting {
+		warpRouting = &cf.WarpRoutingConfig{
+			Enabled: true,
+		}
+	}
+
+	// Sync to Cloudflare API
+	if err := apiClient.SyncTunnelConfigurationToAPI(tunnelID, rules, warpRouting); err != nil {
+		return fmt.Errorf("failed to sync tunnel configuration: %w", err)
+	}
+
+	logger.Info("Tunnel configuration synced to Cloudflare API",
+		"tunnel", tunnel.GetName(),
+		"tunnelId", tunnelID,
+		"ingressRules", len(rules))
+
+	return nil
 }

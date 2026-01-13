@@ -377,25 +377,17 @@ func (r *Reconciler) rebuildTunnelConfig(
 	// Build ingress rules
 	rules := r.buildIngressRules(ctx, allIngresses, tunnelBindings, config)
 
-	// Get tunnel and update ConfigMap
+	// Get tunnel
 	tunnel, err := r.getTunnel(ctx, config)
 	if err != nil {
 		return fmt.Errorf("failed to get Tunnel: %w", err)
 	}
 
-	// Update ConfigMap
-	if err := r.updateTunnelConfigMap(ctx, tunnel, rules, config); err != nil {
-		return fmt.Errorf("failed to update ConfigMap: %w", err)
-	}
-
-	// Sync configuration to Cloudflare API (for Access Application domain validation)
-	// This is critical for AccessApplication to validate that domains are in tunnel destinations
+	// Sync configuration to Cloudflare API
+	// In token mode, cloudflared pulls configuration from cloud automatically
+	// This is also required for AccessApplication domain validation
 	if err := r.syncTunnelConfigToAPI(ctx, tunnel, rules, config); err != nil {
-		// Log error but don't fail - local ConfigMap is updated, cloudflared will work
-		// AccessApplication creation may fail until next successful sync
-		logger.Error(err, "Failed to sync tunnel configuration to Cloudflare API",
-			"tunnel", tunnel.GetName(),
-			"note", "AccessApplication domain validation may fail until next successful sync")
+		return fmt.Errorf("failed to sync tunnel configuration to API: %w", err)
 	}
 
 	// Update TunnelIngressClassConfig status

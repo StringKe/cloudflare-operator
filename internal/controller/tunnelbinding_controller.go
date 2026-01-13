@@ -5,8 +5,6 @@ package controller
 
 import (
 	"context"
-	"crypto/md5"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
@@ -26,12 +24,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"sigs.k8s.io/yaml"
 
 	networkingv1alpha1 "github.com/StringKe/cloudflare-operator/api/v1alpha1"
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 
-	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/client-go/tools/record"
 )
 
@@ -48,8 +44,9 @@ type TunnelBindingReconciler struct {
 	ctx            context.Context
 	log            logr.Logger
 	binding        *networkingv1alpha1.TunnelBinding
-	configmap      *corev1.ConfigMap
+	tunnelID       string
 	fallbackTarget string
+	warpRouting    bool
 	cfAPI          *cf.API
 }
 
@@ -68,12 +65,11 @@ func (r *TunnelBindingReconciler) initStruct(ctx context.Context, tunnelBinding 
 	r.binding = tunnelBinding
 
 	var err error
-	var namespacedName apitypes.NamespacedName
 
 	// Process based on Tunnel Kind
 	switch strings.ToLower(r.binding.TunnelRef.Kind) {
 	case "clustertunnel":
-		namespacedName = apitypes.NamespacedName{Name: r.binding.TunnelRef.Name, Namespace: r.Namespace}
+		namespacedName := apitypes.NamespacedName{Name: r.binding.TunnelRef.Name, Namespace: r.Namespace}
 		clusterTunnel := &networkingv1alpha2.ClusterTunnel{}
 		if err := r.Get(r.ctx, namespacedName, clusterTunnel); err != nil {
 			r.log.Error(err, "Failed to get ClusterTunnel", "namespacedName", namespacedName)
@@ -82,6 +78,8 @@ func (r *TunnelBindingReconciler) initStruct(ctx context.Context, tunnelBinding 
 		}
 
 		r.fallbackTarget = clusterTunnel.Spec.FallbackTarget
+		r.tunnelID = clusterTunnel.Status.TunnelId
+		r.warpRouting = clusterTunnel.Spec.EnableWarpRouting
 
 		if r.cfAPI, _, err = getAPIDetails(r.ctx, r.Client, r.log, clusterTunnel.Spec, clusterTunnel.Status, r.Namespace); err != nil {
 			r.log.Error(err, "unable to get API details")
@@ -89,7 +87,7 @@ func (r *TunnelBindingReconciler) initStruct(ctx context.Context, tunnelBinding 
 			return err
 		}
 	case "tunnel":
-		namespacedName = apitypes.NamespacedName{Name: r.binding.TunnelRef.Name, Namespace: r.binding.Namespace}
+		namespacedName := apitypes.NamespacedName{Name: r.binding.TunnelRef.Name, Namespace: r.binding.Namespace}
 		tunnel := &networkingv1alpha2.Tunnel{}
 		if err := r.Get(r.ctx, namespacedName, tunnel); err != nil {
 			r.log.Error(err, "Failed to get Tunnel", "namespacedName", namespacedName)
@@ -98,6 +96,8 @@ func (r *TunnelBindingReconciler) initStruct(ctx context.Context, tunnelBinding 
 		}
 
 		r.fallbackTarget = tunnel.Spec.FallbackTarget
+		r.tunnelID = tunnel.Status.TunnelId
+		r.warpRouting = tunnel.Spec.EnableWarpRouting
 
 		if r.cfAPI, _, err = getAPIDetails(r.ctx, r.Client, r.log, tunnel.Spec, tunnel.Status, r.binding.Namespace); err != nil {
 			r.log.Error(err, "unable to get API details")
@@ -111,10 +111,11 @@ func (r *TunnelBindingReconciler) initStruct(ctx context.Context, tunnelBinding 
 		return err
 	}
 
-	r.configmap = &corev1.ConfigMap{}
-	if err := r.Get(r.ctx, namespacedName, r.configmap); err != nil {
-		r.log.Error(err, "unable to get configmap for configuration")
-		r.Recorder.Event(tunnelBinding, corev1.EventTypeWarning, "ErrConfigMap", "Error finding ConfigMap for Tunnel referenced by TunnelBinding")
+	// Check if tunnel ID is available
+	if r.tunnelID == "" {
+		err := errors.New("tunnel ID not available, tunnel may not be ready")
+		r.log.Error(err, "tunnel ID not found in status")
+		r.Recorder.Event(tunnelBinding, corev1.EventTypeWarning, "ErrTunnelNotReady", "Tunnel ID not available")
 		return err
 	}
 
@@ -128,8 +129,6 @@ func (r *TunnelBindingReconciler) initStruct(ctx context.Context, tunnelBinding 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=tunnels/status,verbs=get
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=clustertunnels,verbs=get
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=clustertunnels/status,verbs=get
-// +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;update;patch
-// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;update;patch
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
@@ -190,14 +189,15 @@ func (r *TunnelBindingReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 	}
 
-	// Configure ConfigMap
-	r.Recorder.Event(tunnelBinding, corev1.EventTypeNormal, "Configuring", "Configuring ConfigMap")
+	// Sync configuration to Cloudflare API
+	// In token mode, cloudflared pulls configuration from cloud automatically
+	r.Recorder.Event(tunnelBinding, corev1.EventTypeNormal, "Configuring", "Syncing configuration to Cloudflare API")
 	if err := r.configureCloudflareDaemon(); err != nil {
-		r.log.Error(err, "unable to configure ConfigMap", "key", configmapKey)
-		r.Recorder.Event(tunnelBinding, corev1.EventTypeWarning, "FailedConfigure", "Failed to configure ConfigMap")
+		r.log.Error(err, "unable to sync tunnel configuration to API")
+		r.Recorder.Event(tunnelBinding, corev1.EventTypeWarning, "FailedConfigure", "Failed to sync configuration to Cloudflare API")
 		return ctrl.Result{}, err
 	}
-	r.Recorder.Event(tunnelBinding, corev1.EventTypeNormal, "Configured", "Configured Cloudflare Tunnel")
+	r.Recorder.Event(tunnelBinding, corev1.EventTypeNormal, "Configured", "Synced Cloudflare Tunnel configuration")
 
 	if err := r.creationLogic(); err != nil {
 		return ctrl.Result{}, err
@@ -578,124 +578,9 @@ func (r *TunnelBindingReconciler) getServiceProto(tunnelProto string, validProto
 	return serviceProto
 }
 
-func (r *TunnelBindingReconciler) getConfigMapConfiguration() (*cf.Configuration, error) {
-	// Read ConfigMap YAML
-	configStr, ok := r.configmap.Data[configmapKey]
-	if !ok {
-		err := fmt.Errorf("unable to find key `%s` in ConfigMap", configmapKey)
-		r.log.Error(err, "unable to find key in ConfigMap", "key", configmapKey)
-		return &cf.Configuration{}, err
-	}
-
-	config := &cf.Configuration{}
-	if err := yaml.Unmarshal([]byte(configStr), config); err != nil {
-		r.log.Error(err, "unable to read config as YAML")
-		return &cf.Configuration{}, err
-	}
-	return config, nil
-}
-
-func (r *TunnelBindingReconciler) setConfigMapConfiguration(config *cf.Configuration) error {
-	// Push updated changes
-	var configStr string
-	if configBytes, err := yaml.Marshal(config); err == nil {
-		configStr = string(configBytes)
-	} else {
-		r.log.Error(err, "unable to marshal config to ConfigMap", "key", configmapKey)
-		return err
-	}
-
-	// Update ConfigMap with retry on conflict (optimistic locking)
-	const maxRetries = 5
-	var lastErr error
-	for i := 0; i < maxRetries; i++ {
-		// Re-fetch ConfigMap to get latest ResourceVersion (except on first attempt)
-		if i > 0 {
-			if err := r.Get(r.ctx, apitypes.NamespacedName{Name: r.configmap.Name, Namespace: r.configmap.Namespace}, r.configmap); err != nil {
-				r.log.Error(err, "unable to re-fetch ConfigMap for retry")
-				return err
-			}
-		}
-
-		r.configmap.Data[configmapKey] = configStr
-		if err := r.Update(r.ctx, r.configmap); err != nil {
-			if apierrors.IsConflict(err) {
-				r.log.Info("ConfigMap update conflict, retrying", "attempt", i+1)
-				lastErr = err
-				continue
-			}
-			r.log.Error(err, "unable to update ConfigMap", "key", configmapKey)
-			return err
-		}
-		lastErr = nil
-		break
-	}
-	if lastErr != nil {
-		r.log.Error(lastErr, "unable to update ConfigMap after retries", "maxRetries", maxRetries)
-		return lastErr
-	}
-
-	// Set checksum as annotation on Deployment, causing a restart of the Pods to take config
-	cfDeployment := &appsv1.Deployment{}
-	if err := r.Get(r.ctx, apitypes.NamespacedName{Name: r.configmap.Name, Namespace: r.configmap.Namespace}, cfDeployment); err != nil {
-		r.log.Error(err, "Error in getting deployment, failed to restart")
-		r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedConfigure", "Failed to get Deployment")
-		return err
-	}
-	hash := md5.Sum([]byte(configStr))
-
-	// Update Deployment with retry on conflict
-	for i := 0; i < maxRetries; i++ {
-		// Re-fetch Deployment to get latest ResourceVersion (except on first attempt)
-		if i > 0 {
-			if err := r.Get(r.ctx, apitypes.NamespacedName{Name: r.configmap.Name, Namespace: r.configmap.Namespace}, cfDeployment); err != nil {
-				r.log.Error(err, "unable to re-fetch Deployment for retry")
-				return err
-			}
-		}
-
-		// Restart pods
-		r.Recorder.Event(r.binding, corev1.EventTypeNormal, "ApplyingConfig", "Applying ConfigMap to Deployment")
-		r.Recorder.Event(cfDeployment, corev1.EventTypeNormal, "ApplyingConfig", "Applying ConfigMap to Deployment")
-		if cfDeployment.Spec.Template.Annotations == nil {
-			cfDeployment.Spec.Template.Annotations = map[string]string{}
-		}
-		cfDeployment.Spec.Template.Annotations[tunnelConfigChecksum] = hex.EncodeToString(hash[:])
-		if err := r.Update(r.ctx, cfDeployment); err != nil {
-			if apierrors.IsConflict(err) {
-				r.log.Info("Deployment update conflict, retrying", "attempt", i+1)
-				lastErr = err
-				continue
-			}
-			r.log.Error(err, "Failed to update Deployment for restart")
-			r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedApplyingConfig", "Failed to apply ConfigMap to Deployment")
-			r.Recorder.Event(cfDeployment, corev1.EventTypeWarning, "FailedApplyingConfig", "Failed to apply ConfigMap to Deployment")
-			return err
-		}
-		lastErr = nil
-		break
-	}
-	if lastErr != nil {
-		r.log.Error(lastErr, "unable to update Deployment after retries", "maxRetries", maxRetries)
-		r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedApplyingConfig", "Failed to apply ConfigMap to Deployment after retries")
-		return lastErr
-	}
-
-	r.log.Info("Restarted deployment")
-	r.Recorder.Event(r.binding, corev1.EventTypeNormal, "AppliedConfig", "ConfigMap applied to Deployment")
-	r.Recorder.Event(cfDeployment, corev1.EventTypeNormal, "AppliedConfig", "ConfigMap applied to Deployment")
-	return nil
-}
-
+// configureCloudflareDaemon syncs tunnel configuration to Cloudflare API.
+// In token mode, cloudflared automatically pulls the latest configuration from cloud.
 func (r *TunnelBindingReconciler) configureCloudflareDaemon() error {
-	var config *cf.Configuration
-	var err error
-
-	if config, err = r.getConfigMapConfiguration(); err != nil {
-		r.log.Error(err, "unable to get ConfigMap")
-		return err
-	}
-
 	bindings, err := r.getRelevantTunnelBindings()
 	if err != nil {
 		r.log.Error(err, "unable to get tunnel bindings")
@@ -738,9 +623,21 @@ func (r *TunnelBindingReconciler) configureCloudflareDaemon() error {
 		Service: r.fallbackTarget,
 	})
 
-	config.Ingress = finalIngresses
+	// Convert warpRouting bool to WarpRoutingConfig
+	var warpRoutingConfig *cf.WarpRoutingConfig
+	if r.warpRouting {
+		warpRoutingConfig = &cf.WarpRoutingConfig{Enabled: true}
+	}
 
-	return r.setConfigMapConfiguration(config)
+	// Sync configuration to Cloudflare API
+	// In token mode, cloudflared will automatically pull the updated configuration
+	if err := r.cfAPI.SyncTunnelConfigurationToAPI(r.tunnelID, finalIngresses, warpRoutingConfig); err != nil {
+		r.log.Error(err, "failed to sync tunnel configuration to API", "tunnelID", r.tunnelID)
+		return fmt.Errorf("sync tunnel configuration to API: %w", err)
+	}
+
+	r.log.Info("Synced tunnel configuration to Cloudflare API", "tunnelID", r.tunnelID, "ingressCount", len(finalIngresses))
+	return nil
 }
 
 // findTunnelBindingsForTunnel returns reconcile requests for TunnelBindings that reference the given Tunnel

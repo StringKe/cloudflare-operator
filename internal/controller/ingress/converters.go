@@ -5,24 +5,18 @@ package ingress
 
 import (
 	"context"
-	"crypto/md5"
-	"encoding/hex"
 	"fmt"
 	"sort"
 	"time"
 
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apitypes "k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/yaml"
 
 	networkingv1alpha1 "github.com/StringKe/cloudflare-operator/api/v1alpha1"
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
-	"github.com/StringKe/cloudflare-operator/internal/controller"
 	tunnelpkg "github.com/StringKe/cloudflare-operator/internal/controller/tunnel"
 )
 
@@ -574,114 +568,4 @@ func (*Reconciler) convertTunnelBindingToRules(binding networkingv1alpha1.Tunnel
 	}
 
 	return rules
-}
-
-// updateTunnelConfigMap updates the tunnel's ConfigMap with new ingress rules
-// nolint:revive // Cognitive complexity for ConfigMap update logic
-func (r *Reconciler) updateTunnelConfigMap(
-	ctx context.Context,
-	tunnel TunnelInterface,
-	rules []cf.UnvalidatedIngressRule,
-	_ *networkingv1alpha2.TunnelIngressClassConfig,
-) error {
-	logger := log.FromContext(ctx)
-
-	// Get ConfigMap
-	cm := &corev1.ConfigMap{}
-	if err := r.Get(ctx, apitypes.NamespacedName{
-		Name:      tunnel.GetName(),
-		Namespace: tunnel.GetNamespace(),
-	}, cm); err != nil {
-		if apierrors.IsNotFound(err) {
-			logger.Info("ConfigMap not found, tunnel may not be ready yet", "tunnel", tunnel.GetName())
-			return fmt.Errorf("ConfigMap %s/%s not found, tunnel may not be ready", tunnel.GetNamespace(), tunnel.GetName())
-		}
-		return err
-	}
-
-	// Parse existing config
-	existingConfig := &cf.Configuration{}
-	if configStr, ok := cm.Data["config.yaml"]; ok {
-		if err := yaml.Unmarshal([]byte(configStr), existingConfig); err != nil {
-			return fmt.Errorf("failed to parse existing config: %w", err)
-		}
-	}
-
-	// Update ingress rules
-	existingConfig.Ingress = rules
-
-	// Marshal back to YAML
-	configBytes, err := yaml.Marshal(existingConfig)
-	if err != nil {
-		return fmt.Errorf("failed to marshal config: %w", err)
-	}
-
-	configStr := string(configBytes)
-
-	// Check if config actually changed
-	if cm.Data["config.yaml"] == configStr {
-		logger.Info("ConfigMap unchanged, skipping update")
-		return nil
-	}
-
-	// Update ConfigMap with retry
-	if err := controller.UpdateWithConflictRetry(ctx, r.Client, cm, func() {
-		cm.Data["config.yaml"] = configStr
-	}); err != nil {
-		return fmt.Errorf("failed to update ConfigMap: %w", err)
-	}
-
-	logger.Info("ConfigMap updated", "tunnel", tunnel.GetName())
-
-	// Update Deployment annotation to trigger pod restart
-	if err := r.triggerDeploymentRestart(ctx, tunnel, configStr); err != nil {
-		logger.Error(err, "Failed to trigger deployment restart")
-		// Don't fail - ConfigMap is updated, pod will eventually pick up changes
-	}
-
-	return nil
-}
-
-// triggerDeploymentRestart updates the Deployment annotation to trigger a rolling restart
-func (r *Reconciler) triggerDeploymentRestart(ctx context.Context, tunnel TunnelInterface, configStr string) error {
-	logger := log.FromContext(ctx)
-
-	// Calculate config checksum
-	hash := md5.Sum([]byte(configStr))
-	checksum := hex.EncodeToString(hash[:])
-
-	// Get Deployment
-	deployment := &appsv1.Deployment{}
-	if err := r.Get(ctx, apitypes.NamespacedName{
-		Name:      tunnel.GetName(),
-		Namespace: tunnel.GetNamespace(),
-	}, deployment); err != nil {
-		if apierrors.IsNotFound(err) {
-			logger.Info("Deployment not found, skipping restart trigger")
-			return nil
-		}
-		return err
-	}
-
-	// Check if checksum is already set
-	const checksumAnnotation = "cloudflare-operator.io/checksum"
-	if deployment.Spec.Template.Annotations != nil {
-		if deployment.Spec.Template.Annotations[checksumAnnotation] == checksum {
-			logger.Info("Deployment checksum unchanged, skipping restart")
-			return nil
-		}
-	}
-
-	// Update Deployment annotation
-	if err := controller.UpdateWithConflictRetry(ctx, r.Client, deployment, func() {
-		if deployment.Spec.Template.Annotations == nil {
-			deployment.Spec.Template.Annotations = make(map[string]string)
-		}
-		deployment.Spec.Template.Annotations[checksumAnnotation] = checksum
-	}); err != nil {
-		return err
-	}
-
-	logger.Info("Deployment restart triggered", "tunnel", tunnel.GetName(), "checksum", checksum)
-	return nil
 }
