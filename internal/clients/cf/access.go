@@ -253,8 +253,16 @@ func (c *API) CreateAccessApplication(params AccessApplicationParams) (*AccessAp
 		createParams.DomainType = cloudflare.AccessDestinationType(params.DomainType)
 	}
 
-	// Set destinations (including SelfHostedDomains as public destinations)
+	// Set destinations (including Domain and SelfHostedDomains as public destinations)
+	// Cloudflare API requires all domains to be in destinations for validation
 	destinations := convertDestinationsToCloudflare(params.Destinations)
+	// Add main domain as public destination if not already included
+	if params.Domain != "" {
+		destinations = append(destinations, cloudflare.AccessDestination{
+			Type: cloudflare.AccessDestinationType("public"),
+			URI:  params.Domain,
+		})
+	}
 	// Convert SelfHostedDomains to public destinations
 	for _, domain := range params.SelfHostedDomains {
 		destinations = append(destinations, cloudflare.AccessDestination{
@@ -379,8 +387,16 @@ func (c *API) UpdateAccessApplication(applicationID string, params AccessApplica
 		updateParams.DomainType = cloudflare.AccessDestinationType(params.DomainType)
 	}
 
-	// Set destinations (including SelfHostedDomains as public destinations)
+	// Set destinations (including Domain and SelfHostedDomains as public destinations)
+	// Cloudflare API requires all domains to be in destinations for validation
 	destinations := convertDestinationsToCloudflare(params.Destinations)
+	// Add main domain as public destination if not already included
+	if params.Domain != "" {
+		destinations = append(destinations, cloudflare.AccessDestination{
+			Type: cloudflare.AccessDestinationType("public"),
+			URI:  params.Domain,
+		})
+	}
 	// Convert SelfHostedDomains to public destinations
 	for _, domain := range params.SelfHostedDomains {
 		destinations = append(destinations, cloudflare.AccessDestination{
