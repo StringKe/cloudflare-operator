@@ -803,3 +803,167 @@ func TestErrorVariables(t *testing.T) {
 	assert.NotErrorIs(t, ErrResourceNotFound, ErrResourceConflict)
 	assert.NotErrorIs(t, ErrAuthenticationFailed, ErrPermissionDenied)
 }
+
+// ============================================================================
+// Access Application specific error detection tests
+// ============================================================================
+
+// nolint:dupl // similar test structure is intentional for comprehensive coverage
+func TestIsDomainNotInDestinationsError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil error",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "domain not included in destinations error",
+			err:  errors.New("access.api.error.invalid_request: domain not included in destinations (12130)"),
+			want: true,
+		},
+		{
+			name: "error code 12130 only",
+			err:  errors.New("error code 12130"),
+			want: true,
+		},
+		{
+			name: "not included in destinations",
+			err:  errors.New("the domain is not included in destinations"),
+			want: true,
+		},
+		{
+			name: "case insensitive",
+			err:  errors.New("DOMAIN NOT INCLUDED IN DESTINATIONS"),
+			want: true,
+		},
+		{
+			name: "unrelated error",
+			err:  errors.New("connection timeout"),
+			want: false,
+		},
+		{
+			name: "not found error (different)",
+			err:  errors.New("resource not found"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsDomainNotInDestinationsError(tt.err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// nolint:dupl // similar test structure is intentional for comprehensive coverage
+func TestIsUnknownApplicationError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil error",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "unknown_application error",
+			err:  errors.New("access.api.error.unknown_application (11021)"),
+			want: true,
+		},
+		{
+			name: "error code 11021 only",
+			err:  errors.New("error code 11021"),
+			want: true,
+		},
+		{
+			name: "unknown_application text only",
+			err:  errors.New("unknown_application"),
+			want: true,
+		},
+		{
+			name: "case insensitive",
+			err:  errors.New("UNKNOWN_APPLICATION"),
+			want: true,
+		},
+		{
+			name: "unrelated error",
+			err:  errors.New("connection timeout"),
+			want: false,
+		},
+		{
+			name: "domain not in destinations (different error)",
+			err:  errors.New("domain not included in destinations"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsUnknownApplicationError(tt.err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestIsAccessApplicationRecoverableError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil error",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "domain not in destinations is recoverable",
+			err:  errors.New("domain not included in destinations (12130)"),
+			want: true,
+		},
+		{
+			name: "temporary error is recoverable",
+			err:  ErrTemporaryFailure,
+			want: true,
+		},
+		{
+			name: "rate limit error is recoverable",
+			err:  ErrAPIRateLimited,
+			want: true,
+		},
+		{
+			name: "timeout error is recoverable",
+			err:  errors.New("connection timeout"),
+			want: true,
+		},
+		{
+			name: "unknown_application is not recoverable by this func",
+			err:  errors.New("unknown_application (11021)"),
+			want: false,
+		},
+		{
+			name: "auth error is not recoverable",
+			err:  ErrAuthenticationFailed,
+			want: false,
+		},
+		{
+			name: "generic error is not recoverable",
+			err:  errors.New("invalid configuration"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsAccessApplicationRecoverableError(tt.err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

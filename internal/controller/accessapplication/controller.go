@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -81,10 +83,65 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	if err := r.reconcileApplication(); err != nil {
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+		// Smart retry based on error type
+		return r.handleReconcileError(err)
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// handleReconcileError determines the appropriate retry strategy based on error type.
+func (r *Reconciler) handleReconcileError(err error) (ctrl.Result, error) {
+	switch {
+	case cf.IsDomainNotInDestinationsError(err):
+		// Domain not in tunnel destinations yet - this is likely a timing issue
+		// where the Ingress controller hasn't synced the tunnel config yet.
+		// Use a shorter retry interval since this should resolve quickly.
+		r.log.Info("Domain not in tunnel destinations, waiting for Ingress sync",
+			"domain", r.app.Spec.Domain,
+			"retryAfter", "15s")
+		r.Recorder.Event(r.app, corev1.EventTypeWarning, "WaitingForTunnel",
+			"Domain not yet registered in tunnel, waiting for Ingress controller sync")
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+
+	case cf.IsUnknownApplicationError(err):
+		// Application ID in status doesn't exist in Cloudflare anymore.
+		// Clear the status and retry to recreate.
+		r.log.Info("Application not found in Cloudflare, clearing status to recreate",
+			"applicationId", r.app.Status.ApplicationID)
+		r.Recorder.Event(r.app, corev1.EventTypeWarning, "ApplicationNotFound",
+			"Application was deleted from Cloudflare, will recreate")
+
+		// Clear the ApplicationID to trigger recreation
+		if clearErr := r.clearApplicationStatus(); clearErr != nil {
+			r.log.Error(clearErr, "failed to clear application status")
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, clearErr
+		}
+		return ctrl.Result{Requeue: true}, nil
+
+	case cf.IsRateLimitError(err):
+		// Rate limited - use longer backoff
+		r.log.Info("Rate limited by Cloudflare API", "retryAfter", "60s")
+		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+
+	case cf.IsTemporaryError(err):
+		// Temporary error - use moderate backoff
+		r.log.Info("Temporary error, will retry", "retryAfter", "30s")
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+
+	default:
+		// Other errors - standard retry
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+}
+
+// clearApplicationStatus clears the ApplicationID from status to trigger recreation.
+func (r *Reconciler) clearApplicationStatus() error {
+	return controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.app, func() {
+		r.app.Status.ApplicationID = ""
+		r.app.Status.State = "pending"
+		r.setCondition(metav1.ConditionFalse, "Recreating", "Application will be recreated")
+	})
 }
 
 func (r *Reconciler) initAPIClient() error {
@@ -669,7 +726,209 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&networkingv1alpha2.AccessGroup{},
 			handler.EnqueueRequestsFromMapFunc(r.findAccessApplicationsForAccessGroup),
 		).
+		// Watch Ingress changes - when an Ingress is created/updated, its domains
+		// become available in the tunnel, allowing AccessApplications to be created
+		Watches(
+			&networkingv1.Ingress{},
+			handler.EnqueueRequestsFromMapFunc(r.findAccessApplicationsForIngress),
+		).
+		// Watch ClusterTunnel changes - tunnel config changes affect domain availability
+		Watches(
+			&networkingv1alpha2.ClusterTunnel{},
+			handler.EnqueueRequestsFromMapFunc(r.findAccessApplicationsForClusterTunnel),
+		).
+		// Watch Tunnel changes - tunnel config changes affect domain availability
+		Watches(
+			&networkingv1alpha2.Tunnel{},
+			handler.EnqueueRequestsFromMapFunc(r.findAccessApplicationsForTunnel),
+		).
 		Complete(r)
+}
+
+// ============================================================================
+// Ingress and Tunnel Watch handlers
+// ============================================================================
+
+// findAccessApplicationsForIngress returns reconcile requests for AccessApplications
+// whose domains match the Ingress hosts. This allows AccessApplications to be
+// reconciled when their target Ingress is created/updated.
+func (r *Reconciler) findAccessApplicationsForIngress(ctx context.Context, obj client.Object) []reconcile.Request {
+	ing, ok := obj.(*networkingv1.Ingress)
+	if !ok {
+		return nil
+	}
+	logger := ctrllog.FromContext(ctx)
+
+	// Extract all hosts from the Ingress
+	hosts := make([]string, 0)
+	for _, rule := range ing.Spec.Rules {
+		if rule.Host != "" {
+			hosts = append(hosts, rule.Host)
+		}
+	}
+	if len(hosts) == 0 {
+		return nil
+	}
+
+	// Find AccessApplications that match these hosts
+	return r.findAccessApplicationsMatchingDomains(ctx, logger, hosts, "Ingress", ing.Name)
+}
+
+// findAccessApplicationsForClusterTunnel returns reconcile requests for AccessApplications
+// when a ClusterTunnel changes. This triggers reconciliation for applications that might
+// be waiting for tunnel sync.
+func (r *Reconciler) findAccessApplicationsForClusterTunnel(ctx context.Context, obj client.Object) []reconcile.Request {
+	tunnel, ok := obj.(*networkingv1alpha2.ClusterTunnel)
+	if !ok {
+		return nil
+	}
+	logger := ctrllog.FromContext(ctx)
+
+	// When a tunnel changes, reconcile all AccessApplications in pending/error state
+	return r.findPendingAccessApplications(ctx, logger, "ClusterTunnel", tunnel.Name)
+}
+
+// findAccessApplicationsForTunnel returns reconcile requests for AccessApplications
+// when a Tunnel changes.
+func (r *Reconciler) findAccessApplicationsForTunnel(ctx context.Context, obj client.Object) []reconcile.Request {
+	tunnel, ok := obj.(*networkingv1alpha2.Tunnel)
+	if !ok {
+		return nil
+	}
+	logger := ctrllog.FromContext(ctx)
+
+	// When a tunnel changes, reconcile all AccessApplications in pending/error state
+	return r.findPendingAccessApplications(ctx, logger, "Tunnel", tunnel.Name)
+}
+
+// findAccessApplicationsMatchingDomains finds AccessApplications whose domain
+// matches any of the given hosts.
+func (r *Reconciler) findAccessApplicationsMatchingDomains(
+	ctx context.Context,
+	logger logr.Logger,
+	hosts []string,
+	sourceType, sourceName string,
+) []reconcile.Request {
+	appList := &networkingv1alpha2.AccessApplicationList{}
+	if err := r.List(ctx, appList); err != nil {
+		logger.Error(err, "Failed to list AccessApplications for domain matching")
+		return nil
+	}
+
+	requests := make([]reconcile.Request, 0)
+	for i := range appList.Items {
+		app := &appList.Items[i]
+
+		// Only trigger if the app is in a non-ready state
+		if app.Status.State == "active" {
+			continue
+		}
+
+		// Check if app's domain matches any of the hosts
+		if domainMatchesHosts(app.Spec.Domain, hosts) ||
+			anyDomainMatchesHosts(app.Spec.SelfHostedDomains, hosts) {
+			logger.Info("Domain match found, triggering AccessApplication reconcile",
+				"sourceType", sourceType,
+				"sourceName", sourceName,
+				"accessapplication", app.Name,
+				"domain", app.Spec.Domain)
+			requests = append(requests, reconcile.Request{
+				NamespacedName: apitypes.NamespacedName{
+					Name:      app.Name,
+					Namespace: app.Namespace,
+				},
+			})
+		}
+	}
+
+	return requests
+}
+
+// findPendingAccessApplications finds AccessApplications that are not in ready state.
+// This is used when a Tunnel changes to retry applications that might be waiting.
+func (r *Reconciler) findPendingAccessApplications(
+	ctx context.Context,
+	logger logr.Logger,
+	sourceType, sourceName string,
+) []reconcile.Request {
+	appList := &networkingv1alpha2.AccessApplicationList{}
+	if err := r.List(ctx, appList); err != nil {
+		logger.Error(err, "Failed to list AccessApplications for tunnel watch")
+		return nil
+	}
+
+	requests := make([]reconcile.Request, 0)
+	for i := range appList.Items {
+		app := &appList.Items[i]
+
+		// Only trigger if the app is in a non-ready state
+		if app.Status.State == "active" {
+			continue
+		}
+
+		// Check if there's a "WaitingForTunnel" or error condition
+		readyCondition := meta.FindStatusCondition(app.Status.Conditions, "Ready")
+		if readyCondition != nil && readyCondition.Status == metav1.ConditionFalse {
+			logger.Info("Tunnel changed, triggering pending AccessApplication reconcile",
+				"sourceType", sourceType,
+				"sourceName", sourceName,
+				"accessapplication", app.Name,
+				"currentState", app.Status.State,
+				"reason", readyCondition.Reason)
+			requests = append(requests, reconcile.Request{
+				NamespacedName: apitypes.NamespacedName{
+					Name:      app.Name,
+					Namespace: app.Namespace,
+				},
+			})
+		}
+	}
+
+	return requests
+}
+
+// domainMatchesHosts checks if a domain matches any of the given hosts.
+// Supports exact match and wildcard subdomain matching.
+//
+//nolint:revive // cognitive complexity is acceptable for this domain matching logic
+func domainMatchesHosts(domain string, hosts []string) bool {
+	if domain == "" {
+		return false
+	}
+	domain = strings.ToLower(domain)
+
+	for _, host := range hosts {
+		host = strings.ToLower(host)
+		if domain == host {
+			return true
+		}
+		// Check if domain is a subdomain of host
+		// e.g., domain="app.example.com" matches host="*.example.com"
+		if strings.HasPrefix(host, "*.") {
+			baseDomain := host[2:] // Remove "*."
+			if strings.HasSuffix(domain, "."+baseDomain) || domain == baseDomain {
+				return true
+			}
+		}
+		// Check reverse: host is subdomain of domain pattern
+		if strings.HasPrefix(domain, "*.") {
+			baseDomain := domain[2:]
+			if strings.HasSuffix(host, "."+baseDomain) || host == baseDomain {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// anyDomainMatchesHosts checks if any domain in the list matches any host.
+func anyDomainMatchesHosts(domains []string, hosts []string) bool {
+	for _, domain := range domains {
+		if domainMatchesHosts(domain, hosts) {
+			return true
+		}
+	}
+	return false
 }
 
 // ============================================================================

@@ -275,6 +275,40 @@ func getGenericErrorMessage(err error) string {
 	}
 }
 
+// IsDomainNotInDestinationsError checks if the error indicates the domain is not
+// included in tunnel destinations. This error (code 12130) occurs when trying to
+// create an AccessApplication for a domain that hasn't been synced to the tunnel yet.
+// This is typically a temporary condition that resolves when the Ingress controller
+// syncs the tunnel configuration.
+func IsDomainNotInDestinationsError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "domain not included in destinations") ||
+		strings.Contains(errStr, "12130") ||
+		strings.Contains(errStr, "not included in destinations")
+}
+
+// IsUnknownApplicationError checks if the error indicates the application ID
+// stored in status no longer exists in Cloudflare. This can happen if the
+// application was deleted manually from Cloudflare dashboard.
+func IsUnknownApplicationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "unknown_application") ||
+		strings.Contains(errStr, "11021")
+}
+
+// IsAccessApplicationRecoverableError checks if an Access Application error
+// is recoverable through retry. Domain not in destinations errors are recoverable
+// because the Ingress controller may not have synced the tunnel configuration yet.
+func IsAccessApplicationRecoverableError(err error) bool {
+	return IsDomainNotInDestinationsError(err) || IsTemporaryError(err) || IsRateLimitError(err)
+}
+
 // SanitizeErrorMessage removes potentially sensitive information from error messages
 // before storing them in Status conditions
 func SanitizeErrorMessage(err error) string {
