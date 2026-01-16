@@ -52,6 +52,10 @@ spec:
           status:
             description: TunnelBindingStatus defines the observed state of TunnelBinding
             properties:
+              configVersion:
+                description: ConfigVersion is the tunnel configuration version after
+                  last sync
+                type: integer
               hostnames:
                 description: To show on the kubectl cli
                 type: string
@@ -70,6 +74,14 @@ spec:
                   - hostname
                   - target
                   type: object
+                type: array
+              syncedHostnames:
+                description: |-
+                  SyncedHostnames contains the hostnames last synced to Cloudflare Tunnel configuration.
+                  Used for read-merge-write to track owned hostnames and avoid overwriting
+                  rules from other controllers (Tunnel, Ingress, Gateway).
+                items:
+                  type: string
                 type: array
             required:
             - hostnames

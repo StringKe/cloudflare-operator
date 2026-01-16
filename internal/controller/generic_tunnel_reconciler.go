@@ -657,13 +657,18 @@ func updateTunnelStatus(r GenericTunnelReconciler) error {
 }
 
 // syncWarpRoutingConfig syncs the warp-routing configuration from Tunnel/ClusterTunnel spec
-// to Cloudflare's remote configuration. This is critical for --token mode where cloudflared
-// pulls configuration from Cloudflare cloud instead of local ConfigMap.
+// to Cloudflare's remote configuration using read-merge-write pattern.
 //
-// Without this function, setting enableWarpRouting: true in the CRD would have no effect
-// because the configuration would never be propagated to Cloudflare's remote config.
+// This is critical for --token mode where cloudflared pulls configuration from Cloudflare cloud
+// instead of local ConfigMap. Uses MergeAndSync to avoid race conditions with other controllers
+// (Ingress, Gateway, TunnelBinding) that might also be updating the tunnel configuration.
 //
-//nolint:revive // cognitive complexity is acceptable for this reconciliation function
+// The Tunnel/ClusterTunnel controller is the ONLY source of truth for:
+// - warp-routing configuration
+// - fallback target
+//
+// Other controllers (Ingress, Gateway, TunnelBinding) should preserve existing warp-routing
+// by passing WarpRouting: nil to MergeAndSync.
 func syncWarpRoutingConfig(r GenericTunnelReconciler) error {
 	tunnelID := r.GetTunnel().GetStatus().TunnelId
 	if tunnelID == "" {
@@ -671,69 +676,51 @@ func syncWarpRoutingConfig(r GenericTunnelReconciler) error {
 	}
 
 	enableWarpRouting := r.GetTunnel().GetSpec().EnableWarpRouting
-
-	// Get current configuration from Cloudflare
-	currentConfig, err := r.GetCfAPI().GetTunnelConfiguration(tunnelID)
-	if err != nil {
-		return fmt.Errorf("failed to get tunnel configuration: %w", err)
-	}
-
-	// Check if warp-routing is already in sync
-	currentWarpRoutingEnabled := getWarpRoutingEnabled(currentConfig)
-	if currentWarpRoutingEnabled == enableWarpRouting {
-		r.GetLog().V(1).Info("Warp-routing configuration already in sync",
-			"tunnelId", tunnelID, "enabled", enableWarpRouting)
-		return nil
-	}
-
-	r.GetLog().Info("Syncing warp-routing configuration to Cloudflare",
-		"tunnelId", tunnelID, "currentEnabled", currentWarpRoutingEnabled, "desiredEnabled", enableWarpRouting)
-
-	// Preserve existing ingress rules and sync with updated warp-routing
-	existingRules := extractIngressRules(currentConfig, r.GetTunnel().GetSpec().FallbackTarget)
-	// Always explicitly set warp-routing state (true or false) to ensure proper sync
-	warpRoutingConfig := &cf.WarpRoutingConfig{Enabled: enableWarpRouting}
-
-	if err := r.GetCfAPI().SyncTunnelConfigurationToAPI(tunnelID, existingRules, warpRoutingConfig); err != nil {
-		return fmt.Errorf("failed to sync warp-routing configuration: %w", err)
-	}
-
-	r.GetLog().Info("Successfully synced warp-routing configuration",
-		"tunnelId", tunnelID, "enabled", enableWarpRouting)
-	r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal,
-		"WarpRoutingSynced", fmt.Sprintf("Warp-routing configuration synced: enabled=%v", enableWarpRouting))
-
-	return nil
-}
-
-// getWarpRoutingEnabled extracts the warp-routing enabled status from tunnel configuration.
-func getWarpRoutingEnabled(config *cf.TunnelConfigurationResult) bool {
-	if config == nil || config.Config.WarpRouting == nil {
-		return false
-	}
-	return config.Config.WarpRouting.Enabled
-}
-
-// extractIngressRules extracts ingress rules from current config, or creates a default catch-all.
-func extractIngressRules(config *cf.TunnelConfigurationResult, fallbackTarget string) []cf.UnvalidatedIngressRule {
-	var rules []cf.UnvalidatedIngressRule
-	if config != nil {
-		for _, rule := range config.Config.Ingress {
-			rules = append(rules, cf.UnvalidatedIngressRule{
-				Hostname: rule.Hostname,
-				Path:     rule.Path,
-				Service:  rule.Service,
-			})
-		}
-	}
-	if len(rules) > 0 {
-		return rules
-	}
-	// Add default catch-all rule (required by Cloudflare)
+	fallbackTarget := r.GetTunnel().GetSpec().FallbackTarget
 	if fallbackTarget == "" {
 		fallbackTarget = "http_status:404"
 	}
-	return []cf.UnvalidatedIngressRule{{Service: fallbackTarget}}
+
+	// Build source identifier for logging and debugging
+	tunnelKind := "Tunnel"
+	if r.GetTunnel().GetNamespace() == "" {
+		tunnelKind = "ClusterTunnel"
+	}
+	source := fmt.Sprintf("%s/%s", tunnelKind, r.GetTunnel().GetName())
+
+	r.GetLog().Info("Syncing warp-routing and fallback configuration using MergeAndSync",
+		"tunnelId", tunnelID, "source", source, "enableWarpRouting", enableWarpRouting, "fallbackTarget", fallbackTarget)
+
+	// Use MergeAndSync to safely update warp-routing and fallback without overwriting ingress rules
+	// The Tunnel controller doesn't add any ingress rules - it only controls warp-routing and fallback
+	// PreviousHostnames is empty because Tunnel controller doesn't own any hostnames
+	mergeOpts := cf.MergeOptions{
+		Source:            source,
+		PreviousHostnames: r.GetTunnel().GetStatus().SyncedHostnames, // Should be empty for Tunnel controller
+		CurrentRules:      nil,                                       // Tunnel controller doesn't add ingress rules
+		WarpRouting:       &cf.WarpRoutingConfig{Enabled: enableWarpRouting},
+		FallbackTarget:    fallbackTarget,
+	}
+
+	result, err := r.GetCfAPI().MergeAndSync(tunnelID, mergeOpts)
+	if err != nil {
+		return fmt.Errorf("failed to merge and sync tunnel configuration: %w", err)
+	}
+
+	r.GetLog().Info("Successfully synced warp-routing and fallback configuration",
+		"tunnelId", tunnelID, "source", source, "configVersion", result.Version,
+		"enableWarpRouting", enableWarpRouting, "fallbackTarget", fallbackTarget)
+	r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal,
+		"ConfigSynced", fmt.Sprintf("Tunnel configuration synced: warp-routing=%v, fallback=%s", enableWarpRouting, fallbackTarget))
+
+	// Update tunnel status with config version (SyncedHostnames should remain empty for Tunnel controller)
+	status := r.GetTunnel().GetStatus()
+	status.ConfigVersion = result.Version
+	status.SyncedHostnames = result.SyncedHostnames // Should be empty
+	r.GetTunnel().SetStatus(status)
+	// Note: Status will be saved in updateTunnelStatus which calls this function
+
+	return nil
 }
 
 func createManagedResources(r GenericTunnelReconciler) (ctrl.Result, error) {

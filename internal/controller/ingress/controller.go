@@ -850,7 +850,8 @@ func (r *Reconciler) findIngressesForService(ctx context.Context, obj client.Obj
 	return requests
 }
 
-// syncTunnelConfigToAPI syncs the tunnel configuration to Cloudflare API.
+// syncTunnelConfigToAPI syncs the tunnel configuration to Cloudflare API using read-merge-write.
+// This uses MergeAndSync to avoid race conditions with other controllers (TunnelBinding, Gateway, Tunnel).
 // This is necessary for AccessApplication domain validation - Cloudflare Access API
 // validates that domains are registered as public hostnames in the tunnel configuration.
 // Without this sync, AccessApplication creation fails with "domain not included in destinations".
@@ -875,21 +876,40 @@ func (r *Reconciler) syncTunnelConfigToAPI(
 		return fmt.Errorf("failed to initialize API client: %w", err)
 	}
 
-	// Get WarpRouting config from tunnel spec
-	// Always explicitly set warp-routing state to ensure proper sync
-	warpRouting := &cf.WarpRoutingConfig{
-		Enabled: tunnel.GetSpec().EnableWarpRouting,
+	// Prepare merge options for read-merge-write
+	source := fmt.Sprintf("Ingress/%s/%s", config.Namespace, config.Name)
+	mergeOpts := cf.MergeOptions{
+		Source:            source,
+		PreviousHostnames: config.Status.SyncedHostnames, // Use previously synced hostnames for cleanup
+		CurrentRules:      rules,
+		FallbackTarget:    tunnel.GetSpec().FallbackTarget,
+		// Note: WarpRouting is controlled by Tunnel/ClusterTunnel controller, not Ingress
+		// Ingress should preserve existing warp-routing state
+		WarpRouting: nil,
 	}
 
-	// Sync to Cloudflare API
-	if err := apiClient.SyncTunnelConfigurationToAPI(tunnelID, rules, warpRouting); err != nil {
-		return fmt.Errorf("failed to sync tunnel configuration: %w", err)
+	// Use MergeAndSync for safe read-merge-write operation
+	// This prevents race conditions with other controllers
+	result, err := apiClient.MergeAndSync(tunnelID, mergeOpts)
+	if err != nil {
+		return fmt.Errorf("failed to merge and sync tunnel configuration: %w", err)
 	}
 
-	logger.Info("Tunnel configuration synced to Cloudflare API",
+	// Update TunnelIngressClassConfig status with synced hostnames and config version
+	if err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, config, func() {
+		config.Status.SyncedHostnames = result.SyncedHostnames
+		config.Status.ConfigVersion = result.Version
+	}); err != nil {
+		logger.Error(err, "Failed to update TunnelIngressClassConfig status with sync result")
+		// Don't return error - the sync itself succeeded
+	}
+
+	logger.Info("Merged and synced tunnel configuration to Cloudflare API",
 		"tunnel", tunnel.GetName(),
 		"tunnelId", tunnelID,
-		"ingressRules", len(rules))
+		"source", source,
+		"syncedHostnames", result.SyncedHostnames,
+		"configVersion", result.Version)
 
 	return nil
 }

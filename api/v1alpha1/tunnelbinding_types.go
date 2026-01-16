@@ -110,6 +110,16 @@ type TunnelBindingStatus struct {
 	// To show on the kubectl cli
 	Hostnames string        `json:"hostnames"`
 	Services  []ServiceInfo `json:"services"`
+
+	// SyncedHostnames contains the hostnames last synced to Cloudflare Tunnel configuration.
+	// Used for read-merge-write to track owned hostnames and avoid overwriting
+	// rules from other controllers (Tunnel, Ingress, Gateway).
+	// +kubebuilder:validation:Optional
+	SyncedHostnames []string `json:"syncedHostnames,omitempty"`
+
+	// ConfigVersion is the tunnel configuration version after last sync
+	// +kubebuilder:validation:Optional
+	ConfigVersion int `json:"configVersion,omitempty"`
 }
 
 // +kubebuilder:object:root=true

@@ -578,7 +578,8 @@ func (r *TunnelBindingReconciler) getServiceProto(tunnelProto string, validProto
 	return serviceProto
 }
 
-// configureCloudflareDaemon syncs tunnel configuration to Cloudflare API.
+// configureCloudflareDaemon syncs tunnel configuration to Cloudflare API using read-merge-write.
+// This uses MergeAndSync to avoid race conditions with other controllers (Ingress, Gateway, Tunnel).
 // In token mode, cloudflared automatically pulls the latest configuration from cloud.
 func (r *TunnelBindingReconciler) configureCloudflareDaemon() error {
 	bindings, err := r.getRelevantTunnelBindings()
@@ -618,24 +619,45 @@ func (r *TunnelBindingReconciler) configureCloudflareDaemon() error {
 		}
 	}
 
-	// Catchall ingress
+	// Catchall ingress (will be handled by MergeAndSync)
 	finalIngresses = append(finalIngresses, cf.UnvalidatedIngressRule{
 		Service: r.fallbackTarget,
 	})
 
-	// Convert warpRouting bool to WarpRoutingConfig
-	// Always explicitly set warp-routing state to ensure proper sync
-	// When warpRouting is false, we send Enabled: false to disable it
-	warpRoutingConfig := &cf.WarpRoutingConfig{Enabled: r.warpRouting}
-
-	// Sync configuration to Cloudflare API
-	// In token mode, cloudflared will automatically pull the updated configuration
-	if err := r.cfAPI.SyncTunnelConfigurationToAPI(r.tunnelID, finalIngresses, warpRoutingConfig); err != nil {
-		r.log.Error(err, "failed to sync tunnel configuration to API", "tunnelID", r.tunnelID)
-		return fmt.Errorf("sync tunnel configuration to API: %w", err)
+	// Prepare merge options for read-merge-write
+	source := fmt.Sprintf("TunnelBinding/%s/%s", r.binding.Namespace, r.binding.Name)
+	mergeOpts := cf.MergeOptions{
+		Source:            source,
+		PreviousHostnames: r.binding.Status.SyncedHostnames, // Use previously synced hostnames for cleanup
+		CurrentRules:      finalIngresses,
+		FallbackTarget:    r.fallbackTarget,
+		// Note: WarpRouting is controlled by Tunnel/ClusterTunnel controller, not TunnelBinding
+		// TunnelBinding should preserve existing warp-routing state
+		WarpRouting: nil,
 	}
 
-	r.log.Info("Synced tunnel configuration to Cloudflare API", "tunnelID", r.tunnelID, "ingressCount", len(finalIngresses))
+	// Use MergeAndSync for safe read-merge-write operation
+	// This prevents race conditions with other controllers
+	result, err := r.cfAPI.MergeAndSync(r.tunnelID, mergeOpts)
+	if err != nil {
+		r.log.Error(err, "failed to merge and sync tunnel configuration", "tunnelID", r.tunnelID)
+		return fmt.Errorf("merge and sync tunnel configuration: %w", err)
+	}
+
+	// Update status with synced hostnames and config version
+	if err := UpdateStatusWithConflictRetry(r.ctx, r.Client, r.binding, func() {
+		r.binding.Status.SyncedHostnames = result.SyncedHostnames
+		r.binding.Status.ConfigVersion = result.Version
+	}); err != nil {
+		r.log.Error(err, "Failed to update TunnelBinding status with sync result")
+		// Don't return error - the sync itself succeeded
+	}
+
+	r.log.Info("Merged and synced tunnel configuration to Cloudflare API",
+		"tunnelID", r.tunnelID,
+		"source", source,
+		"syncedHostnames", result.SyncedHostnames,
+		"configVersion", result.Version)
 	return nil
 }
 

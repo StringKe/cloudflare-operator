@@ -67,6 +67,16 @@ type TunnelGatewayClassConfigStatus struct {
 	// +kubebuilder:validation:Enum=pending;active;error
 	State string `json:"state,omitempty"`
 
+	// SyncedHostnames contains all hostnames currently synced to Cloudflare Tunnel
+	// configuration by this GatewayClassConfig. Used for read-merge-write to track
+	// owned hostnames and avoid overwriting rules from other controllers.
+	// +kubebuilder:validation:Optional
+	SyncedHostnames []string `json:"syncedHostnames,omitempty"`
+
+	// ConfigVersion is the tunnel configuration version after last sync
+	// +kubebuilder:validation:Optional
+	ConfigVersion int `json:"configVersion,omitempty"`
+
 	// Conditions represent the latest available observations
 	// +kubebuilder:validation:Optional
 	// +listType=map

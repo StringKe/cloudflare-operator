@@ -162,6 +162,16 @@ type TunnelStatus struct {
 	// ObservedGeneration is the generation observed by the controller
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
+	// ConfigVersion is the current tunnel configuration version from Cloudflare
+	// +kubebuilder:validation:Optional
+	ConfigVersion int `json:"configVersion,omitempty"`
+
+	// SyncedHostnames contains the hostnames last synced by this Tunnel controller.
+	// Used for read-merge-write to track owned hostnames and avoid overwriting
+	// rules from other controllers (Ingress, Gateway, TunnelBinding).
+	// +kubebuilder:validation:Optional
+	SyncedHostnames []string `json:"syncedHostnames,omitempty"`
+
 	// Conditions represent the latest available observations of the tunnel's state
 	// +optional
 	// +listType=map

@@ -268,6 +268,10 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              configVersion:
+                description: ConfigVersion is the tunnel configuration version after
+                  last sync
+                type: integer
               ingressCount:
                 description: IngressCount is the number of Ingresses using this configuration
                 type: integer
@@ -282,6 +286,14 @@ spec:
                 - active
                 - error
                 type: string
+              syncedHostnames:
+                description: |-
+                  SyncedHostnames contains all hostnames currently synced to Cloudflare Tunnel
+                  configuration by this IngressClassConfig. Used for read-merge-write to track
+                  owned hostnames and avoid overwriting rules from other controllers.
+                items:
+                  type: string
+                type: array
               tunnelId:
                 description: TunnelID is the resolved Cloudflare Tunnel ID
                 type: string

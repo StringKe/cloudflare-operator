@@ -466,6 +466,10 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              configVersion:
+                description: ConfigVersion is the current tunnel configuration version
+                  from Cloudflare
+                type: integer
               observedGeneration:
                 description: ObservedGeneration is the generation observed by the
                   controller
@@ -480,6 +484,14 @@ spec:
                 - error
                 - deleting
                 type: string
+              syncedHostnames:
+                description: |-
+                  SyncedHostnames contains the hostnames last synced by this Tunnel controller.
+                  Used for read-merge-write to track owned hostnames and avoid overwriting
+                  rules from other controllers (Ingress, Gateway, TunnelBinding).
+                items:
+                  type: string
+                type: array
               tunnelId:
                 description: TunnelId is the Cloudflare tunnel ID
                 type: string
