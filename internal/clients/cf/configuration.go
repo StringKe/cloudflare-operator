@@ -2,7 +2,13 @@ package cf
 
 import (
 	"time"
+
+	"github.com/cloudflare/cloudflare-go"
 )
+
+// TunnelConfigurationResult is an alias for cloudflare.TunnelConfigurationResult
+// for use in the controller package without direct cloudflare-go imports.
+type TunnelConfigurationResult = cloudflare.TunnelConfigurationResult
 
 // Configuration is a cloudflared configuration yaml model
 // https://github.com/cloudflare/cloudflared/blob/master/config/configuration.go

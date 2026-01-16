@@ -772,11 +772,9 @@ func (r *GatewayReconciler) syncTunnelConfigToAPI(
 	}
 
 	// Get WarpRouting config from tunnel spec
-	var warpRouting *cf.WarpRoutingConfig
-	if tunnelSpec.EnableWarpRouting {
-		warpRouting = &cf.WarpRoutingConfig{
-			Enabled: true,
-		}
+	// Always explicitly set warp-routing state to ensure proper sync
+	warpRouting := &cf.WarpRoutingConfig{
+		Enabled: tunnelSpec.EnableWarpRouting,
 	}
 
 	// Sync to Cloudflare API

@@ -624,10 +624,9 @@ func (r *TunnelBindingReconciler) configureCloudflareDaemon() error {
 	})
 
 	// Convert warpRouting bool to WarpRoutingConfig
-	var warpRoutingConfig *cf.WarpRoutingConfig
-	if r.warpRouting {
-		warpRoutingConfig = &cf.WarpRoutingConfig{Enabled: true}
-	}
+	// Always explicitly set warp-routing state to ensure proper sync
+	// When warpRouting is false, we send Enabled: false to disable it
+	warpRoutingConfig := &cf.WarpRoutingConfig{Enabled: r.warpRouting}
 
 	// Sync configuration to Cloudflare API
 	// In token mode, cloudflared will automatically pull the updated configuration

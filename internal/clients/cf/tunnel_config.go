@@ -159,6 +159,11 @@ func convertOriginRequest(local OriginRequestConfig) *cloudflare.OriginRequestCo
 
 // SyncTunnelConfigurationToAPI syncs the local ingress rules to Cloudflare API.
 // This is a convenience method that combines type conversion and API call.
+//
+// IMPORTANT: The warpRouting parameter controls WARP routing state:
+// - nil: don't change existing warp-routing state (backward compatible)
+// - &WarpRoutingConfig{Enabled: true}: explicitly enable warp-routing
+// - &WarpRoutingConfig{Enabled: false}: explicitly disable warp-routing
 func (c *API) SyncTunnelConfigurationToAPI(tunnelID string, localRules []UnvalidatedIngressRule, warpRouting *WarpRoutingConfig) error {
 	// Convert local rules to SDK types
 	sdkRules := ConvertLocalRulesToSDK(localRules)
@@ -168,8 +173,10 @@ func (c *API) SyncTunnelConfigurationToAPI(tunnelID string, localRules []Unvalid
 		Ingress: sdkRules,
 	}
 
-	// Add WarpRouting if configured
-	if warpRouting != nil && warpRouting.Enabled {
+	// Add WarpRouting configuration if specified
+	// When warpRouting is not nil, we explicitly set the state (true or false)
+	// This allows disabling warp-routing by setting Enabled: false
+	if warpRouting != nil {
 		config.WarpRouting = &cloudflare.WarpRoutingConfig{
 			Enabled: warpRouting.Enabled,
 		}
