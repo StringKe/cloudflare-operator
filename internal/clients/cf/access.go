@@ -23,7 +23,7 @@ type AccessApplicationParams struct {
 	AllowedIdps              []string
 	AutoRedirectToIdentity   *bool
 	EnableBindingCookie      *bool
-	HttpOnlyCookieAttribute  *bool
+	HTTPOnlyCookieAttribute  *bool
 	PathCookieAttribute      *bool
 	SameSiteCookieAttribute  string
 	LogoURL                  string
@@ -234,7 +234,7 @@ func (c *API) CreateAccessApplication(params AccessApplicationParams) (*AccessAp
 		AllowedIdps:              params.AllowedIdps,
 		AutoRedirectToIdentity:   params.AutoRedirectToIdentity,
 		EnableBindingCookie:      params.EnableBindingCookie,
-		HttpOnlyCookieAttribute:  params.HttpOnlyCookieAttribute,
+		HttpOnlyCookieAttribute:  params.HTTPOnlyCookieAttribute,
 		PathCookieAttribute:      params.PathCookieAttribute,
 		SameSiteCookieAttribute:  params.SameSiteCookieAttribute,
 		LogoURL:                  params.LogoURL,
@@ -368,7 +368,7 @@ func (c *API) UpdateAccessApplication(applicationID string, params AccessApplica
 		AllowedIdps:              params.AllowedIdps,
 		AutoRedirectToIdentity:   params.AutoRedirectToIdentity,
 		EnableBindingCookie:      params.EnableBindingCookie,
-		HttpOnlyCookieAttribute:  params.HttpOnlyCookieAttribute,
+		HttpOnlyCookieAttribute:  params.HTTPOnlyCookieAttribute,
 		PathCookieAttribute:      params.PathCookieAttribute,
 		SameSiteCookieAttribute:  params.SameSiteCookieAttribute,
 		LogoURL:                  params.LogoURL,

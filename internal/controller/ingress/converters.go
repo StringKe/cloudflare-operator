@@ -403,7 +403,7 @@ func (*Reconciler) buildOriginRequest(
 	// Apply defaults first
 	if defaults != nil {
 		config.NoTLSVerify = &defaults.NoTLSVerify
-		config.Http2Origin = &defaults.HTTP2Origin
+		config.HTTP2Origin = &defaults.HTTP2Origin
 
 		if defaults.CAPool != "" {
 			caPath := fmt.Sprintf("/etc/cloudflared/certs/%s", defaults.CAPool)
@@ -468,9 +468,9 @@ func (*Reconciler) buildOriginRequest(
 		config.NoTLSVerify = &defaults.NoTLSVerify
 	}
 
-	config.Http2Origin = parser.GetBoolPtr(AnnotationHTTP2Origin)
-	if config.Http2Origin == nil && defaults != nil {
-		config.Http2Origin = &defaults.HTTP2Origin
+	config.HTTP2Origin = parser.GetBoolPtr(AnnotationHTTP2Origin)
+	if config.HTTP2Origin == nil && defaults != nil {
+		config.HTTP2Origin = &defaults.HTTP2Origin
 	}
 
 	if caPool, ok := parser.GetString(AnnotationCAPool); ok {
@@ -542,7 +542,7 @@ func (*Reconciler) convertTunnelBindingToRules(binding networkingv1alpha1.Tunnel
 		// Build origin request
 		originRequest := cf.OriginRequestConfig{}
 		originRequest.NoTLSVerify = &subject.Spec.NoTlsVerify
-		originRequest.Http2Origin = &subject.Spec.Http2Origin
+		originRequest.HTTP2Origin = &subject.Spec.HTTP2Origin
 
 		if subject.Spec.ProxyAddress != "" {
 			originRequest.ProxyAddress = &subject.Spec.ProxyAddress

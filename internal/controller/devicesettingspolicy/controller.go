@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2025-2026 The Cloudflare Operator Authors
 
+// Package devicesettingspolicy implements the controller for DeviceSettingsPolicy resources.
 package devicesettingspolicy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
-	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -20,25 +21,26 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
+	"github.com/StringKe/cloudflare-operator/internal/service"
+	devicesvc "github.com/StringKe/cloudflare-operator/internal/service/device"
+)
+
+const (
+	FinalizerName = "devicesettingspolicy.networking.cloudflare-operator.io/finalizer"
 )
 
 // Reconciler reconciles a DeviceSettingsPolicy object
 type Reconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
-
-	// Runtime state
-	ctx    context.Context
-	log    logr.Logger
-	policy *networkingv1alpha2.DeviceSettingsPolicy
-	cfAPI  *cf.API
+	Scheme        *runtime.Scheme
+	Recorder      record.EventRecorder
+	deviceService *devicesvc.DeviceSettingsPolicyService
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=devicesettingspolicies,verbs=get;list;watch;create;update;patch;delete
@@ -50,181 +52,201 @@ type Reconciler struct {
 
 // Reconcile implements the reconciliation loop for DeviceSettingsPolicy resources.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	r.ctx = ctx
-	r.log = ctrllog.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
 	// Fetch the DeviceSettingsPolicy resource
-	r.policy = &networkingv1alpha2.DeviceSettingsPolicy{}
-	if err := r.Get(ctx, req.NamespacedName, r.policy); err != nil {
+	policy := &networkingv1alpha2.DeviceSettingsPolicy{}
+	if err := r.Get(ctx, req.NamespacedName, policy); err != nil {
 		if apierrors.IsNotFound(err) {
-			r.log.Info("DeviceSettingsPolicy deleted, nothing to do")
 			return ctrl.Result{}, nil
 		}
-		r.log.Error(err, "unable to fetch DeviceSettingsPolicy")
 		return ctrl.Result{}, err
 	}
 
-	// Initialize API client
-	if err := r.initAPIClient(); err != nil {
-		r.log.Error(err, "failed to initialize API client")
-		r.setCondition(metav1.ConditionFalse, controller.EventReasonAPIError, err.Error())
-		return ctrl.Result{}, err
+	// Resolve credentials
+	credRef, accountID, err := r.resolveCredentials(ctx, policy)
+	if err != nil {
+		logger.Error(err, "Failed to resolve credentials")
+		return r.updateStatusError(ctx, policy, err)
 	}
 
 	// Check if DeviceSettingsPolicy is being deleted
-	if r.policy.GetDeletionTimestamp() != nil {
-		return r.handleDeletion()
+	if !policy.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, policy, accountID)
 	}
 
 	// Add finalizer if not present
-	if !controllerutil.ContainsFinalizer(r.policy, controller.DeviceSettingsPolicyFinalizer) {
-		controllerutil.AddFinalizer(r.policy, controller.DeviceSettingsPolicyFinalizer)
-		if err := r.Update(ctx, r.policy); err != nil {
-			r.log.Error(err, "failed to add finalizer")
+	if !controllerutil.ContainsFinalizer(policy, FinalizerName) {
+		controllerutil.AddFinalizer(policy, FinalizerName)
+		if err := r.Update(ctx, policy); err != nil {
 			return ctrl.Result{}, err
 		}
-		r.Recorder.Event(r.policy, corev1.EventTypeNormal, controller.EventReasonFinalizerSet, "Finalizer added")
+		r.Recorder.Event(policy, corev1.EventTypeNormal, controller.EventReasonFinalizerSet, "Finalizer added")
 	}
 
-	// Reconcile the DeviceSettingsPolicy
-	if err := r.reconcilePolicy(); err != nil {
-		r.log.Error(err, "failed to reconcile DeviceSettingsPolicy")
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-	}
-
-	return ctrl.Result{}, nil
+	// Register Device Settings Policy configuration to SyncState
+	return r.registerDeviceSettingsPolicy(ctx, policy, accountID, credRef)
 }
 
-// initAPIClient initializes the Cloudflare API client using the unified credential loader.
-// DeviceSettingsPolicy is cluster-scoped, use operator namespace for legacy inline secrets.
-func (r *Reconciler) initAPIClient() error {
-	api, err := cf.NewAPIClientFromDetails(r.ctx, r.Client, controller.OperatorNamespace, r.policy.Spec.Cloudflare)
-	if err != nil {
-		r.log.Error(err, "failed to initialize API client")
-		r.Recorder.Event(r.policy, corev1.EventTypeWarning, controller.EventReasonAPIError, "Failed to initialize API client")
-		return err
+// resolveCredentials resolves the credentials reference and account ID.
+func (r *Reconciler) resolveCredentials(
+	ctx context.Context,
+	policy *networkingv1alpha2.DeviceSettingsPolicy,
+) (credRef networkingv1alpha2.CredentialsReference, accountID string, err error) {
+	// Get credentials reference
+	if policy.Spec.Cloudflare.CredentialsRef != nil {
+		credRef = networkingv1alpha2.CredentialsReference{
+			Name: policy.Spec.Cloudflare.CredentialsRef.Name,
+		}
+
+		// Get account ID from credentials if available
+		creds := &networkingv1alpha2.CloudflareCredentials{}
+		if err := r.Get(ctx, client.ObjectKey{Name: credRef.Name}, creds); err != nil {
+			return credRef, "", fmt.Errorf("get credentials: %w", err)
+		}
+		accountID = creds.Spec.AccountID
 	}
 
-	// Preserve validated account ID from status
-	api.ValidAccountId = r.policy.Status.AccountID
-	r.cfAPI = api
+	if credRef.Name == "" {
+		return credRef, "", errors.New("credentials reference is required")
+	}
 
-	return nil
+	return credRef, accountID, nil
 }
 
 // handleDeletion handles the deletion of a DeviceSettingsPolicy.
-func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
-	if !controllerutil.ContainsFinalizer(r.policy, controller.DeviceSettingsPolicyFinalizer) {
+func (r *Reconciler) handleDeletion(
+	ctx context.Context,
+	policy *networkingv1alpha2.DeviceSettingsPolicy,
+	accountID string,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	if !controllerutil.ContainsFinalizer(policy, FinalizerName) {
 		return ctrl.Result{}, nil
 	}
 
-	r.log.Info("Deleting DeviceSettingsPolicy")
-	r.Recorder.Event(r.policy, corev1.EventTypeNormal, "Deleting", "Starting DeviceSettingsPolicy deletion")
+	logger.Info("Deleting DeviceSettingsPolicy")
+	r.Recorder.Event(policy, corev1.EventTypeNormal, "Deleting", "Starting DeviceSettingsPolicy deletion")
 
 	// Note: We don't delete the split tunnel or fallback domain configurations
 	// because they are account-wide settings. The user should manage this manually
 	// or use another DeviceSettingsPolicy to reset them.
 
-	// P0 FIX: Remove finalizer with retry logic to handle conflicts
-	if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.policy, func() {
-		controllerutil.RemoveFinalizer(r.policy, controller.DeviceSettingsPolicyFinalizer)
+	// Unregister from SyncState
+	source := service.Source{
+		Kind:      "DeviceSettingsPolicy",
+		Namespace: "",
+		Name:      policy.Name,
+	}
+	if err := r.deviceService.Unregister(ctx, accountID, source); err != nil {
+		logger.Error(err, "Failed to unregister DeviceSettingsPolicy from SyncState")
+		// Non-fatal - continue with finalizer removal
+	}
+
+	// Remove finalizer with retry logic
+	if err := controller.UpdateWithConflictRetry(ctx, r.Client, policy, func() {
+		controllerutil.RemoveFinalizer(policy, FinalizerName)
 	}); err != nil {
-		r.log.Error(err, "failed to remove finalizer")
+		logger.Error(err, "failed to remove finalizer")
 		return ctrl.Result{}, err
 	}
-	r.Recorder.Event(r.policy, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
+	r.Recorder.Event(policy, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
 
 	return ctrl.Result{}, nil
 }
 
-// reconcilePolicy ensures the device settings are configured in Cloudflare.
-func (r *Reconciler) reconcilePolicy() error {
-	var autoPopulatedCount int
+// registerDeviceSettingsPolicy registers the Device Settings Policy configuration to SyncState.
+//
+//nolint:revive // cognitive complexity is acceptable for configuration registration
+func (r *Reconciler) registerDeviceSettingsPolicy(
+	ctx context.Context,
+	policy *networkingv1alpha2.DeviceSettingsPolicy,
+	accountID string,
+	credRef networkingv1alpha2.CredentialsReference,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
 
-	// Collect split tunnel entries
-	excludeEntries := r.convertSplitTunnelEntries(r.policy.Spec.SplitTunnelExclude)
-	includeEntries := r.convertSplitTunnelEntries(r.policy.Spec.SplitTunnelInclude)
-
-	// Auto-populate from NetworkRoutes if enabled
-	if r.policy.Spec.AutoPopulateFromRoutes != nil && r.policy.Spec.AutoPopulateFromRoutes.Enabled {
-		autoEntries, err := r.getAutoPopulatedEntries()
-		if err != nil {
-			r.log.Error(err, "failed to auto-populate from NetworkRoutes")
-			// Continue anyway with manual entries
-		} else {
-			autoPopulatedCount = len(autoEntries)
-			if r.policy.Spec.SplitTunnelMode == "include" {
-				includeEntries = append(includeEntries, autoEntries...)
-			} else {
-				// For exclude mode, we add the routes to exclude to ensure they go through the tunnel
-				// Actually, for private network access, we'd want to INCLUDE them, not exclude
-				// Let's add them to include instead
-				includeEntries = append(includeEntries, autoEntries...)
-			}
-		}
+	// Build device settings policy configuration
+	config := devicesvc.DeviceSettingsPolicyConfig{
+		SplitTunnelMode: policy.Spec.SplitTunnelMode,
 	}
 
-	// Update split tunnel exclude list
-	if len(excludeEntries) > 0 || r.policy.Spec.SplitTunnelMode == "exclude" {
-		if err := r.cfAPI.UpdateSplitTunnelExclude(excludeEntries); err != nil {
-			r.log.Error(err, "failed to update split tunnel exclude list")
-			r.setCondition(metav1.ConditionFalse, controller.EventReasonUpdateFailed, err.Error())
-			return err
-		}
-	}
-
-	// Update split tunnel include list
-	if len(includeEntries) > 0 || r.policy.Spec.SplitTunnelMode == "include" {
-		if err := r.cfAPI.UpdateSplitTunnelInclude(includeEntries); err != nil {
-			r.log.Error(err, "failed to update split tunnel include list")
-			r.setCondition(metav1.ConditionFalse, controller.EventReasonUpdateFailed, err.Error())
-			return err
-		}
-	}
-
-	// Update fallback domains
-	if len(r.policy.Spec.FallbackDomains) > 0 {
-		fallbackEntries := r.convertFallbackDomainEntries(r.policy.Spec.FallbackDomains)
-		if err := r.cfAPI.UpdateFallbackDomains(fallbackEntries); err != nil {
-			r.log.Error(err, "failed to update fallback domains")
-			r.setCondition(metav1.ConditionFalse, controller.EventReasonUpdateFailed, err.Error())
-			return err
-		}
-	}
-
-	// Update status
-	return r.updateStatus(len(excludeEntries), len(includeEntries), len(r.policy.Spec.FallbackDomains), autoPopulatedCount)
-}
-
-// convertSplitTunnelEntries converts spec entries to CF API entries.
-func (r *Reconciler) convertSplitTunnelEntries(entries []networkingv1alpha2.SplitTunnelEntry) []cf.SplitTunnelEntry {
-	result := make([]cf.SplitTunnelEntry, len(entries))
-	for i, e := range entries {
-		result[i] = cf.SplitTunnelEntry{
+	// Convert split tunnel exclude entries
+	for _, e := range policy.Spec.SplitTunnelExclude {
+		config.SplitTunnelExclude = append(config.SplitTunnelExclude, devicesvc.SplitTunnelEntry{
 			Address:     e.Address,
 			Host:        e.Host,
 			Description: e.Description,
-		}
+		})
 	}
-	return result
-}
 
-// convertFallbackDomainEntries converts spec entries to CF API entries.
-func (r *Reconciler) convertFallbackDomainEntries(entries []networkingv1alpha2.FallbackDomainEntry) []cf.FallbackDomainEntry {
-	result := make([]cf.FallbackDomainEntry, len(entries))
-	for i, e := range entries {
-		result[i] = cf.FallbackDomainEntry{
+	// Convert split tunnel include entries
+	for _, e := range policy.Spec.SplitTunnelInclude {
+		config.SplitTunnelInclude = append(config.SplitTunnelInclude, devicesvc.SplitTunnelEntry{
+			Address:     e.Address,
+			Host:        e.Host,
+			Description: e.Description,
+		})
+	}
+
+	// Convert fallback domain entries
+	for _, e := range policy.Spec.FallbackDomains {
+		config.FallbackDomains = append(config.FallbackDomains, devicesvc.FallbackDomainEntry{
 			Suffix:      e.Suffix,
 			Description: e.Description,
 			DNSServer:   e.DNSServer,
+		})
+	}
+
+	// Auto-populate from NetworkRoutes if enabled
+	if policy.Spec.AutoPopulateFromRoutes != nil && policy.Spec.AutoPopulateFromRoutes.Enabled {
+		autoEntries, err := r.getAutoPopulatedEntries(ctx, policy)
+		if err != nil {
+			logger.Error(err, "Failed to auto-populate from NetworkRoutes")
+			// Continue anyway with manual entries
+		} else {
+			config.AutoPopulatedRoutes = autoEntries
 		}
 	}
-	return result
+
+	// Create source reference
+	source := service.Source{
+		Kind:      "DeviceSettingsPolicy",
+		Namespace: "",
+		Name:      policy.Name,
+	}
+
+	// Register to SyncState
+	opts := devicesvc.DeviceSettingsPolicyRegisterOptions{
+		AccountID:      accountID,
+		Source:         source,
+		Config:         config,
+		CredentialsRef: credRef,
+	}
+
+	if err := r.deviceService.Register(ctx, opts); err != nil {
+		logger.Error(err, "Failed to register DeviceSettingsPolicy configuration")
+		r.Recorder.Event(policy, corev1.EventTypeWarning, "RegisterFailed",
+			fmt.Sprintf("Failed to register DeviceSettingsPolicy: %s", err.Error()))
+		return r.updateStatusError(ctx, policy, err)
+	}
+
+	r.Recorder.Event(policy, corev1.EventTypeNormal, "Registered",
+		"Registered DeviceSettingsPolicy configuration to SyncState")
+
+	// Update status to Pending - actual sync happens via DeviceSyncController
+	return r.updateStatusPending(ctx, policy, accountID, &config)
 }
 
 // getAutoPopulatedEntries retrieves entries from NetworkRoute resources.
-func (r *Reconciler) getAutoPopulatedEntries() ([]cf.SplitTunnelEntry, error) {
-	config := r.policy.Spec.AutoPopulateFromRoutes
+//
+//nolint:revive // cognitive complexity is acceptable for resource filtering logic
+func (r *Reconciler) getAutoPopulatedEntries(
+	ctx context.Context,
+	policy *networkingv1alpha2.DeviceSettingsPolicy,
+) ([]devicesvc.SplitTunnelEntry, error) {
+	config := policy.Spec.AutoPopulateFromRoutes
 	if config == nil {
 		return nil, nil
 	}
@@ -241,12 +263,12 @@ func (r *Reconciler) getAutoPopulatedEntries() ([]cf.SplitTunnelEntry, error) {
 		listOpts = append(listOpts, client.MatchingLabelsSelector{Selector: selector})
 	}
 
-	if err := r.List(r.ctx, routeList, listOpts...); err != nil {
+	if err := r.List(ctx, routeList, listOpts...); err != nil {
 		return nil, fmt.Errorf("failed to list NetworkRoutes: %w", err)
 	}
 
 	// Convert to split tunnel entries
-	entries := make([]cf.SplitTunnelEntry, 0, len(routeList.Items))
+	entries := make([]devicesvc.SplitTunnelEntry, 0, len(routeList.Items))
 	prefix := config.DescriptionPrefix
 	if prefix == "" {
 		prefix = "Auto-populated from NetworkRoute: "
@@ -254,7 +276,7 @@ func (r *Reconciler) getAutoPopulatedEntries() ([]cf.SplitTunnelEntry, error) {
 
 	for _, route := range routeList.Items {
 		if route.Spec.Network != "" {
-			entries = append(entries, cf.SplitTunnelEntry{
+			entries = append(entries, devicesvc.SplitTunnelEntry{
 				Address:     route.Spec.Network,
 				Description: prefix + route.Name,
 			})
@@ -264,44 +286,62 @@ func (r *Reconciler) getAutoPopulatedEntries() ([]cf.SplitTunnelEntry, error) {
 	return entries, nil
 }
 
-// updateStatus updates the DeviceSettingsPolicy status.
-func (r *Reconciler) updateStatus(excludeCount, includeCount, fallbackCount, autoPopulatedCount int) error {
-	// Use retry logic for status updates to handle conflicts
-	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.policy, func() {
-		r.policy.Status.AccountID = r.cfAPI.ValidAccountId
-		r.policy.Status.SplitTunnelExcludeCount = excludeCount
-		r.policy.Status.SplitTunnelIncludeCount = includeCount
-		r.policy.Status.FallbackDomainsCount = fallbackCount
-		r.policy.Status.AutoPopulatedRoutesCount = autoPopulatedCount
-		r.policy.Status.State = "active"
-		r.policy.Status.ObservedGeneration = r.policy.Generation
+func (r *Reconciler) updateStatusError(
+	ctx context.Context,
+	policy *networkingv1alpha2.DeviceSettingsPolicy,
+	err error,
+) (ctrl.Result, error) {
+	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, policy, func() {
+		policy.Status.State = "Error"
+		meta.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: policy.Generation,
+			Reason:             "ReconcileError",
+			Message:            cf.SanitizeErrorMessage(err),
+			LastTransitionTime: metav1.Now(),
+		})
+		policy.Status.ObservedGeneration = policy.Generation
+	})
+	if updateErr != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
+	}
 
-		r.setCondition(metav1.ConditionTrue, controller.EventReasonReconciled, "DeviceSettingsPolicy reconciled successfully")
+	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+}
+
+func (r *Reconciler) updateStatusPending(
+	ctx context.Context,
+	policy *networkingv1alpha2.DeviceSettingsPolicy,
+	accountID string,
+	config *devicesvc.DeviceSettingsPolicyConfig,
+) (ctrl.Result, error) {
+	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, policy, func() {
+		if policy.Status.AccountID == "" {
+			policy.Status.AccountID = accountID
+		}
+		policy.Status.State = "Pending"
+		policy.Status.SplitTunnelExcludeCount = len(config.SplitTunnelExclude)
+		policy.Status.SplitTunnelIncludeCount = len(config.SplitTunnelInclude)
+		policy.Status.FallbackDomainsCount = len(config.FallbackDomains)
+		policy.Status.AutoPopulatedRoutesCount = len(config.AutoPopulatedRoutes)
+		meta.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: policy.Generation,
+			Reason:             "Pending",
+			Message:            "DeviceSettingsPolicy configuration registered, waiting for sync",
+			LastTransitionTime: metav1.Now(),
+		})
+		policy.Status.ObservedGeneration = policy.Generation
 	})
 
 	if err != nil {
-		r.log.Error(err, "failed to update DeviceSettingsPolicy status")
-		return err
+		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
 	}
 
-	r.log.Info("DeviceSettingsPolicy status updated",
-		"excludeCount", excludeCount,
-		"includeCount", includeCount,
-		"fallbackCount", fallbackCount,
-		"autoPopulatedCount", autoPopulatedCount)
-	return nil
-}
-
-// setCondition sets a condition on the DeviceSettingsPolicy status using meta.SetStatusCondition.
-func (r *Reconciler) setCondition(status metav1.ConditionStatus, reason, message string) {
-	meta.SetStatusCondition(&r.policy.Status.Conditions, metav1.Condition{
-		Type:               "Ready",
-		Status:             status,
-		ObservedGeneration: r.policy.Generation,
-		LastTransitionTime: metav1.Now(),
-		Reason:             reason,
-		Message:            message,
-	})
+	// Requeue to check for sync completion
+	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 }
 
 // policyMatchesNetworkRoute checks if a DeviceSettingsPolicy should be triggered by a NetworkRoute change.
@@ -331,7 +371,7 @@ func (r *Reconciler) findDeviceSettingsPoliciesForNetworkRoute(ctx context.Conte
 	if !ok {
 		return nil
 	}
-	logger := ctrllog.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
 	// Find all DeviceSettingsPolicies that have AutoPopulateFromRoutes enabled
 	policyList := &networkingv1alpha2.DeviceSettingsPolicyList{}
@@ -361,9 +401,13 @@ func (r *Reconciler) findDeviceSettingsPoliciesForNetworkRoute(ctx context.Conte
 // SetupWithManager sets up the controller with the Manager.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("devicesettingspolicy-controller")
+
+	// Initialize DeviceSettingsPolicyService
+	r.deviceService = devicesvc.NewDeviceSettingsPolicyService(mgr.GetClient())
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.DeviceSettingsPolicy{}).
-		// P1 FIX: Watch NetworkRoute changes for auto-populate feature
+		// Watch NetworkRoute changes for auto-populate feature
 		Watches(
 			&networkingv1alpha2.NetworkRoute{},
 			handler.EnqueueRequestsFromMapFunc(r.findDeviceSettingsPoliciesForNetworkRoute),

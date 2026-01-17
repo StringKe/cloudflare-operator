@@ -326,7 +326,7 @@ func (r *WARPConnectorReconciler) reconcileDeployment(ctx context.Context, conne
 	return err
 }
 
-func (r *WARPConnectorReconciler) buildTolerations(tolerations []networkingv1alpha2.Toleration) []corev1.Toleration {
+func (*WARPConnectorReconciler) buildTolerations(tolerations []networkingv1alpha2.Toleration) []corev1.Toleration {
 	if len(tolerations) == 0 {
 		return nil
 	}

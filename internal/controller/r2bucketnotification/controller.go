@@ -9,9 +9,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -20,11 +20,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
+	"github.com/StringKe/cloudflare-operator/internal/service"
+	r2svc "github.com/StringKe/cloudflare-operator/internal/service/r2"
 )
 
 const (
@@ -37,10 +40,8 @@ type Reconciler struct {
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
 
-	// Internal state
-	ctx          context.Context
-	log          logr.Logger
-	notification *networkingv1alpha2.R2BucketNotification
+	// Services
+	notificationService *r2svc.NotificationService
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=r2bucketnotifications,verbs=get;list;watch;create;update;patch;delete
@@ -48,207 +49,244 @@ type Reconciler struct {
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=r2bucketnotifications/finalizers,verbs=update
 
 // Reconcile handles R2BucketNotification reconciliation
-//
-//nolint:revive // cognitive complexity is acceptable for main reconcile loop
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	r.ctx = ctx
-	r.log = ctrl.LoggerFrom(ctx)
+	logger := log.FromContext(ctx)
 
 	// Get the R2BucketNotification resource
-	r.notification = &networkingv1alpha2.R2BucketNotification{}
-	if err := r.Get(ctx, req.NamespacedName, r.notification); err != nil {
+	notification := &networkingv1alpha2.R2BucketNotification{}
+	if err := r.Get(ctx, req.NamespacedName, notification); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
-		r.log.Error(err, "unable to fetch R2BucketNotification")
+		logger.Error(err, "unable to fetch R2BucketNotification")
 		return ctrl.Result{}, err
 	}
 
+	// Resolve credentials and account ID
+	credRef, accountID, err := r.resolveCredentials(ctx, notification)
+	if err != nil {
+		logger.Error(err, "Failed to resolve credentials")
+		return r.updateStatusError(ctx, notification, err)
+	}
+
 	// Handle deletion
-	if !r.notification.DeletionTimestamp.IsZero() {
-		return r.handleDeletion()
+	if !notification.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, notification, credRef)
 	}
 
 	// Add finalizer if not present
-	if !controllerutil.ContainsFinalizer(r.notification, finalizerName) {
-		controllerutil.AddFinalizer(r.notification, finalizerName)
-		if err := r.Update(ctx, r.notification); err != nil {
+	if !controllerutil.ContainsFinalizer(notification, finalizerName) {
+		controllerutil.AddFinalizer(notification, finalizerName)
+		if err := r.Update(ctx, notification); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
 
-	// Create API client
-	cfAPI, err := r.getAPIClient()
-	if err != nil {
-		r.updateState(networkingv1alpha2.R2NotificationStateError,
-			fmt.Sprintf("Failed to get API client: %v", err))
-		r.Recorder.Event(r.notification, corev1.EventTypeWarning,
-			controller.EventReasonAPIError, cf.SanitizeErrorMessage(err))
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+	// Register R2 bucket notification configuration to SyncState
+	return r.registerNotification(ctx, notification, accountID, credRef)
+}
+
+// resolveCredentials resolves the credentials reference and account ID.
+func (r *Reconciler) resolveCredentials(
+	ctx context.Context,
+	notification *networkingv1alpha2.R2BucketNotification,
+) (credRef networkingv1alpha2.CredentialsReference, accountID string, err error) {
+	logger := log.FromContext(ctx)
+
+	// Get credentials reference
+	if notification.Spec.CredentialsRef != nil {
+		credRef = networkingv1alpha2.CredentialsReference{
+			Name: notification.Spec.CredentialsRef.Name,
+		}
 	}
 
-	// Reconcile the notification
-	return r.reconcileNotification(cfAPI)
+	// Get account ID from credentials
+	cfCredRef := &networkingv1alpha2.CloudflareCredentialsRef{Name: credRef.Name}
+	apiClient, err := cf.NewAPIClientFromCredentialsRef(ctx, r.Client, cfCredRef)
+	if err != nil {
+		return credRef, "", fmt.Errorf("failed to create API client: %w", err)
+	}
+
+	accountID = apiClient.AccountId
+	if accountID == "" {
+		logger.V(1).Info("Account ID not available from credentials, will be resolved during sync")
+	}
+
+	return credRef, accountID, nil
 }
 
 // handleDeletion handles the deletion of R2BucketNotification
 //
 //nolint:revive // cognitive complexity is acceptable for deletion handling
-func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
-	if !controllerutil.ContainsFinalizer(r.notification, finalizerName) {
+func (r *Reconciler) handleDeletion(
+	ctx context.Context,
+	notification *networkingv1alpha2.R2BucketNotification,
+	credRef networkingv1alpha2.CredentialsReference,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	if !controllerutil.ContainsFinalizer(notification, finalizerName) {
 		return ctrl.Result{}, nil
 	}
 
 	// Remove the notification from Cloudflare
-	if r.notification.Status.QueueID != "" {
-		cfAPI, err := r.getAPIClient()
+	if notification.Status.QueueID != "" {
+		cfCredRef := &networkingv1alpha2.CloudflareCredentialsRef{Name: credRef.Name}
+		cfAPI, err := cf.NewAPIClientFromCredentialsRef(ctx, r.Client, cfCredRef)
 		if err == nil {
 			if err := cfAPI.DeleteR2Notification(
-				r.ctx,
-				r.notification.Spec.BucketName,
-				r.notification.Status.QueueID,
+				ctx,
+				notification.Spec.BucketName,
+				notification.Status.QueueID,
 			); err != nil {
 				if !cf.IsNotFoundError(err) {
-					r.log.Error(err, "Failed to delete R2 notification")
-					r.Recorder.Event(r.notification, corev1.EventTypeWarning, "DeleteFailed",
+					logger.Error(err, "Failed to delete R2 notification")
+					r.Recorder.Event(notification, corev1.EventTypeWarning, "DeleteFailed",
 						cf.SanitizeErrorMessage(err))
 					return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 				}
 			} else {
-				r.log.Info("R2 notification deleted",
-					"bucket", r.notification.Spec.BucketName,
-					"queue", r.notification.Spec.QueueName)
-				r.Recorder.Event(r.notification, corev1.EventTypeNormal, "Deleted",
+				logger.Info("R2 notification deleted",
+					"bucket", notification.Spec.BucketName,
+					"queue", notification.Spec.QueueName)
+				r.Recorder.Event(notification, corev1.EventTypeNormal, "Deleted",
 					fmt.Sprintf("Notification rules removed from bucket %s",
-						r.notification.Spec.BucketName))
+						notification.Spec.BucketName))
 			}
 		}
 	}
 
+	// Unregister from SyncState
+	source := service.Source{
+		Kind:      "R2BucketNotification",
+		Namespace: notification.Namespace,
+		Name:      notification.Name,
+	}
+	if err := r.notificationService.Unregister(ctx, notification.Status.QueueID, source); err != nil {
+		logger.Error(err, "Failed to unregister R2 bucket notification from SyncState")
+		// Non-fatal - continue with finalizer removal
+	}
+
 	// Remove finalizer
-	if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.notification, func() {
-		controllerutil.RemoveFinalizer(r.notification, finalizerName)
+	if err := controller.UpdateWithConflictRetry(ctx, r.Client, notification, func() {
+		controllerutil.RemoveFinalizer(notification, finalizerName)
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
 
+	r.Recorder.Event(notification, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
 	return ctrl.Result{}, nil
 }
 
-// reconcileNotification reconciles the R2 bucket notification configuration
-func (r *Reconciler) reconcileNotification(cfAPI *cf.API) (ctrl.Result, error) {
-	r.updateState(networkingv1alpha2.R2NotificationStatePending, "Configuring notification rules")
+// registerNotification registers the R2 bucket notification configuration to SyncState.
+// The actual sync to Cloudflare is handled by R2BucketNotificationSyncController.
+func (r *Reconciler) registerNotification(
+	ctx context.Context,
+	notification *networkingv1alpha2.R2BucketNotification,
+	accountID string,
+	credRef networkingv1alpha2.CredentialsReference,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
 
-	// Get Queue ID from queue name
-	queueID, err := r.resolveQueueID(cfAPI)
-	if err != nil {
-		r.updateState(networkingv1alpha2.R2NotificationStateError,
-			fmt.Sprintf("Failed to resolve queue: %v", err))
-		r.Recorder.Event(r.notification, corev1.EventTypeWarning, "QueueResolveFailed",
-			cf.SanitizeErrorMessage(err))
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
-	}
-
-	// Convert spec rules to API rules
-	rules := make([]cf.R2NotificationRule, len(r.notification.Spec.Rules))
-	for i, rule := range r.notification.Spec.Rules {
-		eventTypes := make([]string, len(rule.EventTypes))
-		for j, et := range rule.EventTypes {
-			eventTypes[j] = string(et)
-		}
-		rules[i] = cf.R2NotificationRule{
+	// Build notification rules
+	rules := make([]networkingv1alpha2.R2NotificationRule, len(notification.Spec.Rules))
+	for i, rule := range notification.Spec.Rules {
+		rules[i] = networkingv1alpha2.R2NotificationRule{
 			Prefix:      rule.Prefix,
 			Suffix:      rule.Suffix,
-			EventTypes:  eventTypes,
+			EventTypes:  rule.EventTypes,
 			Description: rule.Description,
 		}
 	}
 
-	// Set notification configuration
-	if err := cfAPI.SetR2Notification(
-		r.ctx,
-		r.notification.Spec.BucketName,
-		queueID,
-		rules,
-	); err != nil {
-		r.updateState(networkingv1alpha2.R2NotificationStateError,
-			fmt.Sprintf("Failed to set notification: %v", err))
-		r.Recorder.Event(r.notification, corev1.EventTypeWarning, controller.EventReasonAPIError,
-			cf.SanitizeErrorMessage(err))
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+	// Build notification configuration
+	config := r2svc.R2BucketNotificationConfig{
+		BucketName: notification.Spec.BucketName,
+		QueueName:  notification.Spec.QueueName,
+		Rules:      rules,
 	}
 
-	// Update status
-	r.notification.Status.QueueID = queueID
-	r.notification.Status.RuleCount = len(rules)
-	r.updateState(networkingv1alpha2.R2NotificationStateActive, "Notification rules configured")
-	r.Recorder.Event(r.notification, corev1.EventTypeNormal, "Configured",
-		fmt.Sprintf("Notification rules configured for bucket %s",
-			r.notification.Spec.BucketName))
+	// Create source reference
+	source := service.Source{
+		Kind:      "R2BucketNotification",
+		Namespace: notification.Namespace,
+		Name:      notification.Name,
+	}
 
-	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
+	// Register to SyncState
+	opts := r2svc.R2BucketNotificationRegisterOptions{
+		AccountID:      accountID,
+		QueueID:        notification.Status.QueueID, // May be empty for new notifications
+		Source:         source,
+		Config:         config,
+		CredentialsRef: credRef,
+	}
+
+	if err := r.notificationService.Register(ctx, opts); err != nil {
+		logger.Error(err, "Failed to register R2 bucket notification configuration")
+		r.Recorder.Event(notification, corev1.EventTypeWarning, "RegisterFailed",
+			fmt.Sprintf("Failed to register R2 bucket notification: %s", err.Error()))
+		return r.updateStatusError(ctx, notification, err)
+	}
+
+	r.Recorder.Event(notification, corev1.EventTypeNormal, "Registered",
+		fmt.Sprintf("Registered R2 Bucket Notification for bucket '%s' to SyncState",
+			notification.Spec.BucketName))
+
+	// Update status to Pending - actual sync happens via R2BucketNotificationSyncController
+	return r.updateStatusPending(ctx, notification)
 }
 
-// resolveQueueID resolves the queue name to a queue ID
-func (r *Reconciler) resolveQueueID(cfAPI *cf.API) (string, error) {
-	// If we already have a QueueID and the queue name hasn't changed, use it
-	if r.notification.Status.QueueID != "" {
-		return r.notification.Status.QueueID, nil
+func (r *Reconciler) updateStatusError(
+	ctx context.Context,
+	notification *networkingv1alpha2.R2BucketNotification,
+	err error,
+) (ctrl.Result, error) {
+	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, notification, func() {
+		notification.Status.State = networkingv1alpha2.R2NotificationStateError
+		notification.Status.Message = cf.SanitizeErrorMessage(err)
+		meta.SetStatusCondition(&notification.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: notification.Generation,
+			Reason:             "ReconcileError",
+			Message:            cf.SanitizeErrorMessage(err),
+			LastTransitionTime: metav1.Now(),
+		})
+		notification.Status.ObservedGeneration = notification.Generation
+	})
+
+	if updateErr != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
 	}
 
-	// Get queue ID from Cloudflare
-	queueID, err := cfAPI.GetQueueID(r.ctx, r.notification.Spec.QueueName)
+	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+}
+
+func (r *Reconciler) updateStatusPending(
+	ctx context.Context,
+	notification *networkingv1alpha2.R2BucketNotification,
+) (ctrl.Result, error) {
+	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, notification, func() {
+		notification.Status.State = networkingv1alpha2.R2NotificationStatePending
+		notification.Status.Message = "R2 bucket notification configuration registered, waiting for sync"
+		meta.SetStatusCondition(&notification.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: notification.Generation,
+			Reason:             "Pending",
+			Message:            "R2 bucket notification configuration registered, waiting for sync",
+			LastTransitionTime: metav1.Now(),
+		})
+		notification.Status.ObservedGeneration = notification.Generation
+	})
+
 	if err != nil {
-		return "", fmt.Errorf("failed to get queue ID for %s: %w",
-			r.notification.Spec.QueueName, err)
+		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
 	}
 
-	return queueID, nil
-}
-
-// getAPIClient creates a Cloudflare API client from credentials
-func (r *Reconciler) getAPIClient() (*cf.API, error) {
-	if r.notification.Spec.CredentialsRef != nil {
-		ref := &networkingv1alpha2.CloudflareCredentialsRef{
-			Name: r.notification.Spec.CredentialsRef.Name,
-		}
-		return cf.NewAPIClientFromCredentialsRef(r.ctx, r.Client, ref)
-	}
-	return cf.NewAPIClientFromDefaultCredentials(r.ctx, r.Client)
-}
-
-// updateState updates the state and status of the R2BucketNotification
-func (r *Reconciler) updateState(state networkingv1alpha2.R2NotificationState, message string) {
-	r.notification.Status.State = state
-	r.notification.Status.Message = message
-	r.notification.Status.ObservedGeneration = r.notification.Generation
-
-	condition := metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionFalse,
-		ObservedGeneration: r.notification.Generation,
-		LastTransitionTime: metav1.Now(),
-		Reason:             string(state),
-		Message:            message,
-	}
-
-	if state == networkingv1alpha2.R2NotificationStateActive {
-		condition.Status = metav1.ConditionTrue
-		condition.Reason = "NotificationActive"
-	}
-
-	controller.SetCondition(&r.notification.Status.Conditions, condition.Type,
-		condition.Status, condition.Reason, condition.Message)
-
-	if err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.notification, func() {
-		r.notification.Status.State = state
-		r.notification.Status.Message = message
-		r.notification.Status.ObservedGeneration = r.notification.Generation
-		controller.SetCondition(&r.notification.Status.Conditions, condition.Type,
-			condition.Status, condition.Reason, condition.Message)
-	}); err != nil {
-		r.log.Error(err, "failed to update status")
-	}
+	// Requeue to check for sync completion
+	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 }
 
 // findNotificationsForCredentials returns R2BucketNotifications that reference the given credentials
@@ -326,14 +364,54 @@ func (r *Reconciler) findNotificationsForBucket(
 	return requests
 }
 
+// findNotificationsForSyncState returns R2BucketNotifications that are sources for the given SyncState
+func (*Reconciler) findNotificationsForSyncState(ctx context.Context, obj client.Object) []reconcile.Request {
+	logger := log.FromContext(ctx)
+
+	syncState, ok := obj.(*networkingv1alpha2.CloudflareSyncState)
+	if !ok {
+		return nil
+	}
+
+	// Only process R2BucketNotification type SyncStates
+	if syncState.Spec.ResourceType != networkingv1alpha2.SyncResourceR2BucketNotification {
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, source := range syncState.Spec.Sources {
+		if source.Ref.Kind == "R2BucketNotification" {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      source.Ref.Name,
+					Namespace: source.Ref.Namespace,
+				},
+			})
+		}
+	}
+
+	logger.V(1).Info("Found R2BucketNotifications for SyncState update",
+		"syncState", syncState.Name,
+		"notificationCount", len(requests))
+
+	return requests
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.Recorder = mgr.GetEventRecorderFor("r2bucketnotification-controller")
+
+	// Initialize NotificationService
+	r.notificationService = r2svc.NewNotificationService(mgr.GetClient())
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.R2BucketNotification{}).
 		Watches(&networkingv1alpha2.CloudflareCredentials{},
 			handler.EnqueueRequestsFromMapFunc(r.findNotificationsForCredentials)).
 		Watches(&networkingv1alpha2.R2Bucket{},
 			handler.EnqueueRequestsFromMapFunc(r.findNotificationsForBucket)).
+		Watches(&networkingv1alpha2.CloudflareSyncState{},
+			handler.EnqueueRequestsFromMapFunc(r.findNotificationsForSyncState)).
 		Named("r2bucketnotification").
 		Complete(r)
 }

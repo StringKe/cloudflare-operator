@@ -97,7 +97,7 @@ func hasOriginRequest(cfg OriginRequestConfig) bool {
 		cfg.OriginServerName != nil ||
 		cfg.CAPool != nil ||
 		cfg.NoTLSVerify != nil ||
-		cfg.Http2Origin != nil ||
+		cfg.HTTP2Origin != nil ||
 		cfg.DisableChunkedEncoding != nil ||
 		cfg.BastionMode != nil ||
 		cfg.ProxyAddress != nil ||
@@ -132,7 +132,7 @@ func convertOriginRequest(local OriginRequestConfig) *cloudflare.OriginRequestCo
 	sdk.OriginServerName = local.OriginServerName
 	sdk.CAPool = local.CAPool
 	sdk.NoTLSVerify = local.NoTLSVerify
-	sdk.Http2Origin = local.Http2Origin
+	sdk.Http2Origin = local.HTTP2Origin
 	sdk.DisableChunkedEncoding = local.DisableChunkedEncoding
 	sdk.BastionMode = local.BastionMode
 	sdk.ProxyAddress = local.ProxyAddress

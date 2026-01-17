@@ -37,9 +37,8 @@ type DomainResolver struct {
 	log    logr.Logger
 
 	// Cache for CloudflareDomain list
-	mu          sync.RWMutex
-	domainsOnce sync.Once
-	domains     []networkingv1alpha2.CloudflareDomain
+	mu      sync.RWMutex
+	domains []networkingv1alpha2.CloudflareDomain
 }
 
 // NewDomainResolver creates a new DomainResolver
@@ -91,7 +90,6 @@ func (r *DomainResolver) Resolve(ctx context.Context, hostname string) (*DomainI
 		// Exact match
 		if hostname == domainName {
 			bestMatch = domain
-			bestMatchLen = len(domainName)
 			break // Exact match is the best
 		}
 

@@ -163,7 +163,7 @@ func (*Reconciler) createOrUpdateDNSAutomaticInZone(ctx context.Context, apiClie
 	target := fmt.Sprintf("%s.cfargotunnel.com", tunnelID)
 
 	// Try to get existing DNS record using InZone method
-	existingID, err := apiClient.GetDNSCNameIdInZone(zoneID, hostname)
+	existingID, err := apiClient.GetDNSCNameIDInZone(zoneID, hostname)
 	if err != nil {
 		// This is a real error (API failure or multiple records found)
 		return fmt.Errorf("failed to check existing DNS record: %w", err)
@@ -188,6 +188,8 @@ func (*Reconciler) createOrUpdateDNSAutomaticInZone(ctx context.Context, apiClie
 }
 
 // createOrUpdateDNSAutomatic creates or updates a DNS CNAME record via Cloudflare API (legacy, uses ValidZoneId)
+//
+//nolint:unused // legacy function kept for reference
 func (*Reconciler) createOrUpdateDNSAutomatic(ctx context.Context, apiClient *cf.API, hostname, tunnelID string, _ bool) error {
 	logger := log.FromContext(ctx)
 
@@ -413,7 +415,7 @@ func (r *Reconciler) cleanupDNSAutomatic(
 		}
 
 		// Get DNS record ID using InZone method
-		recordID, err := apiClient.GetDNSCNameIdInZone(zoneID, hostname)
+		recordID, err := apiClient.GetDNSCNameIDInZone(zoneID, hostname)
 		if err != nil {
 			if cf.IsNotFoundError(err) {
 				logger.Info("DNS record not found, skipping deletion", "hostname", hostname)

@@ -9,6 +9,13 @@ import (
 	"github.com/cloudflare/cloudflare-go"
 )
 
+// DNS record type constants.
+const (
+	DNSRecordTypeA     = "A"
+	DNSRecordTypeAAAA  = "AAAA"
+	DNSRecordTypeCNAME = "CNAME"
+)
+
 // DNSRecordParams contains parameters for creating/updating a DNS record.
 type DNSRecordParams struct {
 	Name     string
@@ -198,7 +205,7 @@ func (c *API) CreateDNSRecord(params DNSRecordParams) (*DNSRecordResult, error) 
 		Comment: params.Comment,
 	}
 
-	if params.Type == "A" || params.Type == "AAAA" || params.Type == "CNAME" {
+	if params.Type == DNSRecordTypeA || params.Type == DNSRecordTypeAAAA || params.Type == DNSRecordTypeCNAME {
 		createParams.Proxied = &params.Proxied
 	}
 
@@ -276,7 +283,7 @@ func (c *API) UpdateDNSRecord(zoneID, recordID string, params DNSRecordParams) (
 		Comment: &params.Comment,
 	}
 
-	if params.Type == "A" || params.Type == "AAAA" || params.Type == "CNAME" {
+	if params.Type == DNSRecordTypeA || params.Type == DNSRecordTypeAAAA || params.Type == DNSRecordTypeCNAME {
 		updateParams.Proxied = &params.Proxied
 	}
 
@@ -337,10 +344,10 @@ func (c *API) DeleteDNSRecord(zoneID, recordID string) error {
 // These methods allow specifying Zone ID directly instead of relying on c.ValidZoneId.
 // This enables multi-zone support via DomainResolver.
 
-// GetDNSCNameIdInZone returns the ID of the CNAME record for the given fqdn in the specified zone.
+// GetDNSCNameIDInZone returns the ID of the CNAME record for the given fqdn in the specified zone.
 // Returns empty string and nil error if the record does not exist (this is not an error condition).
 // Returns empty string and error if there was an actual API error or multiple records found.
-func (c *API) GetDNSCNameIdInZone(zoneID, fqdn string) (string, error) {
+func (c *API) GetDNSCNameIDInZone(zoneID, fqdn string) (string, error) {
 	ctx := context.Background()
 	rc := cloudflare.ZoneIdentifier(zoneID)
 	params := cloudflare.ListDNSRecordsParams{
@@ -366,9 +373,9 @@ func (c *API) GetDNSCNameIdInZone(zoneID, fqdn string) (string, error) {
 	}
 }
 
-// GetDNSRecordIdInZone returns the ID of a DNS record of the given type for the fqdn in the specified zone.
+// GetDNSRecordIDInZone returns the ID of a DNS record of the given type for the fqdn in the specified zone.
 // Returns empty string and nil error if the record does not exist.
-func (c *API) GetDNSRecordIdInZone(zoneID, fqdn, recordType string) (string, error) {
+func (c *API) GetDNSRecordIDInZone(zoneID, fqdn, recordType string) (string, error) {
 	ctx := context.Background()
 	rc := cloudflare.ZoneIdentifier(zoneID)
 	params := cloudflare.ListDNSRecordsParams{
@@ -407,7 +414,7 @@ func (c *API) CreateDNSRecordInZone(zoneID string, params DNSRecordParams) (*DNS
 		Comment: params.Comment,
 	}
 
-	if params.Type == "A" || params.Type == "AAAA" || params.Type == "CNAME" {
+	if params.Type == DNSRecordTypeA || params.Type == DNSRecordTypeAAAA || params.Type == DNSRecordTypeCNAME {
 		createParams.Proxied = &params.Proxied
 	}
 
@@ -458,7 +465,7 @@ func (c *API) UpdateDNSRecordInZone(zoneID, recordID string, params DNSRecordPar
 		Comment: &params.Comment,
 	}
 
-	if params.Type == "A" || params.Type == "AAAA" || params.Type == "CNAME" {
+	if params.Type == DNSRecordTypeA || params.Type == DNSRecordTypeAAAA || params.Type == DNSRecordTypeCNAME {
 		updateParams.Proxied = &params.Proxied
 	}
 
@@ -517,22 +524,22 @@ func (c *API) DeleteDNSRecordInZone(zoneID, recordID string) error {
 
 // InsertOrUpdateCNameInZone upserts DNS CNAME record for the given FQDN to point to the tunnel in the specified zone.
 // If tunnelID is empty, it uses c.ValidTunnelId.
-func (c *API) InsertOrUpdateCNameInZone(zoneID, fqdn, dnsId, tunnelID string, proxied bool) (string, error) {
+func (c *API) InsertOrUpdateCNameInZone(zoneID, fqdn, dnsID, tunnelID string, proxied bool) (string, error) {
 	if tunnelID == "" {
 		tunnelID = c.ValidTunnelId
 	}
 	if tunnelID == "" {
-		return "", ErrInvalidTunnelId
+		return "", ErrInvalidTunnelID
 	}
 
 	ctx := context.Background()
 	rc := cloudflare.ZoneIdentifier(zoneID)
 	target := tunnelID + ".cfargotunnel.com"
 
-	if dnsId != "" {
-		c.Log.Info("Updating existing CNAME record in zone", "zoneId", zoneID, "fqdn", fqdn, "dnsId", dnsId)
+	if dnsID != "" {
+		c.Log.Info("Updating existing CNAME record in zone", "zoneId", zoneID, "fqdn", fqdn, "dnsID", dnsID)
 		updateParams := cloudflare.UpdateDNSRecordParams{
-			ID:      dnsId,
+			ID:      dnsID,
 			Type:    "CNAME",
 			Name:    fqdn,
 			Content: target,
@@ -546,7 +553,7 @@ func (c *API) InsertOrUpdateCNameInZone(zoneID, fqdn, dnsId, tunnelID string, pr
 			return "", err
 		}
 		c.Log.Info("DNS record updated in zone", "zoneId", zoneID, "fqdn", fqdn)
-		return dnsId, nil
+		return dnsID, nil
 	}
 
 	c.Log.Info("Creating CNAME record in zone", "zoneId", zoneID, "fqdn", fqdn)

@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
+	"github.com/StringKe/cloudflare-operator/internal/service"
+	tunnelsvc "github.com/StringKe/cloudflare-operator/internal/service/tunnel"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -29,6 +31,11 @@ import (
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 
 	"k8s.io/client-go/tools/record"
+)
+
+const (
+	tunnelKindClusterTunnel = "clustertunnel"
+	tunnelKindTunnel        = "tunnel"
 )
 
 // TunnelBindingReconciler reconciles a TunnelBinding object
@@ -68,7 +75,7 @@ func (r *TunnelBindingReconciler) initStruct(ctx context.Context, tunnelBinding 
 
 	// Process based on Tunnel Kind
 	switch strings.ToLower(r.binding.TunnelRef.Kind) {
-	case "clustertunnel":
+	case tunnelKindClusterTunnel:
 		namespacedName := apitypes.NamespacedName{Name: r.binding.TunnelRef.Name, Namespace: r.Namespace}
 		clusterTunnel := &networkingv1alpha2.ClusterTunnel{}
 		if err := r.Get(r.ctx, namespacedName, clusterTunnel); err != nil {
@@ -86,7 +93,7 @@ func (r *TunnelBindingReconciler) initStruct(ctx context.Context, tunnelBinding 
 			r.Recorder.Event(tunnelBinding, corev1.EventTypeWarning, "ErrApiConfig", "Error getting API details")
 			return err
 		}
-	case "tunnel":
+	case tunnelKindTunnel:
 		namespacedName := apitypes.NamespacedName{Name: r.binding.TunnelRef.Name, Namespace: r.binding.Namespace}
 		tunnel := &networkingv1alpha2.Tunnel{}
 		if err := r.Get(r.ctx, namespacedName, tunnel); err != nil {
@@ -276,6 +283,23 @@ func (r *TunnelBindingReconciler) deletionLogic() error {
 	if controllerutil.ContainsFinalizer(r.binding, tunnelFinalizer) {
 		// Run finalization logic. If the finalization logic fails,
 		// don't remove the finalizer so that we can retry during the next reconciliation.
+
+		// Unregister from SyncState before deleting DNS entries
+		if r.tunnelID != "" {
+			svc := tunnelsvc.NewService(r.Client)
+			source := service.Source{
+				Kind:      "TunnelBinding",
+				Namespace: r.binding.Namespace,
+				Name:      r.binding.Name,
+			}
+
+			if err := svc.Unregister(r.ctx, r.tunnelID, source); err != nil {
+				r.log.Error(err, "Failed to unregister from SyncState", "tunnelId", r.tunnelID)
+				// Don't block deletion on SyncState cleanup failure
+			} else {
+				r.log.Info("Unregistered from SyncState", "tunnelId", r.tunnelID)
+			}
+		}
 
 		// P0 FIX: Aggregate all errors and only remove finalizer if ALL deletions succeed
 		var errs []error
@@ -578,9 +602,12 @@ func (r *TunnelBindingReconciler) getServiceProto(tunnelProto string, validProto
 	return serviceProto
 }
 
-// configureCloudflareDaemon syncs tunnel configuration to Cloudflare API using read-merge-write.
-// This uses MergeAndSync to avoid race conditions with other controllers (Ingress, Gateway, Tunnel).
-// In token mode, cloudflared automatically pulls the latest configuration from cloud.
+// configureCloudflareDaemon registers ingress rules to the CloudflareSyncState CRD
+// via TunnelConfigService. The actual sync to Cloudflare API is handled by TunnelConfigSyncController.
+//
+// This is part of the unified sync architecture where:
+// - TunnelBinding controller registers rules via TunnelConfigService
+// - TunnelConfigSyncController aggregates all sources and syncs to Cloudflare API
 func (r *TunnelBindingReconciler) configureCloudflareDaemon() error {
 	bindings, err := r.getRelevantTunnelBindings()
 	if err != nil {
@@ -588,9 +615,8 @@ func (r *TunnelBindingReconciler) configureCloudflareDaemon() error {
 		return err
 	}
 
-	// Total number of ingresses is the number of services + 1 for the catchall ingress
-	// Set to 16 initially
-	finalIngresses := make([]cf.UnvalidatedIngressRule, 0, 16)
+	// Build ingress rules from all bindings
+	rules := make([]tunnelsvc.IngressRule, 0, 16)
 	for _, binding := range bindings {
 		for i, subject := range binding.Subjects {
 			targetService := ""
@@ -599,66 +625,121 @@ func (r *TunnelBindingReconciler) configureCloudflareDaemon() error {
 			} else {
 				targetService = binding.Status.Services[i].Target
 			}
-			originRequest := cf.OriginRequestConfig{}
-			originRequest.NoTLSVerify = &subject.Spec.NoTlsVerify
-			originRequest.Http2Origin = &subject.Spec.Http2Origin
-			originRequest.ProxyAddress = &subject.Spec.ProxyAddress
-			originRequest.ProxyPort = &subject.Spec.ProxyPort
-			originRequest.ProxyType = &subject.Spec.ProxyType
+
+			rule := tunnelsvc.IngressRule{
+				Hostname: binding.Status.Services[i].Hostname,
+				Service:  targetService,
+				Path:     subject.Spec.Path,
+			}
+
+			// Convert origin request config
+			originRequest := &tunnelsvc.OriginRequestConfig{}
+			hasOriginConfig := false
+
+			if subject.Spec.NoTlsVerify {
+				originRequest.NoTLSVerify = &subject.Spec.NoTlsVerify
+				hasOriginConfig = true
+			}
+			if subject.Spec.HTTP2Origin {
+				originRequest.HTTP2Origin = &subject.Spec.HTTP2Origin
+				hasOriginConfig = true
+			}
+			if subject.Spec.ProxyAddress != "" {
+				originRequest.ProxyAddress = &subject.Spec.ProxyAddress
+				hasOriginConfig = true
+			}
+			if subject.Spec.ProxyPort != 0 {
+				originRequest.ProxyPort = &subject.Spec.ProxyPort
+				hasOriginConfig = true
+			}
+			if subject.Spec.ProxyType != "" {
+				originRequest.ProxyType = &subject.Spec.ProxyType
+				hasOriginConfig = true
+			}
 			if caPool := subject.Spec.CaPool; caPool != "" {
 				caPath := fmt.Sprintf("/etc/cloudflared/certs/%s", caPool)
 				originRequest.CAPool = &caPath
+				hasOriginConfig = true
 			}
 
-			finalIngresses = append(finalIngresses, cf.UnvalidatedIngressRule{
-				Hostname:      binding.Status.Services[i].Hostname,
-				Service:       targetService,
-				Path:          subject.Spec.Path,
-				OriginRequest: originRequest,
-			})
+			if hasOriginConfig {
+				rule.OriginRequest = originRequest
+			}
+
+			rules = append(rules, rule)
 		}
 	}
 
-	// Catchall ingress (will be handled by MergeAndSync)
-	finalIngresses = append(finalIngresses, cf.UnvalidatedIngressRule{
-		Service: r.fallbackTarget,
-	})
+	// Get credentials reference from tunnel
+	credRef := r.getCredentialsReferenceFromTunnel()
 
-	// Prepare merge options for read-merge-write
-	source := fmt.Sprintf("TunnelBinding/%s/%s", r.binding.Namespace, r.binding.Name)
-	mergeOpts := cf.MergeOptions{
-		Source:            source,
-		PreviousHostnames: r.binding.Status.SyncedHostnames, // Use previously synced hostnames for cleanup
-		CurrentRules:      finalIngresses,
-		FallbackTarget:    r.fallbackTarget,
-		// Note: WarpRouting is controlled by Tunnel/ClusterTunnel controller, not TunnelBinding
-		// TunnelBinding should preserve existing warp-routing state
-		WarpRouting: nil,
+	// Register rules to SyncState via TunnelConfigService
+	svc := tunnelsvc.NewService(r.Client)
+	opts := tunnelsvc.RegisterRulesOptions{
+		TunnelID:       r.tunnelID,
+		AccountID:      r.cfAPI.ValidAccountId,
+		CredentialsRef: credRef,
+		Source: service.Source{
+			Kind:      "TunnelBinding",
+			Namespace: r.binding.Namespace,
+			Name:      r.binding.Name,
+		},
+		Rules:    rules,
+		Priority: tunnelsvc.PriorityBinding,
 	}
 
-	// Use MergeAndSync for safe read-merge-write operation
-	// This prevents race conditions with other controllers
-	result, err := r.cfAPI.MergeAndSync(r.tunnelID, mergeOpts)
-	if err != nil {
-		r.log.Error(err, "failed to merge and sync tunnel configuration", "tunnelID", r.tunnelID)
-		return fmt.Errorf("merge and sync tunnel configuration: %w", err)
+	if err := svc.RegisterRules(r.ctx, opts); err != nil {
+		r.log.Error(err, "failed to register rules to SyncState", "tunnelID", r.tunnelID)
+		return fmt.Errorf("register rules to SyncState: %w", err)
 	}
 
-	// Update status with synced hostnames and config version
-	if err := UpdateStatusWithConflictRetry(r.ctx, r.Client, r.binding, func() {
-		r.binding.Status.SyncedHostnames = result.SyncedHostnames
-		r.binding.Status.ConfigVersion = result.Version
-	}); err != nil {
-		r.log.Error(err, "Failed to update TunnelBinding status with sync result")
-		// Don't return error - the sync itself succeeded
-	}
-
-	r.log.Info("Merged and synced tunnel configuration to Cloudflare API",
+	r.log.Info("Registered ingress rules to SyncState",
 		"tunnelID", r.tunnelID,
-		"source", source,
-		"syncedHostnames", result.SyncedHostnames,
-		"configVersion", result.Version)
+		"ruleCount", len(rules),
+		"source", fmt.Sprintf("TunnelBinding/%s/%s", r.binding.Namespace, r.binding.Name))
 	return nil
+}
+
+// getCredentialsReferenceFromTunnel extracts the CredentialsReference from the referenced Tunnel or ClusterTunnel.
+func (r *TunnelBindingReconciler) getCredentialsReferenceFromTunnel() networkingv1alpha2.CredentialsReference {
+	kind := strings.ToLower(r.binding.TunnelRef.Kind)
+	if kind == tunnelKindClusterTunnel {
+		return r.getCredentialsFromClusterTunnel()
+	}
+	if kind == tunnelKindTunnel {
+		return r.getCredentialsFromTunnel()
+	}
+	return networkingv1alpha2.CredentialsReference{}
+}
+
+// getCredentialsFromClusterTunnel extracts CredentialsReference from a ClusterTunnel.
+func (r *TunnelBindingReconciler) getCredentialsFromClusterTunnel() networkingv1alpha2.CredentialsReference {
+	clusterTunnel := &networkingv1alpha2.ClusterTunnel{}
+	key := apitypes.NamespacedName{Name: r.binding.TunnelRef.Name, Namespace: r.Namespace}
+	if err := r.Get(r.ctx, key, clusterTunnel); err != nil {
+		return networkingv1alpha2.CredentialsReference{}
+	}
+	if clusterTunnel.Spec.Cloudflare.CredentialsRef == nil {
+		return networkingv1alpha2.CredentialsReference{}
+	}
+	return networkingv1alpha2.CredentialsReference{
+		Name: clusterTunnel.Spec.Cloudflare.CredentialsRef.Name,
+	}
+}
+
+// getCredentialsFromTunnel extracts CredentialsReference from a Tunnel.
+func (r *TunnelBindingReconciler) getCredentialsFromTunnel() networkingv1alpha2.CredentialsReference {
+	tunnel := &networkingv1alpha2.Tunnel{}
+	key := apitypes.NamespacedName{Name: r.binding.TunnelRef.Name, Namespace: r.binding.Namespace}
+	if err := r.Get(r.ctx, key, tunnel); err != nil {
+		return networkingv1alpha2.CredentialsReference{}
+	}
+	if tunnel.Spec.Cloudflare.CredentialsRef == nil {
+		return networkingv1alpha2.CredentialsReference{}
+	}
+	return networkingv1alpha2.CredentialsReference{
+		Name: tunnel.Spec.Cloudflare.CredentialsRef.Name,
+	}
 }
 
 // findTunnelBindingsForTunnel returns reconcile requests for TunnelBindings that reference the given Tunnel
@@ -678,7 +759,7 @@ func (r *TunnelBindingReconciler) findTunnelBindingsForTunnel(ctx context.Contex
 
 	var requests []reconcile.Request
 	for _, binding := range bindings.Items {
-		if strings.ToLower(binding.TunnelRef.Kind) == "tunnel" &&
+		if strings.ToLower(binding.TunnelRef.Kind) == tunnelKindTunnel &&
 			binding.TunnelRef.Name == tunnel.Name &&
 			binding.Namespace == tunnel.Namespace {
 			log.Info("Tunnel changed, triggering TunnelBinding reconcile",
@@ -712,7 +793,7 @@ func (r *TunnelBindingReconciler) findTunnelBindingsForClusterTunnel(ctx context
 
 	var requests []reconcile.Request
 	for _, binding := range bindings.Items {
-		if strings.ToLower(binding.TunnelRef.Kind) == "clustertunnel" &&
+		if strings.ToLower(binding.TunnelRef.Kind) == tunnelKindClusterTunnel &&
 			binding.TunnelRef.Name == clusterTunnel.Name {
 			log.Info("ClusterTunnel changed, triggering TunnelBinding reconcile",
 				"clustertunnel", clusterTunnel.Name,

@@ -6,27 +6,29 @@ package redirectrule
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
-	"github.com/cloudflare/cloudflare-go"
-	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
+	"github.com/StringKe/cloudflare-operator/internal/service"
+	rulesetsvc "github.com/StringKe/cloudflare-operator/internal/service/ruleset"
 )
 
 const (
@@ -41,10 +43,8 @@ type Reconciler struct {
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
 
-	// Internal state
-	ctx  context.Context
-	log  logr.Logger
-	rule *networkingv1alpha2.RedirectRule
+	// Services
+	redirectRuleService *rulesetsvc.RedirectRuleService
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=redirectrules,verbs=get;list;watch;create;update;patch;delete
@@ -52,280 +52,290 @@ type Reconciler struct {
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=redirectrules/finalizers,verbs=update
 
 // Reconcile handles RedirectRule reconciliation
-//
-//nolint:revive // cognitive complexity is acceptable for main reconcile loop
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	r.ctx = ctx
-	r.log = ctrl.LoggerFrom(ctx)
+	logger := log.FromContext(ctx)
 
 	// Get the RedirectRule resource
-	r.rule = &networkingv1alpha2.RedirectRule{}
-	if err := r.Get(ctx, req.NamespacedName, r.rule); err != nil {
+	rule := &networkingv1alpha2.RedirectRule{}
+	if err := r.Get(ctx, req.NamespacedName, rule); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
-		r.log.Error(err, "unable to fetch RedirectRule")
+		logger.Error(err, "unable to fetch RedirectRule")
 		return ctrl.Result{}, err
 	}
 
+	// Resolve credentials and zone ID
+	creds, err := r.resolveCredentials(ctx, rule)
+	if err != nil {
+		logger.Error(err, "Failed to resolve credentials")
+		return r.updateStatusError(ctx, rule, err)
+	}
+	credRef := networkingv1alpha2.CredentialsReference{Name: creds.CredentialsName}
+
 	// Handle deletion
-	if !r.rule.DeletionTimestamp.IsZero() {
-		return r.handleDeletion()
+	if !rule.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, rule, credRef)
 	}
 
 	// Add finalizer if not present
-	if !controllerutil.ContainsFinalizer(r.rule, finalizerName) {
-		controllerutil.AddFinalizer(r.rule, finalizerName)
-		if err := r.Update(ctx, r.rule); err != nil {
+	if !controllerutil.ContainsFinalizer(rule, finalizerName) {
+		controllerutil.AddFinalizer(rule, finalizerName)
+		if err := r.Update(ctx, rule); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
 
 	// Validate that at least one rule type is specified
-	if len(r.rule.Spec.Rules) == 0 && len(r.rule.Spec.WildcardRules) == 0 {
-		r.updateState(networkingv1alpha2.RedirectRuleStateError,
-			"At least one rule or wildcardRule must be specified")
-		return ctrl.Result{}, nil
+	if len(rule.Spec.Rules) == 0 && len(rule.Spec.WildcardRules) == 0 {
+		err := errors.New("at least one rule or wildcardRule must be specified")
+		return r.updateStatusError(ctx, rule, err)
 	}
 
-	// Create API client
-	cfAPI, err := r.getAPIClient()
+	// Register RedirectRule configuration to SyncState
+	return r.registerRule(ctx, rule, creds.AccountID, creds.ZoneID, credRef)
+}
+
+// resolveCredentials resolves the credentials reference, account ID and zone ID.
+func (r *Reconciler) resolveCredentials(
+	ctx context.Context,
+	rule *networkingv1alpha2.RedirectRule,
+) (controller.CredentialsResult, error) {
+	logger := log.FromContext(ctx)
+
+	var result controller.CredentialsResult
+
+	// Get credentials reference
+	if rule.Spec.CredentialsRef != nil {
+		result.CredentialsName = rule.Spec.CredentialsRef.Name
+	}
+
+	// Get account ID and zone ID from credentials
+	cfCredRef := &networkingv1alpha2.CloudflareCredentialsRef{Name: result.CredentialsName}
+	apiClient, err := cf.NewAPIClientFromCredentialsRef(ctx, r.Client, cfCredRef)
 	if err != nil {
-		r.updateState(networkingv1alpha2.RedirectRuleStateError,
-			fmt.Sprintf("Failed to get API client: %v", err))
-		r.Recorder.Event(r.rule, corev1.EventTypeWarning,
-			controller.EventReasonAPIError, cf.SanitizeErrorMessage(err))
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+		return result, fmt.Errorf("failed to create API client: %w", err)
+	}
+
+	result.AccountID = apiClient.AccountId
+	if result.AccountID == "" {
+		logger.V(1).Info("Account ID not available from credentials, will be resolved during sync")
 	}
 
 	// Get zone ID
-	zoneID, err := r.getZoneID(cfAPI)
+	apiClient.Domain = rule.Spec.Zone
+	zoneID, err := apiClient.GetZoneId()
 	if err != nil {
-		r.updateState(networkingv1alpha2.RedirectRuleStateError,
-			fmt.Sprintf("Failed to get zone ID: %v", err))
-		r.Recorder.Event(r.rule, corev1.EventTypeWarning,
-			controller.EventReasonAPIError, cf.SanitizeErrorMessage(err))
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+		return result, fmt.Errorf("failed to get zone ID for %s: %w", rule.Spec.Zone, err)
 	}
+	result.ZoneID = zoneID
 
-	// Sync rules
-	return r.syncRules(cfAPI, zoneID)
+	return result, nil
 }
 
 // handleDeletion handles the deletion of RedirectRule
-//
-//nolint:revive // cognitive complexity is acceptable for deletion handling
-func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
-	if !controllerutil.ContainsFinalizer(r.rule, finalizerName) {
+func (r *Reconciler) handleDeletion(
+	ctx context.Context,
+	rule *networkingv1alpha2.RedirectRule,
+	credRef networkingv1alpha2.CredentialsReference,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	if !controllerutil.ContainsFinalizer(rule, finalizerName) {
 		return ctrl.Result{}, nil
 	}
 
-	// Clear rules from the entrypoint ruleset
-	if r.rule.Status.ZoneID != "" {
-		cfAPI, err := r.getAPIClient()
-		if err == nil {
-			_, err := cfAPI.UpdateEntrypointRuleset(
-				r.ctx,
-				r.rule.Status.ZoneID,
-				redirectPhase,
-				"",
-				[]cloudflare.RulesetRule{},
-			)
-			if err != nil && !cf.IsNotFoundError(err) {
-				r.log.Error(err, "Failed to clear redirect rules")
-			} else {
-				r.log.Info("Redirect rules cleared")
-			}
-		}
+	// Clear rules from Cloudflare
+	if r.clearRulesFromCloudflare(ctx, rule, credRef) {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	// Unregister from SyncState
+	source := service.Source{
+		Kind:      "RedirectRule",
+		Namespace: rule.Namespace,
+		Name:      rule.Name,
+	}
+	if err := r.redirectRuleService.Unregister(ctx, rule.Status.RulesetID, source); err != nil {
+		logger.Error(err, "Failed to unregister RedirectRule from SyncState")
+		// Non-fatal - continue with finalizer removal
 	}
 
 	// Remove finalizer
-	if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.rule, func() {
-		controllerutil.RemoveFinalizer(r.rule, finalizerName)
+	if err := controller.UpdateWithConflictRetry(ctx, r.Client, rule, func() {
+		controllerutil.RemoveFinalizer(rule, finalizerName)
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
 
+	r.Recorder.Event(rule, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
 	return ctrl.Result{}, nil
 }
 
-// syncRules syncs the redirect rules to Cloudflare
-func (r *Reconciler) syncRules(cfAPI *cf.API, zoneID string) (ctrl.Result, error) {
-	r.updateState(networkingv1alpha2.RedirectRuleStateSyncing, "Syncing redirect rules")
+// clearRulesFromCloudflare clears the redirect rules from Cloudflare.
+// Returns true if reconciliation should be requeued.
+func (r *Reconciler) clearRulesFromCloudflare(
+	ctx context.Context,
+	rule *networkingv1alpha2.RedirectRule,
+	credRef networkingv1alpha2.CredentialsReference,
+) bool {
+	if rule.Status.ZoneID == "" || rule.Status.RulesetID == "" {
+		return false
+	}
 
-	// Convert rules to Cloudflare format
-	rules := r.convertRules()
-
-	// Update entrypoint ruleset
-	result, err := cfAPI.UpdateEntrypointRuleset(
-		r.ctx,
-		zoneID,
-		redirectPhase,
-		r.rule.Spec.Description,
-		rules,
-	)
+	logger := log.FromContext(ctx)
+	cfCredRef := &networkingv1alpha2.CloudflareCredentialsRef{Name: credRef.Name}
+	cfAPI, err := cf.NewAPIClientFromCredentialsRef(ctx, r.Client, cfCredRef)
 	if err != nil {
-		r.updateState(networkingv1alpha2.RedirectRuleStateError,
-			fmt.Sprintf("Failed to update rules: %v", err))
-		r.Recorder.Event(r.rule, corev1.EventTypeWarning,
-			controller.EventReasonAPIError, cf.SanitizeErrorMessage(err))
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+		return false // Skip if can't create client
 	}
 
-	// Update status
-	r.rule.Status.RulesetID = result.ID
-	r.rule.Status.ZoneID = zoneID
-	r.rule.Status.RuleCount = len(result.Rules)
+	_, err = cfAPI.UpdateEntrypointRuleset(ctx, rule.Status.ZoneID, redirectPhase, "", nil)
+	if err == nil {
+		logger.Info("Redirect rules cleared")
+		r.Recorder.Event(rule, corev1.EventTypeNormal, "Deleted", "Redirect rules cleared")
+		return false
+	}
 
-	r.updateState(networkingv1alpha2.RedirectRuleStateReady, "Redirect rules synced successfully")
-	r.Recorder.Event(r.rule, corev1.EventTypeNormal, "Synced",
-		fmt.Sprintf("Redirect rules synced with %d rules", len(result.Rules)))
+	if cf.IsNotFoundError(err) {
+		return false
+	}
 
-	// Requeue periodically to detect drift
-	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
+	logger.Error(err, "Failed to clear redirect rules")
+	r.Recorder.Event(rule, corev1.EventTypeWarning, "DeleteFailed", cf.SanitizeErrorMessage(err))
+	return true
 }
 
-// convertRules converts RedirectRule rules to Cloudflare RulesetRule format
-//
-//nolint:revive // cognitive complexity is acceptable for rule conversion
-func (r *Reconciler) convertRules() []cloudflare.RulesetRule {
-	totalRules := len(r.rule.Spec.Rules) + len(r.rule.Spec.WildcardRules)
-	rules := make([]cloudflare.RulesetRule, 0, totalRules)
+// registerRule registers the RedirectRule configuration to SyncState.
+// The actual sync to Cloudflare is handled by RedirectRuleSyncController.
+func (r *Reconciler) registerRule(
+	ctx context.Context,
+	rule *networkingv1alpha2.RedirectRule,
+	accountID, zoneID string,
+	credRef networkingv1alpha2.CredentialsReference,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
 
-	// Convert expression-based rules
-	for _, rule := range r.rule.Spec.Rules {
-		cfRule := cloudflare.RulesetRule{
-			Action:      "redirect",
-			Expression:  rule.Expression,
-			Description: rule.Name,
-			Enabled:     ptr.To(rule.Enabled),
-			ActionParameters: &cloudflare.RulesetRuleActionParameters{
-				FromValue: &cloudflare.RulesetRuleActionParametersFromValue{
-					PreserveQueryString: ptr.To(rule.PreserveQueryString),
-				},
+	// Build expression-based rules configuration
+	rules := make([]rulesetsvc.RedirectRuleDefinitionConfig, len(rule.Spec.Rules))
+	for i, ruleSpec := range rule.Spec.Rules {
+		rules[i] = rulesetsvc.RedirectRuleDefinitionConfig{
+			Name:       ruleSpec.Name,
+			Expression: ruleSpec.Expression,
+			Enabled:    ruleSpec.Enabled,
+			Target: rulesetsvc.RedirectTargetConfig{
+				URL:        ruleSpec.Target.URL,
+				Expression: ruleSpec.Target.Expression,
 			},
+			StatusCode:          int(ruleSpec.StatusCode),
+			PreserveQueryString: ruleSpec.PreserveQueryString,
 		}
-
-		// Set status code
-		if rule.StatusCode > 0 {
-			cfRule.ActionParameters.FromValue.StatusCode = uint16(rule.StatusCode)
-		} else {
-			cfRule.ActionParameters.FromValue.StatusCode = 302
-		}
-
-		// Set target URL
-		cfRule.ActionParameters.FromValue.TargetURL = cloudflare.RulesetRuleActionParametersTargetURL{}
-		if rule.Target.URL != "" {
-			cfRule.ActionParameters.FromValue.TargetURL.Value = rule.Target.URL
-		}
-		if rule.Target.Expression != "" {
-			cfRule.ActionParameters.FromValue.TargetURL.Expression = rule.Target.Expression
-		}
-
-		rules = append(rules, cfRule)
 	}
 
-	// Convert wildcard-based rules
-	for _, rule := range r.rule.Spec.WildcardRules {
-		// Build the expression from wildcard pattern
-		expression := r.buildWildcardExpression(rule)
-
-		cfRule := cloudflare.RulesetRule{
-			Action:      "redirect",
-			Expression:  expression,
-			Description: rule.Name,
-			Enabled:     ptr.To(rule.Enabled),
-			ActionParameters: &cloudflare.RulesetRuleActionParameters{
-				FromValue: &cloudflare.RulesetRuleActionParametersFromValue{
-					PreserveQueryString: ptr.To(rule.PreserveQueryString),
-					TargetURL: cloudflare.RulesetRuleActionParametersTargetURL{
-						Value: rule.TargetURL,
-					},
-				},
-			},
+	// Build wildcard-based rules configuration
+	wildcardRules := make([]rulesetsvc.WildcardRedirectRuleConfig, len(rule.Spec.WildcardRules))
+	for i, ruleSpec := range rule.Spec.WildcardRules {
+		wildcardRules[i] = rulesetsvc.WildcardRedirectRuleConfig{
+			Name:                ruleSpec.Name,
+			Enabled:             ruleSpec.Enabled,
+			SourceURL:           ruleSpec.SourceURL,
+			TargetURL:           ruleSpec.TargetURL,
+			StatusCode:          int(ruleSpec.StatusCode),
+			PreserveQueryString: ruleSpec.PreserveQueryString,
 		}
-
-		// Set status code
-		if rule.StatusCode > 0 {
-			cfRule.ActionParameters.FromValue.StatusCode = uint16(rule.StatusCode)
-		} else {
-			cfRule.ActionParameters.FromValue.StatusCode = 301
-		}
-
-		rules = append(rules, cfRule)
 	}
 
-	return rules
+	// Build redirect rule configuration
+	config := rulesetsvc.RedirectRuleConfig{
+		Zone:          rule.Spec.Zone,
+		Description:   rule.Spec.Description,
+		Rules:         rules,
+		WildcardRules: wildcardRules,
+	}
+
+	// Create source reference
+	source := service.Source{
+		Kind:      "RedirectRule",
+		Namespace: rule.Namespace,
+		Name:      rule.Name,
+	}
+
+	// Register to SyncState
+	opts := rulesetsvc.RedirectRuleRegisterOptions{
+		AccountID:      accountID,
+		ZoneID:         zoneID,
+		RulesetID:      rule.Status.RulesetID, // May be empty for new rulesets
+		Source:         source,
+		Config:         config,
+		CredentialsRef: credRef,
+	}
+
+	if err := r.redirectRuleService.Register(ctx, opts); err != nil {
+		logger.Error(err, "Failed to register RedirectRule configuration")
+		r.Recorder.Event(rule, corev1.EventTypeWarning, "RegisterFailed",
+			fmt.Sprintf("Failed to register RedirectRule: %s", err.Error()))
+		return r.updateStatusError(ctx, rule, err)
+	}
+
+	r.Recorder.Event(rule, corev1.EventTypeNormal, "Registered",
+		fmt.Sprintf("Registered RedirectRule for zone '%s' to SyncState", rule.Spec.Zone))
+
+	// Update status to Pending - actual sync happens via RedirectRuleSyncController
+	return r.updateStatusPending(ctx, rule, zoneID)
 }
 
-// buildWildcardExpression builds a filter expression from a wildcard URL pattern
-func (*Reconciler) buildWildcardExpression(rule networkingv1alpha2.WildcardRedirectRule) string {
-	// For simplicity, convert wildcard patterns to expression
-	// In production, you might want more sophisticated pattern matching
-	// Example: https://example.com/blog/* -> http.request.uri.path matches "^/blog/.*"
+func (r *Reconciler) updateStatusError(
+	ctx context.Context,
+	rule *networkingv1alpha2.RedirectRule,
+	err error,
+) (ctrl.Result, error) {
+	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, rule, func() {
+		rule.Status.State = networkingv1alpha2.RedirectRuleStateError
+		rule.Status.Message = cf.SanitizeErrorMessage(err)
+		meta.SetStatusCondition(&rule.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: rule.Generation,
+			Reason:             "ReconcileError",
+			Message:            cf.SanitizeErrorMessage(err),
+			LastTransitionTime: metav1.Now(),
+		})
+		rule.Status.ObservedGeneration = rule.Generation
+	})
 
-	// This is a simplified implementation
-	// Cloudflare's wildcard redirects use a different mechanism (Single Redirects with wildcards)
-	// For the API, we need to construct proper expressions
+	if updateErr != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
+	}
 
-	// For now, use a basic expression that matches the full URL
-	return fmt.Sprintf(`http.request.full_uri wildcard "%s"`, rule.SourceURL)
+	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
-// getZoneID gets the zone ID for the zone name
-func (r *Reconciler) getZoneID(cfAPI *cf.API) (string, error) {
-	cfAPI.Domain = r.rule.Spec.Zone
+func (r *Reconciler) updateStatusPending(
+	ctx context.Context,
+	rule *networkingv1alpha2.RedirectRule,
+	zoneID string,
+) (ctrl.Result, error) {
+	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, rule, func() {
+		rule.Status.State = networkingv1alpha2.RedirectRuleStateSyncing
+		rule.Status.Message = "RedirectRule configuration registered, waiting for sync"
+		rule.Status.ZoneID = zoneID
+		meta.SetStatusCondition(&rule.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: rule.Generation,
+			Reason:             "Pending",
+			Message:            "RedirectRule configuration registered, waiting for sync",
+			LastTransitionTime: metav1.Now(),
+		})
+		rule.Status.ObservedGeneration = rule.Generation
+	})
 
-	zoneID, err := cfAPI.GetZoneId()
 	if err != nil {
-		return "", fmt.Errorf("failed to get zone ID for %s: %w", r.rule.Spec.Zone, err)
-	}
-	return zoneID, nil
-}
-
-// getAPIClient creates a Cloudflare API client from credentials
-func (r *Reconciler) getAPIClient() (*cf.API, error) {
-	if r.rule.Spec.CredentialsRef != nil {
-		ref := &networkingv1alpha2.CloudflareCredentialsRef{
-			Name: r.rule.Spec.CredentialsRef.Name,
-		}
-		return cf.NewAPIClientFromCredentialsRef(r.ctx, r.Client, ref)
-	}
-	return cf.NewAPIClientFromDefaultCredentials(r.ctx, r.Client)
-}
-
-// updateState updates the state and status of the RedirectRule
-func (r *Reconciler) updateState(state networkingv1alpha2.RedirectRuleState, message string) {
-	r.rule.Status.State = state
-	r.rule.Status.Message = message
-	r.rule.Status.ObservedGeneration = r.rule.Generation
-
-	condition := metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionFalse,
-		ObservedGeneration: r.rule.Generation,
-		LastTransitionTime: metav1.Now(),
-		Reason:             string(state),
-		Message:            message,
+		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
 	}
 
-	if state == networkingv1alpha2.RedirectRuleStateReady {
-		condition.Status = metav1.ConditionTrue
-		condition.Reason = "RulesReady"
-	}
-
-	controller.SetCondition(&r.rule.Status.Conditions, condition.Type,
-		condition.Status, condition.Reason, condition.Message)
-
-	if err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.rule, func() {
-		r.rule.Status.State = state
-		r.rule.Status.Message = message
-		r.rule.Status.ObservedGeneration = r.rule.Generation
-		controller.SetCondition(&r.rule.Status.Conditions, condition.Type,
-			condition.Status, condition.Reason, condition.Message)
-	}); err != nil {
-		r.log.Error(err, "failed to update status")
-	}
+	// Requeue to check for sync completion
+	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 }
 
 // findRulesForCredentials returns RedirectRules that reference the given credentials
@@ -368,12 +378,52 @@ func (r *Reconciler) findRulesForCredentials(
 	return requests
 }
 
+// findRulesForSyncState returns RedirectRules that are sources for the given SyncState
+func (*Reconciler) findRulesForSyncState(ctx context.Context, obj client.Object) []reconcile.Request {
+	logger := log.FromContext(ctx)
+
+	syncState, ok := obj.(*networkingv1alpha2.CloudflareSyncState)
+	if !ok {
+		return nil
+	}
+
+	// Only process RedirectRule type SyncStates
+	if syncState.Spec.ResourceType != networkingv1alpha2.SyncResourceRedirectRule {
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, source := range syncState.Spec.Sources {
+		if source.Ref.Kind == "RedirectRule" {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      source.Ref.Name,
+					Namespace: source.Ref.Namespace,
+				},
+			})
+		}
+	}
+
+	logger.V(1).Info("Found RedirectRules for SyncState update",
+		"syncState", syncState.Name,
+		"ruleCount", len(requests))
+
+	return requests
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.Recorder = mgr.GetEventRecorderFor("redirectrule-controller")
+
+	// Initialize RedirectRuleService
+	r.redirectRuleService = rulesetsvc.NewRedirectRuleService(mgr.GetClient())
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.RedirectRule{}).
 		Watches(&networkingv1alpha2.CloudflareCredentials{},
 			handler.EnqueueRequestsFromMapFunc(r.findRulesForCredentials)).
+		Watches(&networkingv1alpha2.CloudflareSyncState{},
+			handler.EnqueueRequestsFromMapFunc(r.findRulesForSyncState)).
 		Named("redirectrule").
 		Complete(r)
 }

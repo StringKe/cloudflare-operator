@@ -30,7 +30,8 @@ import (
 	"github.com/StringKe/cloudflare-operator/internal/controller"
 	"github.com/StringKe/cloudflare-operator/internal/controller/route"
 	tunnelpkg "github.com/StringKe/cloudflare-operator/internal/controller/tunnel"
-	"github.com/StringKe/cloudflare-operator/internal/credentials"
+	"github.com/StringKe/cloudflare-operator/internal/service"
+	tunnelsvc "github.com/StringKe/cloudflare-operator/internal/service/tunnel"
 )
 
 // GatewayReconciler reconciles a Gateway object
@@ -164,22 +165,28 @@ func (r *GatewayReconciler) handleDeletion(
 
 	logger.Info("Handling Gateway deletion", "name", gateway.Name)
 
-	// Resolve tunnel to update config
+	// Resolve tunnel to get tunnel ID for unregistering
 	resolver := tunnelpkg.NewResolver(r.Client, r.OperatorNamespace)
 	tunnel, err := resolver.Resolve(ctx, config.Spec.TunnelRef, config.Namespace)
 	if err != nil {
 		// Tunnel not found, just remove finalizer
 		logger.Info("Tunnel not found during deletion, removing finalizer")
 	} else {
-		// Build rules without this gateway's routes and update
-		// For now, just rebuild from remaining gateways
-		rules, buildErr := r.buildIngressRulesExcluding(ctx, gateway.Name, gateway.Namespace, config)
-		if buildErr != nil {
-			logger.Error(buildErr, "Failed to build ingress rules during deletion")
-		} else {
-			// Sync to Cloudflare API
-			if syncErr := r.syncTunnelConfigToAPI(ctx, tunnel, config, rules); syncErr != nil {
-				logger.Error(syncErr, "Failed to sync configuration to API during deletion")
+		// Unregister this Gateway's rules from SyncState
+		tunnelID := tunnel.GetStatus().TunnelId
+		if tunnelID != "" {
+			svc := tunnelsvc.NewService(r.Client)
+			source := service.Source{
+				Kind:      "Gateway",
+				Namespace: config.Namespace,
+				Name:      config.Name,
+			}
+			if unregErr := svc.Unregister(ctx, tunnelID, source); unregErr != nil {
+				logger.Error(unregErr, "Failed to unregister from SyncState", "tunnelId", tunnelID)
+				// Continue with finalizer removal - SyncState cleanup is best-effort
+			} else {
+				logger.Info("Unregistered Gateway rules from SyncState",
+					"tunnelId", tunnelID, "config", config.Name)
 			}
 		}
 	}
@@ -248,55 +255,6 @@ func (r *GatewayReconciler) buildIngressRules(
 		}
 		return allRules[i].Path < allRules[j].Path
 	})
-
-	// Add fallback rule
-	fallbackTarget := config.Spec.FallbackTarget
-	if fallbackTarget == "" {
-		fallbackTarget = "http_status:404"
-	}
-	allRules = append(allRules, cf.UnvalidatedIngressRule{
-		Service: fallbackTarget,
-	})
-
-	return allRules, nil
-}
-
-// buildIngressRulesExcluding builds rules excluding a specific gateway (for deletion)
-// nolint:revive // Cognitive complexity for rule aggregation logic
-func (r *GatewayReconciler) buildIngressRulesExcluding(
-	ctx context.Context,
-	excludeName string,
-	excludeNamespace string,
-	config *networkingv1alpha2.TunnelGatewayClassConfig,
-) ([]cf.UnvalidatedIngressRule, error) {
-	// List all gateways using this config
-	gatewayList := &gatewayv1.GatewayList{}
-	if err := r.List(ctx, gatewayList); err != nil {
-		return nil, err
-	}
-
-	var allRules []cf.UnvalidatedIngressRule
-	for _, gw := range gatewayList.Items {
-		// Skip the excluded gateway
-		if gw.Name == excludeName && gw.Namespace == excludeNamespace {
-			continue
-		}
-
-		// Check if this gateway uses our controller
-		isOurs, err := IsGatewayManagedByUs(ctx, r.Client, &gw)
-		if err != nil || !isOurs {
-			continue
-		}
-
-		rules, err := r.buildIngressRules(ctx, &gw, config)
-		if err != nil {
-			continue
-		}
-		// Remove the fallback rule (we'll add one at the end)
-		if len(rules) > 0 {
-			allRules = append(allRules, rules[:len(rules)-1]...)
-		}
-	}
 
 	// Add fallback rule
 	fallbackTarget := config.Spec.FallbackTarget
@@ -722,9 +680,9 @@ func (r *GatewayReconciler) findGatewaysFromParentRefs(ctx context.Context, refs
 	return requests
 }
 
-// syncTunnelConfigToAPI syncs the tunnel configuration to Cloudflare API using read-merge-write.
-// This uses MergeAndSync to avoid race conditions with other controllers (TunnelBinding, Ingress, Tunnel).
-// In token mode, cloudflared pulls configuration from cloud automatically.
+// syncTunnelConfigToAPI syncs the tunnel configuration to CloudflareSyncState.
+// The actual Cloudflare API sync is handled by TunnelConfigSyncController.
+// This registers the Gateway's ingress rules to the shared SyncState.
 func (r *GatewayReconciler) syncTunnelConfigToAPI(
 	ctx context.Context,
 	tunnel tunnelpkg.Interface,
@@ -735,81 +693,95 @@ func (r *GatewayReconciler) syncTunnelConfigToAPI(
 
 	tunnelID := tunnel.GetStatus().TunnelId
 	if tunnelID == "" {
-		logger.Info("Tunnel ID not available, skipping API sync")
+		logger.Info("Tunnel ID not available, skipping sync")
 		return nil
 	}
 
-	// Determine namespace for credentials
-	namespace := tunnel.GetNamespace()
-	if namespace == "" {
-		namespace = controller.OperatorNamespace
+	accountID := tunnel.GetStatus().AccountId
+	if accountID == "" {
+		logger.Info("Account ID not available, skipping sync")
+		return nil
 	}
 
-	// Create credentials loader and load credentials
-	loader := credentials.NewLoader(r.Client, logger)
-	tunnelSpec := tunnel.GetSpec()
-	creds, err := loader.LoadFromCloudflareDetails(ctx, &tunnelSpec.Cloudflare, namespace)
-	if err != nil {
-		return fmt.Errorf("failed to load credentials: %w", err)
+	// Get credentials reference from tunnel
+	credRef := r.getCredentialsReferenceFromTunnel(tunnel)
+
+	// Convert cf.UnvalidatedIngressRule to tunnelsvc.IngressRule
+	tunnelRules := make([]tunnelsvc.IngressRule, 0, len(rules))
+	for _, rule := range rules {
+		// Skip the catch-all fallback rule - TunnelConfigSyncController handles it
+		if rule.Hostname == "" && rule.Path == "" && rule.Service != "" {
+			continue
+		}
+
+		tunnelRules = append(tunnelRules, tunnelsvc.IngressRule{
+			Hostname:      rule.Hostname,
+			Path:          rule.Path,
+			Service:       rule.Service,
+			OriginRequest: convertOriginRequest(&rule.OriginRequest),
+		})
 	}
 
-	// Create Cloudflare client
-	cloudflareClient, err := controller.CreateCloudflareClientFromCreds(creds)
-	if err != nil {
-		return fmt.Errorf("failed to create cloudflare client: %w", err)
+	// Create service and register rules
+	svc := tunnelsvc.NewService(r.Client)
+	opts := tunnelsvc.RegisterRulesOptions{
+		TunnelID:       tunnelID,
+		AccountID:      accountID,
+		CredentialsRef: credRef,
+		Source: service.Source{
+			Kind:      "Gateway",
+			Namespace: config.Namespace,
+			Name:      config.Name,
+		},
+		Rules:    tunnelRules,
+		Priority: tunnelsvc.PriorityGateway,
 	}
 
-	// Build API client
-	apiClient := &cf.API{
-		Log:              logger,
-		AccountId:        creds.AccountID,
-		AccountName:      tunnelSpec.Cloudflare.AccountName,
-		Domain:           creds.Domain,
-		ValidAccountId:   tunnel.GetStatus().AccountId,
-		ValidTunnelId:    tunnelID,
-		ValidTunnelName:  tunnel.GetStatus().TunnelName,
-		ValidZoneId:      tunnel.GetStatus().ZoneId,
-		CloudflareClient: cloudflareClient,
+	if err := svc.RegisterRules(ctx, opts); err != nil {
+		return fmt.Errorf("failed to register rules to SyncState: %w", err)
 	}
 
-	// Prepare merge options for read-merge-write
-	source := fmt.Sprintf("Gateway/%s/%s", config.Namespace, config.Name)
-	fallbackTarget := config.Spec.FallbackTarget
-	if fallbackTarget == "" {
-		fallbackTarget = "http_status:404"
-	}
-	mergeOpts := cf.MergeOptions{
-		Source:            source,
-		PreviousHostnames: config.Status.SyncedHostnames, // Use previously synced hostnames for cleanup
-		CurrentRules:      rules,
-		FallbackTarget:    fallbackTarget,
-		// Note: WarpRouting is controlled by Tunnel/ClusterTunnel controller, not Gateway
-		// Gateway should preserve existing warp-routing state
-		WarpRouting: nil,
-	}
-
-	// Use MergeAndSync for safe read-merge-write operation
-	// This prevents race conditions with other controllers
-	result, err := apiClient.MergeAndSync(tunnelID, mergeOpts)
-	if err != nil {
-		return fmt.Errorf("failed to merge and sync tunnel configuration: %w", err)
-	}
-
-	// Update TunnelGatewayClassConfig status with synced hostnames and config version
-	if err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, config, func() {
-		config.Status.SyncedHostnames = result.SyncedHostnames
-		config.Status.ConfigVersion = result.Version
-	}); err != nil {
-		logger.Error(err, "Failed to update TunnelGatewayClassConfig status with sync result")
-		// Don't return error - the sync itself succeeded
-	}
-
-	logger.Info("Merged and synced tunnel configuration to Cloudflare API",
+	logger.Info("Registered Gateway rules to SyncState",
 		"tunnel", tunnel.GetName(),
 		"tunnelId", tunnelID,
-		"source", source,
-		"syncedHostnames", result.SyncedHostnames,
-		"configVersion", result.Version)
+		"config", config.Name,
+		"ruleCount", len(tunnelRules))
 
 	return nil
+}
+
+// getCredentialsReferenceFromTunnel extracts credentials reference from tunnel spec
+func (*GatewayReconciler) getCredentialsReferenceFromTunnel(tunnel tunnelpkg.Interface) networkingv1alpha2.CredentialsReference {
+	spec := tunnel.GetSpec()
+	if spec.Cloudflare.CredentialsRef != nil {
+		return networkingv1alpha2.CredentialsReference{
+			Name: spec.Cloudflare.CredentialsRef.Name,
+		}
+	}
+	return networkingv1alpha2.CredentialsReference{}
+}
+
+// convertOriginRequest converts cf.OriginRequestConfig to tunnelsvc.OriginRequestConfig
+func convertOriginRequest(req *cf.OriginRequestConfig) *tunnelsvc.OriginRequestConfig {
+	if req == nil {
+		return nil
+	}
+	return &tunnelsvc.OriginRequestConfig{
+		ConnectTimeout:         req.ConnectTimeout,
+		TLSTimeout:             req.TLSTimeout,
+		TCPKeepAlive:           req.TCPKeepAlive,
+		NoHappyEyeballs:        req.NoHappyEyeballs,
+		KeepAliveConnections:   req.KeepAliveConnections,
+		KeepAliveTimeout:       req.KeepAliveTimeout,
+		HTTPHostHeader:         req.HTTPHostHeader,
+		OriginServerName:       req.OriginServerName,
+		CAPool:                 req.CAPool,
+		NoTLSVerify:            req.NoTLSVerify,
+		DisableChunkedEncoding: req.DisableChunkedEncoding,
+		BastionMode:            req.BastionMode,
+		ProxyAddress:           req.ProxyAddress,
+		ProxyPort:              req.ProxyPort,
+		ProxyType:              req.ProxyType,
+		HTTP2Origin:            req.HTTP2Origin,
+	}
 }

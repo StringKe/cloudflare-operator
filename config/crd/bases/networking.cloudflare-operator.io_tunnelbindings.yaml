@@ -115,7 +115,7 @@ spec:
                     http2Origin:
                       default: false
                       description: |-
-                        Http2Origin makes the service attempt to connect to origin using HTTP2.
+                        HTTP2Origin makes the service attempt to connect to origin using HTTP2.
                         Origin must be configured as https.
                       type: boolean
                     noTlsVerify:

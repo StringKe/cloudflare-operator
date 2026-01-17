@@ -114,10 +114,47 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
-# Utilize Kind or modify the e2e tests to load the image locally, enabling compatibility with other vendors.
-.PHONY: test-e2e  # Run the e2e tests against a Kind k8s instance that is spun up.
-test-e2e:
-	go test ./test/e2e/ -v -ginkgo.v
+##@ E2E Testing
+
+# Kind cluster configuration
+KIND_CLUSTER_NAME ?= cloudflare-operator-e2e
+KIND_CONFIG ?= test/e2e/config/kind-config.yaml
+E2E_TIMEOUT ?= 30m
+
+.PHONY: test-e2e
+test-e2e: test-e2e-setup test-e2e-run test-e2e-cleanup ## Run E2E tests with automatic Kind cluster management
+
+.PHONY: test-e2e-run
+test-e2e-run: ## Run E2E tests (assumes cluster is already set up)
+	USE_EXISTING_CLUSTER=true go test -tags=e2e ./test/e2e/... -v -timeout $(E2E_TIMEOUT)
+
+.PHONY: test-e2e-setup
+test-e2e-setup: kind ## Set up Kind cluster for E2E tests
+	@echo "Setting up Kind cluster $(KIND_CLUSTER_NAME)..."
+	@if $(KIND) get clusters 2>/dev/null | grep -q "^$(KIND_CLUSTER_NAME)$$"; then \
+		echo "Kind cluster $(KIND_CLUSTER_NAME) already exists"; \
+	else \
+		$(KIND) create cluster --name $(KIND_CLUSTER_NAME) --config $(KIND_CONFIG); \
+	fi
+	@echo "Installing CRDs..."
+	$(MAKE) install
+	@echo "E2E cluster setup complete"
+
+.PHONY: test-e2e-cleanup
+test-e2e-cleanup: kind ## Clean up Kind cluster after E2E tests
+	@echo "Cleaning up Kind cluster $(KIND_CLUSTER_NAME)..."
+	@if $(KIND) get clusters 2>/dev/null | grep -q "^$(KIND_CLUSTER_NAME)$$"; then \
+		$(KIND) delete cluster --name $(KIND_CLUSTER_NAME); \
+	else \
+		echo "Kind cluster $(KIND_CLUSTER_NAME) does not exist"; \
+	fi
+
+.PHONY: test-e2e-keep
+test-e2e-keep: test-e2e-setup test-e2e-run ## Run E2E tests but keep the cluster running for debugging
+
+.PHONY: test-e2e-scenarios
+test-e2e-scenarios: ## Run only E2E scenario tests (assumes cluster is already set up)
+	USE_EXISTING_CLUSTER=true go test -tags=e2e ./test/e2e/scenarios/... -v -timeout $(E2E_TIMEOUT)
 
 .PHONY: lint
 lint: golangci-lint
@@ -216,12 +253,14 @@ KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
+KIND ?= $(LOCALBIN)/kind
 
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.4.3
 CONTROLLER_TOOLS_VERSION ?= v0.17.2
 ENVTEST_VERSION ?= release-0.19
 GOLANGCI_LINT_VERSION ?= v2.1.5
+KIND_VERSION ?= v0.25.0
 
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
@@ -242,6 +281,11 @@ $(ENVTEST): $(LOCALBIN)
 golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
 $(GOLANGCI_LINT): $(LOCALBIN)
 	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/v2/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
+
+.PHONY: kind
+kind: $(KIND) ## Download kind locally if necessary.
+$(KIND): $(LOCALBIN)
+	$(call go-install-tool,$(KIND),sigs.k8s.io/kind,$(KIND_VERSION))
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary

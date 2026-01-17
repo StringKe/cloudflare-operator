@@ -26,13 +26,20 @@ import (
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
+	"github.com/StringKe/cloudflare-operator/internal/service"
+	routesvc "github.com/StringKe/cloudflare-operator/internal/service/networkroute"
 )
+
+const defaultValue = "default"
 
 // Reconciler reconciles a NetworkRoute object
 type Reconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
+
+	// Service layer
+	routeService *routesvc.Service
 
 	// Runtime state
 	ctx          context.Context
@@ -51,6 +58,8 @@ type Reconciler struct {
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile implements the reconciliation loop for NetworkRoute resources.
+//
+//nolint:revive // cognitive complexity is acceptable for this controller reconciliation loop
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	r.ctx = ctx
 	r.log = ctrllog.FromContext(ctx)
@@ -66,15 +75,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 
-	// Initialize API client
-	if err := r.initAPIClient(); err != nil {
-		r.log.Error(err, "failed to initialize API client")
-		r.setCondition(metav1.ConditionFalse, controller.EventReasonAPIError, err.Error())
-		return ctrl.Result{}, err
-	}
-
 	// Check if NetworkRoute is being deleted
 	if r.networkRoute.GetDeletionTimestamp() != nil {
+		// Initialize API client for deletion
+		if err := r.initAPIClient(); err != nil {
+			r.log.Error(err, "failed to initialize API client for deletion")
+			r.setCondition(metav1.ConditionFalse, controller.EventReasonAPIError, err.Error())
+			return ctrl.Result{}, err
+		}
 		return r.handleDeletion()
 	}
 
@@ -88,7 +96,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		r.Recorder.Event(r.networkRoute, corev1.EventTypeNormal, controller.EventReasonFinalizerSet, "Finalizer added")
 	}
 
-	// Reconcile the NetworkRoute
+	// Reconcile the NetworkRoute through service layer
 	if err := r.reconcileNetworkRoute(); err != nil {
 		r.log.Error(err, "failed to reconcile NetworkRoute")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
@@ -119,6 +127,8 @@ func (r *Reconciler) initAPIClient() error {
 }
 
 // handleDeletion handles the deletion of a NetworkRoute.
+//
+//nolint:revive // cognitive complexity is acceptable for deletion handling
 func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(r.networkRoute, controller.NetworkRouteFinalizer) {
 		return ctrl.Result{}, nil
@@ -148,7 +158,7 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 		}
 		if virtualNetworkID == "" {
 			// If still no vnet, use default
-			virtualNetworkID = "default"
+			virtualNetworkID = defaultValue
 		}
 
 		if err := r.cfAPI.DeleteTunnelRoute(network, virtualNetworkID); err != nil {
@@ -167,6 +177,16 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 			r.Recorder.Event(r.networkRoute, corev1.EventTypeNormal,
 				controller.EventReasonDeleted, "Deleted from Cloudflare")
 		}
+
+		// Unregister from SyncState
+		source := service.Source{
+			Kind: "NetworkRoute",
+			Name: r.networkRoute.Name,
+		}
+		if err := r.routeService.Unregister(r.ctx, network, virtualNetworkID, source); err != nil {
+			r.log.Error(err, "failed to unregister from SyncState")
+			// Non-fatal - continue with finalizer removal
+		}
 	} else {
 		r.log.Info("No network specified, assuming route was never created or already deleted")
 	}
@@ -183,7 +203,9 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 	return ctrl.Result{}, nil
 }
 
-// reconcileNetworkRoute ensures the NetworkRoute exists in Cloudflare with the correct configuration.
+// reconcileNetworkRoute ensures the NetworkRoute configuration is registered with the service layer.
+//
+//nolint:revive // cognitive complexity is acceptable for reconciliation with dependency resolution
 func (r *Reconciler) reconcileNetworkRoute() error {
 	// Resolve tunnel reference to get tunnel ID
 	tunnelID, tunnelName, err := r.resolveTunnelRef()
@@ -206,33 +228,55 @@ func (r *Reconciler) reconcileNetworkRoute() error {
 
 	network := r.networkRoute.Spec.Network
 
-	// Check if route already exists in Cloudflare
-	if r.networkRoute.Status.Network != "" {
-		// Update existing route
-		return r.updateNetworkRoute(network, tunnelID, tunnelName, virtualNetworkID)
+	// Build the configuration
+	config := routesvc.NetworkRouteConfig{
+		Network:          network,
+		TunnelID:         tunnelID,
+		TunnelName:       tunnelName,
+		VirtualNetworkID: virtualNetworkID,
+		Comment:          r.buildManagedComment(),
 	}
 
-	// Try to find existing route
-	existing, err := r.cfAPI.GetTunnelRoute(network, virtualNetworkID)
-	if err == nil && existing != nil {
-		// Check if we can adopt this resource (no conflict with another K8s resource)
-		mgmtInfo := controller.NewManagementInfo(r.networkRoute, "NetworkRoute")
-		if conflict := controller.GetConflictingManager(existing.Comment, mgmtInfo); conflict != nil {
-			err := fmt.Errorf("NetworkRoute %s is already managed by %s/%s/%s", existing.Network, conflict.Kind, conflict.Namespace, conflict.Name)
-			r.log.Error(err, "adoption conflict detected")
-			r.Recorder.Event(r.networkRoute, corev1.EventTypeWarning, controller.EventReasonAdoptionConflict, err.Error())
-			r.setCondition(metav1.ConditionFalse, controller.EventReasonAdoptionConflict, err.Error())
-			return err
+	// Build source reference
+	source := service.Source{
+		Kind: "NetworkRoute",
+		Name: r.networkRoute.Name,
+	}
+
+	// Build credentials reference
+	credRef := networkingv1alpha2.CredentialsReference{
+		Name: r.networkRoute.Spec.Cloudflare.CredentialsRef.Name,
+	}
+
+	// Get account ID - need to initialize API client first if not already done
+	accountID := r.networkRoute.Status.AccountID
+	if accountID == "" {
+		// Initialize API client to get account ID
+		if err := r.initAPIClient(); err != nil {
+			return fmt.Errorf("initialize API client for account ID: %w", err)
 		}
-		// Found existing - adopt it and update with management marker
-		r.log.Info("Found existing NetworkRoute, adopting", "network", existing.Network, "tunnelId", existing.TunnelID)
-		r.Recorder.Event(r.networkRoute, corev1.EventTypeNormal,
-			controller.EventReasonAdopted, fmt.Sprintf("Adopted route: %s", existing.Network))
-		return r.updateNetworkRoute(network, tunnelID, tunnelName, virtualNetworkID)
+		accountID, _ = r.cfAPI.GetAccountId()
 	}
 
-	// Create new route
-	return r.createNetworkRoute(network, tunnelID, tunnelName, virtualNetworkID)
+	// Register with service
+	opts := routesvc.RegisterOptions{
+		AccountID:        accountID,
+		RouteNetwork:     r.networkRoute.Status.Network, // Use status network if already created
+		VirtualNetworkID: virtualNetworkID,
+		Source:           source,
+		Config:           config,
+		CredentialsRef:   credRef,
+	}
+
+	if err := r.routeService.Register(r.ctx, opts); err != nil {
+		r.log.Error(err, "failed to register NetworkRoute configuration")
+		r.setCondition(metav1.ConditionFalse, controller.EventReasonCreateFailed, err.Error())
+		r.Recorder.Event(r.networkRoute, corev1.EventTypeWarning, controller.EventReasonCreateFailed, err.Error())
+		return err
+	}
+
+	// Update status to Pending if not already synced
+	return r.updateStatusPending(tunnelName)
 }
 
 // resolveTunnelRef resolves the TunnelRef to get the tunnel ID.
@@ -244,13 +288,13 @@ func (r *Reconciler) resolveTunnelRef() (string, string, error) {
 		tunnel := &networkingv1alpha2.Tunnel{}
 		namespace := ref.Namespace
 		if namespace == "" {
-			namespace = "default"
+			namespace = defaultValue
 		}
 		if err := r.Get(r.ctx, apitypes.NamespacedName{Name: ref.Name, Namespace: namespace}, tunnel); err != nil {
 			return "", "", fmt.Errorf("failed to get Tunnel %s/%s: %w", namespace, ref.Name, err)
 		}
 		if tunnel.Status.TunnelId == "" {
-			return "", "", fmt.Errorf("Tunnel %s/%s does not have a tunnelId yet", namespace, ref.Name)
+			return "", "", fmt.Errorf("tunnel %s/%s does not have a tunnelId yet", namespace, ref.Name)
 		}
 		return tunnel.Status.TunnelId, tunnel.Status.TunnelName, nil
 	}
@@ -283,73 +327,28 @@ func (r *Reconciler) resolveVirtualNetworkRef() (string, error) {
 	return vnet.Status.VirtualNetworkId, nil
 }
 
-// createNetworkRoute creates a new NetworkRoute in Cloudflare.
-func (r *Reconciler) createNetworkRoute(network, tunnelID, tunnelName, virtualNetworkID string) error {
-	r.log.Info("Creating NetworkRoute", "network", network, "tunnelId", tunnelID)
-	r.Recorder.Event(r.networkRoute, corev1.EventTypeNormal, "Creating", fmt.Sprintf("Creating NetworkRoute: %s", network))
-
-	// Build comment with management marker to prevent adoption conflicts
+// buildManagedComment builds a comment with management marker.
+func (r *Reconciler) buildManagedComment() string {
 	mgmtInfo := controller.NewManagementInfo(r.networkRoute, "NetworkRoute")
-	comment := controller.BuildManagedComment(mgmtInfo, r.networkRoute.Spec.Comment)
-
-	result, err := r.cfAPI.CreateTunnelRoute(cf.TunnelRouteParams{
-		Network:          network,
-		TunnelID:         tunnelID,
-		VirtualNetworkID: virtualNetworkID,
-		Comment:          comment,
-	})
-	if err != nil {
-		r.log.Error(err, "failed to create NetworkRoute")
-		r.Recorder.Event(r.networkRoute, corev1.EventTypeWarning, controller.EventReasonCreateFailed, err.Error())
-		r.setCondition(metav1.ConditionFalse, controller.EventReasonCreateFailed, err.Error())
-		return err
-	}
-
-	r.Recorder.Event(r.networkRoute, corev1.EventTypeNormal, controller.EventReasonCreated, fmt.Sprintf("Created NetworkRoute: %s", result.Network))
-	return r.updateStatus(result, tunnelName)
+	return controller.BuildManagedComment(mgmtInfo, r.networkRoute.Spec.Comment)
 }
 
-// updateNetworkRoute updates an existing NetworkRoute in Cloudflare.
-func (r *Reconciler) updateNetworkRoute(network, tunnelID, tunnelName, virtualNetworkID string) error {
-	r.log.Info("Updating NetworkRoute", "network", network, "tunnelId", tunnelID)
-
-	// Build comment with management marker to prevent adoption conflicts
-	mgmtInfo := controller.NewManagementInfo(r.networkRoute, "NetworkRoute")
-	comment := controller.BuildManagedComment(mgmtInfo, r.networkRoute.Spec.Comment)
-
-	result, err := r.cfAPI.UpdateTunnelRoute(r.networkRoute.Status.Network, cf.TunnelRouteParams{
-		Network:          network,
-		TunnelID:         tunnelID,
-		VirtualNetworkID: virtualNetworkID,
-		Comment:          comment,
-	})
-	if err != nil {
-		r.log.Error(err, "failed to update NetworkRoute")
-		r.Recorder.Event(r.networkRoute, corev1.EventTypeWarning, controller.EventReasonUpdateFailed, err.Error())
-		r.setCondition(metav1.ConditionFalse, controller.EventReasonUpdateFailed, err.Error())
-		return err
-	}
-
-	r.Recorder.Event(r.networkRoute, corev1.EventTypeNormal, controller.EventReasonUpdated, "NetworkRoute updated")
-	return r.updateStatus(result, tunnelName)
-}
-
-// updateStatus updates the NetworkRoute status with the Cloudflare state.
-func (r *Reconciler) updateStatus(result *cf.TunnelRouteResult, tunnelName string) error {
-	// Use retry logic for status updates to handle conflicts
+// updateStatusPending updates the NetworkRoute status to Pending state.
+func (r *Reconciler) updateStatusPending(tunnelName string) error {
 	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.networkRoute, func() {
-		r.networkRoute.Status.Network = result.Network
-		r.networkRoute.Status.TunnelID = result.TunnelID
-		r.networkRoute.Status.TunnelName = tunnelName
-		if result.TunnelName != "" {
-			r.networkRoute.Status.TunnelName = result.TunnelName
-		}
-		r.networkRoute.Status.VirtualNetworkID = result.VirtualNetworkID
-		r.networkRoute.Status.AccountID = r.cfAPI.ValidAccountId
-		r.networkRoute.Status.State = "active"
 		r.networkRoute.Status.ObservedGeneration = r.networkRoute.Generation
 
-		r.setCondition(metav1.ConditionTrue, controller.EventReasonReconciled, "NetworkRoute reconciled successfully")
+		// Keep existing state if already active, otherwise set to pending
+		if r.networkRoute.Status.State != "active" {
+			r.networkRoute.Status.State = "pending"
+		}
+
+		// Update tunnel name if we have it
+		if tunnelName != "" && r.networkRoute.Status.TunnelName == "" {
+			r.networkRoute.Status.TunnelName = tunnelName
+		}
+
+		r.setCondition(metav1.ConditionTrue, "Pending", "Configuration registered, waiting for sync")
 	})
 
 	if err != nil {
@@ -357,7 +356,7 @@ func (r *Reconciler) updateStatus(result *cf.TunnelRouteResult, tunnelName strin
 		return err
 	}
 
-	r.log.Info("NetworkRoute status updated", "network", r.networkRoute.Status.Network, "state", r.networkRoute.Status.State)
+	r.log.Info("NetworkRoute configuration registered", "name", r.networkRoute.Name)
 	return nil
 }
 
@@ -430,7 +429,7 @@ func (r *Reconciler) findNetworkRoutesForTunnel(ctx context.Context, obj client.
 			// Check namespace match
 			refNamespace := route.Spec.TunnelRef.Namespace
 			if refNamespace == "" {
-				refNamespace = "default"
+				refNamespace = defaultValue
 			}
 			if refNamespace == tunnel.Namespace {
 				log.Info("Tunnel changed, triggering NetworkRoute reconcile",
@@ -483,6 +482,7 @@ func (r *Reconciler) findNetworkRoutesForClusterTunnel(ctx context.Context, obj 
 // SetupWithManager sets up the controller with the Manager.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("networkroute-controller")
+	r.routeService = routesvc.NewService(mgr.GetClient())
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.NetworkRoute{}).
 		// Watch VirtualNetwork changes to trigger NetworkRoute reconcile

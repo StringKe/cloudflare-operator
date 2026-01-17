@@ -9,24 +9,25 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cloudflare/cloudflare-go"
-	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
+	"github.com/StringKe/cloudflare-operator/internal/service"
+	rulesetsvc "github.com/StringKe/cloudflare-operator/internal/service/ruleset"
 )
 
 const (
@@ -39,10 +40,8 @@ type Reconciler struct {
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
 
-	// Internal state
-	ctx     context.Context
-	log     logr.Logger
-	ruleset *networkingv1alpha2.ZoneRuleset
+	// Services
+	zoneRulesetService *rulesetsvc.ZoneRulesetService
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=zonerulesets,verbs=get;list;watch;create;update;patch;delete
@@ -50,492 +49,272 @@ type Reconciler struct {
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=zonerulesets/finalizers,verbs=update
 
 // Reconcile handles ZoneRuleset reconciliation
-//
-//nolint:revive // cognitive complexity is acceptable for main reconcile loop
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	r.ctx = ctx
-	r.log = ctrl.LoggerFrom(ctx)
+	logger := log.FromContext(ctx)
 
 	// Get the ZoneRuleset resource
-	r.ruleset = &networkingv1alpha2.ZoneRuleset{}
-	if err := r.Get(ctx, req.NamespacedName, r.ruleset); err != nil {
+	ruleset := &networkingv1alpha2.ZoneRuleset{}
+	if err := r.Get(ctx, req.NamespacedName, ruleset); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
-		r.log.Error(err, "unable to fetch ZoneRuleset")
+		logger.Error(err, "unable to fetch ZoneRuleset")
 		return ctrl.Result{}, err
 	}
 
+	// Resolve credentials and zone ID
+	creds, err := r.resolveCredentials(ctx, ruleset)
+	if err != nil {
+		logger.Error(err, "Failed to resolve credentials")
+		return r.updateStatusError(ctx, ruleset, err)
+	}
+	credRef := networkingv1alpha2.CredentialsReference{Name: creds.CredentialsName}
+
 	// Handle deletion
-	if !r.ruleset.DeletionTimestamp.IsZero() {
-		return r.handleDeletion()
+	if !ruleset.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, ruleset, credRef)
 	}
 
 	// Add finalizer if not present
-	if !controllerutil.ContainsFinalizer(r.ruleset, finalizerName) {
-		controllerutil.AddFinalizer(r.ruleset, finalizerName)
-		if err := r.Update(ctx, r.ruleset); err != nil {
+	if !controllerutil.ContainsFinalizer(ruleset, finalizerName) {
+		controllerutil.AddFinalizer(ruleset, finalizerName)
+		if err := r.Update(ctx, ruleset); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
 
-	// Create API client
-	cfAPI, err := r.getAPIClient()
+	// Register ZoneRuleset configuration to SyncState
+	return r.registerRuleset(ctx, ruleset, creds.AccountID, creds.ZoneID, credRef)
+}
+
+// resolveCredentials resolves the credentials reference, account ID and zone ID.
+func (r *Reconciler) resolveCredentials(
+	ctx context.Context,
+	ruleset *networkingv1alpha2.ZoneRuleset,
+) (controller.CredentialsResult, error) {
+	logger := log.FromContext(ctx)
+
+	var result controller.CredentialsResult
+
+	// Get credentials reference
+	if ruleset.Spec.CredentialsRef != nil {
+		result.CredentialsName = ruleset.Spec.CredentialsRef.Name
+	}
+
+	// Get account ID and zone ID from credentials
+	cfCredRef := &networkingv1alpha2.CloudflareCredentialsRef{Name: result.CredentialsName}
+	apiClient, err := cf.NewAPIClientFromCredentialsRef(ctx, r.Client, cfCredRef)
 	if err != nil {
-		r.updateState(networkingv1alpha2.ZoneRulesetStateError, fmt.Sprintf("Failed to get API client: %v", err))
-		r.Recorder.Event(r.ruleset, corev1.EventTypeWarning, controller.EventReasonAPIError, cf.SanitizeErrorMessage(err))
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+		return result, fmt.Errorf("failed to create API client: %w", err)
+	}
+
+	result.AccountID = apiClient.AccountId
+	if result.AccountID == "" {
+		logger.V(1).Info("Account ID not available from credentials, will be resolved during sync")
 	}
 
 	// Get zone ID
-	zoneID, err := r.getZoneID(cfAPI)
+	apiClient.Domain = ruleset.Spec.Zone
+	zoneID, err := apiClient.GetZoneId()
 	if err != nil {
-		r.updateState(networkingv1alpha2.ZoneRulesetStateError, fmt.Sprintf("Failed to get zone ID: %v", err))
-		r.Recorder.Event(r.ruleset, corev1.EventTypeWarning, controller.EventReasonAPIError, cf.SanitizeErrorMessage(err))
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+		return result, fmt.Errorf("failed to get zone ID for %s: %w", ruleset.Spec.Zone, err)
 	}
+	result.ZoneID = zoneID
 
-	// Sync ruleset
-	return r.syncRuleset(cfAPI, zoneID)
+	return result, nil
 }
 
 // handleDeletion handles the deletion of ZoneRuleset
-//
-//nolint:revive // cognitive complexity is acceptable for deletion handling
-func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
-	if !controllerutil.ContainsFinalizer(r.ruleset, finalizerName) {
+func (r *Reconciler) handleDeletion(
+	ctx context.Context,
+	ruleset *networkingv1alpha2.ZoneRuleset,
+	credRef networkingv1alpha2.CredentialsReference,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	if !controllerutil.ContainsFinalizer(ruleset, finalizerName) {
 		return ctrl.Result{}, nil
 	}
 
-	// Clear rules from the entrypoint ruleset
-	if r.ruleset.Status.ZoneID != "" {
-		cfAPI, err := r.getAPIClient()
-		if err == nil {
-			// Update the entrypoint ruleset with empty rules
-			_, err := cfAPI.UpdateEntrypointRuleset(
-				r.ctx,
-				r.ruleset.Status.ZoneID,
-				string(r.ruleset.Spec.Phase),
-				"",
-				[]cloudflare.RulesetRule{},
-			)
-			if err != nil && !cf.IsNotFoundError(err) {
-				r.log.Error(err, "Failed to clear ruleset rules")
-				// Continue with deletion anyway
-			} else {
-				r.log.Info("Ruleset rules cleared", "phase", r.ruleset.Spec.Phase)
-			}
-		}
+	// Clear rules from Cloudflare
+	if r.clearRulesFromCloudflare(ctx, ruleset, credRef) {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	// Unregister from SyncState
+	source := service.Source{
+		Kind:      "ZoneRuleset",
+		Namespace: ruleset.Namespace,
+		Name:      ruleset.Name,
+	}
+	if err := r.zoneRulesetService.Unregister(ctx, ruleset.Status.RulesetID, source); err != nil {
+		logger.Error(err, "Failed to unregister ZoneRuleset from SyncState")
+		// Non-fatal - continue with finalizer removal
 	}
 
 	// Remove finalizer
-	if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.ruleset, func() {
-		controllerutil.RemoveFinalizer(r.ruleset, finalizerName)
+	if err := controller.UpdateWithConflictRetry(ctx, r.Client, ruleset, func() {
+		controllerutil.RemoveFinalizer(ruleset, finalizerName)
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
 
+	r.Recorder.Event(ruleset, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
 	return ctrl.Result{}, nil
 }
 
-// syncRuleset syncs the ruleset to Cloudflare
-//
-//nolint:revive // cognitive complexity is acceptable for sync logic
-func (r *Reconciler) syncRuleset(cfAPI *cf.API, zoneID string) (ctrl.Result, error) {
-	r.updateState(networkingv1alpha2.ZoneRulesetStateSyncing, "Syncing ruleset")
+// clearRulesFromCloudflare clears the ruleset rules from Cloudflare.
+// Returns true if reconciliation should be requeued.
+func (r *Reconciler) clearRulesFromCloudflare(
+	ctx context.Context,
+	ruleset *networkingv1alpha2.ZoneRuleset,
+	credRef networkingv1alpha2.CredentialsReference,
+) bool {
+	if ruleset.Status.ZoneID == "" || ruleset.Status.RulesetID == "" {
+		return false
+	}
 
-	// Convert rules to Cloudflare format
-	rules, err := r.convertRules()
+	logger := log.FromContext(ctx)
+	cfCredRef := &networkingv1alpha2.CloudflareCredentialsRef{Name: credRef.Name}
+	cfAPI, err := cf.NewAPIClientFromCredentialsRef(ctx, r.Client, cfCredRef)
 	if err != nil {
-		r.updateState(networkingv1alpha2.ZoneRulesetStateError, fmt.Sprintf("Failed to convert rules: %v", err))
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+		return false // Skip if can't create client
 	}
 
-	// Update entrypoint ruleset
-	result, err := cfAPI.UpdateEntrypointRuleset(
-		r.ctx,
-		zoneID,
-		string(r.ruleset.Spec.Phase),
-		r.ruleset.Spec.Description,
-		rules,
-	)
+	phase := string(ruleset.Spec.Phase)
+	_, err = cfAPI.UpdateEntrypointRuleset(ctx, ruleset.Status.ZoneID, phase, "", nil)
+	if err == nil {
+		logger.Info("Ruleset rules cleared", "phase", phase)
+		r.Recorder.Event(ruleset, corev1.EventTypeNormal, "Deleted",
+			fmt.Sprintf("Ruleset rules cleared for phase %s", phase))
+		return false
+	}
+
+	if cf.IsNotFoundError(err) {
+		return false
+	}
+
+	logger.Error(err, "Failed to clear ruleset rules")
+	r.Recorder.Event(ruleset, corev1.EventTypeWarning, "DeleteFailed", cf.SanitizeErrorMessage(err))
+	return true
+}
+
+// registerRuleset registers the ZoneRuleset configuration to SyncState.
+// The actual sync to Cloudflare is handled by ZoneRulesetSyncController.
+func (r *Reconciler) registerRuleset(
+	ctx context.Context,
+	ruleset *networkingv1alpha2.ZoneRuleset,
+	accountID, zoneID string,
+	credRef networkingv1alpha2.CredentialsReference,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	// Build rules configuration
+	rules := make([]rulesetsvc.RulesetRuleConfig, len(ruleset.Spec.Rules))
+	for i, rule := range ruleset.Spec.Rules {
+		rules[i] = rulesetsvc.RulesetRuleConfig{
+			Action:           string(rule.Action),
+			Expression:       rule.Expression,
+			Description:      rule.Description,
+			Enabled:          rule.Enabled,
+			Ref:              rule.Ref,
+			ActionParameters: rule.ActionParameters,
+			RateLimit:        rule.RateLimit,
+		}
+	}
+
+	// Build ruleset configuration
+	config := rulesetsvc.ZoneRulesetConfig{
+		Zone:        ruleset.Spec.Zone,
+		Phase:       string(ruleset.Spec.Phase),
+		Description: ruleset.Spec.Description,
+		Rules:       rules,
+	}
+
+	// Create source reference
+	source := service.Source{
+		Kind:      "ZoneRuleset",
+		Namespace: ruleset.Namespace,
+		Name:      ruleset.Name,
+	}
+
+	// Register to SyncState
+	opts := rulesetsvc.ZoneRulesetRegisterOptions{
+		AccountID:      accountID,
+		ZoneID:         zoneID,
+		RulesetID:      ruleset.Status.RulesetID, // May be empty for new rulesets
+		Source:         source,
+		Config:         config,
+		CredentialsRef: credRef,
+	}
+
+	if err := r.zoneRulesetService.Register(ctx, opts); err != nil {
+		logger.Error(err, "Failed to register ZoneRuleset configuration")
+		r.Recorder.Event(ruleset, corev1.EventTypeWarning, "RegisterFailed",
+			fmt.Sprintf("Failed to register ZoneRuleset: %s", err.Error()))
+		return r.updateStatusError(ctx, ruleset, err)
+	}
+
+	r.Recorder.Event(ruleset, corev1.EventTypeNormal, "Registered",
+		fmt.Sprintf("Registered ZoneRuleset for zone '%s' phase '%s' to SyncState",
+			ruleset.Spec.Zone, ruleset.Spec.Phase))
+
+	// Update status to Pending - actual sync happens via ZoneRulesetSyncController
+	return r.updateStatusPending(ctx, ruleset, zoneID)
+}
+
+func (r *Reconciler) updateStatusError(
+	ctx context.Context,
+	ruleset *networkingv1alpha2.ZoneRuleset,
+	err error,
+) (ctrl.Result, error) {
+	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, ruleset, func() {
+		ruleset.Status.State = networkingv1alpha2.ZoneRulesetStateError
+		ruleset.Status.Message = cf.SanitizeErrorMessage(err)
+		meta.SetStatusCondition(&ruleset.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: ruleset.Generation,
+			Reason:             "ReconcileError",
+			Message:            cf.SanitizeErrorMessage(err),
+			LastTransitionTime: metav1.Now(),
+		})
+		ruleset.Status.ObservedGeneration = ruleset.Generation
+	})
+
+	if updateErr != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
+	}
+
+	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+}
+
+func (r *Reconciler) updateStatusPending(
+	ctx context.Context,
+	ruleset *networkingv1alpha2.ZoneRuleset,
+	zoneID string,
+) (ctrl.Result, error) {
+	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, ruleset, func() {
+		ruleset.Status.State = networkingv1alpha2.ZoneRulesetStateSyncing
+		ruleset.Status.Message = "ZoneRuleset configuration registered, waiting for sync"
+		ruleset.Status.ZoneID = zoneID
+		meta.SetStatusCondition(&ruleset.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: ruleset.Generation,
+			Reason:             "Pending",
+			Message:            "ZoneRuleset configuration registered, waiting for sync",
+			LastTransitionTime: metav1.Now(),
+		})
+		ruleset.Status.ObservedGeneration = ruleset.Generation
+	})
+
 	if err != nil {
-		r.updateState(networkingv1alpha2.ZoneRulesetStateError, fmt.Sprintf("Failed to update ruleset: %v", err))
-		r.Recorder.Event(r.ruleset, corev1.EventTypeWarning, controller.EventReasonAPIError, cf.SanitizeErrorMessage(err))
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
 	}
 
-	// Update status
-	r.ruleset.Status.RulesetID = result.ID
-	r.ruleset.Status.RulesetVersion = result.Version
-	r.ruleset.Status.ZoneID = zoneID
-	r.ruleset.Status.RuleCount = len(result.Rules)
-	if !result.LastUpdated.IsZero() {
-		lastUpdated := metav1.NewTime(result.LastUpdated)
-		r.ruleset.Status.LastUpdated = &lastUpdated
-	}
-
-	r.updateState(networkingv1alpha2.ZoneRulesetStateReady, "Ruleset synced successfully")
-	r.Recorder.Event(r.ruleset, corev1.EventTypeNormal, "Synced",
-		fmt.Sprintf("Ruleset synced with %d rules", len(result.Rules)))
-
-	// Requeue periodically to detect drift
-	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
-}
-
-// convertRules converts CRD rules to Cloudflare RulesetRule format
-//
-//nolint:revive,unparam // cyclomatic complexity is acceptable for rule conversion; error kept for future use
-func (r *Reconciler) convertRules() ([]cloudflare.RulesetRule, error) {
-	rules := make([]cloudflare.RulesetRule, len(r.ruleset.Spec.Rules))
-
-	for i, rule := range r.ruleset.Spec.Rules {
-		cfRule := cloudflare.RulesetRule{
-			Action:      string(rule.Action),
-			Expression:  rule.Expression,
-			Description: rule.Description,
-			Enabled:     ptr.To(rule.Enabled),
-			Ref:         rule.Ref,
-		}
-
-		// Convert action parameters
-		if rule.ActionParameters != nil {
-			cfRule.ActionParameters = r.convertActionParameters(rule.ActionParameters)
-		}
-
-		// Convert rate limit
-		if rule.RateLimit != nil {
-			cfRule.RateLimit = r.convertRateLimit(rule.RateLimit)
-		}
-
-		rules[i] = cfRule
-	}
-
-	return rules, nil
-}
-
-// convertActionParameters converts action parameters to Cloudflare format
-//
-//nolint:revive // cyclomatic complexity is acceptable for parameter conversion
-func (r *Reconciler) convertActionParameters(params *networkingv1alpha2.RulesetRuleActionParameters) *cloudflare.RulesetRuleActionParameters {
-	cfParams := &cloudflare.RulesetRuleActionParameters{}
-
-	// URI rewrite
-	if params.URI != nil {
-		cfParams.URI = &cloudflare.RulesetRuleActionParametersURI{}
-		if params.URI.Path != nil {
-			cfParams.URI.Path = &cloudflare.RulesetRuleActionParametersURIPath{
-				Value:      params.URI.Path.Value,
-				Expression: params.URI.Path.Expression,
-			}
-		}
-		if params.URI.Query != nil {
-			cfParams.URI.Query = &cloudflare.RulesetRuleActionParametersURIQuery{
-				Expression: params.URI.Query.Expression,
-			}
-			if params.URI.Query.Value != "" {
-				cfParams.URI.Query.Value = ptr.To(params.URI.Query.Value)
-			}
-		}
-	}
-
-	// Headers
-	if len(params.Headers) > 0 {
-		cfParams.Headers = make(map[string]cloudflare.RulesetRuleActionParametersHTTPHeader)
-		for name, header := range params.Headers {
-			cfParams.Headers[name] = cloudflare.RulesetRuleActionParametersHTTPHeader{
-				Operation:  header.Operation,
-				Value:      header.Value,
-				Expression: header.Expression,
-			}
-		}
-	}
-
-	// Redirect
-	if params.Redirect != nil {
-		cfParams.FromValue = &cloudflare.RulesetRuleActionParametersFromValue{
-			PreserveQueryString: ptr.To(params.Redirect.PreserveQueryString),
-		}
-		if params.Redirect.StatusCode > 0 {
-			cfParams.FromValue.StatusCode = uint16(params.Redirect.StatusCode)
-		}
-		if params.Redirect.TargetURL != nil {
-			cfParams.FromValue.TargetURL = cloudflare.RulesetRuleActionParametersTargetURL{
-				Value:      params.Redirect.TargetURL.Value,
-				Expression: params.Redirect.TargetURL.Expression,
-			}
-		}
-	}
-
-	// Origin
-	if params.Origin != nil {
-		cfParams.Origin = &cloudflare.RulesetRuleActionParametersOrigin{
-			Host: params.Origin.Host,
-		}
-		if params.Origin.Port > 0 {
-			cfParams.Origin.Port = uint16(params.Origin.Port)
-		}
-	}
-
-	// Cache settings
-	if params.Cache != nil {
-		cfParams.Cache = params.Cache.Cache
-		if params.Cache.EdgeTTL != nil {
-			cfParams.EdgeTTL = r.convertCacheTTL(params.Cache.EdgeTTL)
-		}
-		if params.Cache.BrowserTTL != nil {
-			cfParams.BrowserTTL = r.convertBrowserTTL(params.Cache.BrowserTTL)
-		}
-		if params.Cache.CacheKey != nil {
-			cfParams.CacheKey = r.convertCacheKey(params.Cache.CacheKey)
-		}
-		cfParams.RespectStrongETags = params.Cache.RespectStrongETags
-		cfParams.OriginErrorPagePassthru = params.Cache.OriginErrorPagePassthru
-	}
-
-	// Products (for skip action)
-	if len(params.Products) > 0 {
-		cfParams.Products = params.Products
-	}
-
-	// Ruleset (for execute action)
-	if params.Ruleset != "" {
-		cfParams.ID = params.Ruleset
-	}
-
-	// Phases (for skip action)
-	if len(params.Phases) > 0 {
-		cfParams.Phases = params.Phases
-	}
-
-	// Rules (for skip action)
-	if len(params.Rules) > 0 {
-		cfParams.Rules = params.Rules
-	}
-
-	// Response (for serve_error action)
-	if params.Response != nil {
-		cfParams.Response = &cloudflare.RulesetRuleActionParametersBlockResponse{
-			ContentType: params.Response.ContentType,
-			Content:     params.Response.Content,
-		}
-		if params.Response.StatusCode > 0 {
-			cfParams.Response.StatusCode = uint16(params.Response.StatusCode)
-		}
-	}
-
-	// Algorithms (for compress_response action)
-	if len(params.Algorithms) > 0 {
-		cfParams.Algorithms = make([]cloudflare.RulesetRuleActionParametersCompressionAlgorithm, len(params.Algorithms))
-		for i, alg := range params.Algorithms {
-			cfParams.Algorithms[i] = cloudflare.RulesetRuleActionParametersCompressionAlgorithm{
-				Name: alg.Name,
-			}
-		}
-	}
-
-	return cfParams
-}
-
-// convertCacheTTL converts cache TTL settings
-//
-//nolint:revive // cognitive complexity is acceptable for TTL conversion
-func (*Reconciler) convertCacheTTL(ttl *networkingv1alpha2.RulesetCacheTTL) *cloudflare.RulesetRuleActionParametersEdgeTTL {
-	cfTTL := &cloudflare.RulesetRuleActionParametersEdgeTTL{
-		Mode: ttl.Mode,
-	}
-	if ttl.Default != nil {
-		cfTTL.Default = ptr.To(uint(*ttl.Default))
-	}
-	if len(ttl.StatusCodeTTL) > 0 {
-		cfTTL.StatusCodeTTL = make([]cloudflare.RulesetRuleActionParametersStatusCodeTTL, len(ttl.StatusCodeTTL))
-		for i, sct := range ttl.StatusCodeTTL {
-			cfTTL.StatusCodeTTL[i] = cloudflare.RulesetRuleActionParametersStatusCodeTTL{
-				Value: ptr.To(sct.Value),
-			}
-			if sct.StatusCodeRange != nil {
-				cfTTL.StatusCodeTTL[i].StatusCodeRange = &cloudflare.RulesetRuleActionParametersStatusCodeRange{
-					From: ptr.To(uint(sct.StatusCodeRange.From)),
-					To:   ptr.To(uint(sct.StatusCodeRange.To)),
-				}
-			}
-			if sct.StatusCodeValue != nil {
-				cfTTL.StatusCodeTTL[i].StatusCodeValue = ptr.To(uint(*sct.StatusCodeValue))
-			}
-		}
-	}
-	return cfTTL
-}
-
-// convertBrowserTTL converts browser TTL settings
-func (*Reconciler) convertBrowserTTL(ttl *networkingv1alpha2.RulesetCacheTTL) *cloudflare.RulesetRuleActionParametersBrowserTTL {
-	cfTTL := &cloudflare.RulesetRuleActionParametersBrowserTTL{
-		Mode: ttl.Mode,
-	}
-	if ttl.Default != nil {
-		cfTTL.Default = ptr.To(uint(*ttl.Default))
-	}
-	return cfTTL
-}
-
-// convertCacheKey converts cache key settings
-//
-//nolint:revive // cyclomatic complexity is acceptable for cache key conversion
-func (r *Reconciler) convertCacheKey(key *networkingv1alpha2.RulesetCacheKey) *cloudflare.RulesetRuleActionParametersCacheKey {
-	cfKey := &cloudflare.RulesetRuleActionParametersCacheKey{
-		IgnoreQueryStringsOrder: key.IgnoreQueryStringsOrder,
-		CacheDeceptionArmor:     key.CacheDeceptionArmor,
-	}
-
-	if key.QueryString != nil {
-		cfKey.CustomKey = &cloudflare.RulesetRuleActionParametersCustomKey{
-			Query: &cloudflare.RulesetRuleActionParametersCustomKeyQuery{},
-		}
-		if key.QueryString.Exclude != nil {
-			cfKey.CustomKey.Query.Exclude = &cloudflare.RulesetRuleActionParametersCustomKeyList{
-				List: key.QueryString.Exclude.List,
-				All:  false,
-			}
-			if key.QueryString.Exclude.All != nil && *key.QueryString.Exclude.All {
-				cfKey.CustomKey.Query.Exclude.All = true
-			}
-		}
-		if key.QueryString.Include != nil {
-			cfKey.CustomKey.Query.Include = &cloudflare.RulesetRuleActionParametersCustomKeyList{
-				List: key.QueryString.Include.List,
-				All:  false,
-			}
-			if key.QueryString.Include.All != nil && *key.QueryString.Include.All {
-				cfKey.CustomKey.Query.Include.All = true
-			}
-		}
-	}
-
-	if key.Header != nil {
-		if cfKey.CustomKey == nil {
-			cfKey.CustomKey = &cloudflare.RulesetRuleActionParametersCustomKey{}
-		}
-		cfKey.CustomKey.Header = &cloudflare.RulesetRuleActionParametersCustomKeyHeader{
-			RulesetRuleActionParametersCustomKeyFields: cloudflare.RulesetRuleActionParametersCustomKeyFields{
-				Include:       key.Header.Include,
-				CheckPresence: key.Header.CheckPresence,
-			},
-			ExcludeOrigin: key.Header.ExcludeOrigin,
-		}
-	}
-
-	if key.Cookie != nil {
-		if cfKey.CustomKey == nil {
-			cfKey.CustomKey = &cloudflare.RulesetRuleActionParametersCustomKey{}
-		}
-		cfKey.CustomKey.Cookie = &cloudflare.RulesetRuleActionParametersCustomKeyCookie{
-			Include:       key.Cookie.Include,
-			CheckPresence: key.Cookie.CheckPresence,
-		}
-	}
-
-	if key.User != nil {
-		if cfKey.CustomKey == nil {
-			cfKey.CustomKey = &cloudflare.RulesetRuleActionParametersCustomKey{}
-		}
-		cfKey.CustomKey.User = &cloudflare.RulesetRuleActionParametersCustomKeyUser{
-			DeviceType: key.User.DeviceType,
-			Geo:        key.User.Geo,
-			Lang:       key.User.Lang,
-		}
-	}
-
-	if key.Host != nil {
-		if cfKey.CustomKey == nil {
-			cfKey.CustomKey = &cloudflare.RulesetRuleActionParametersCustomKey{}
-		}
-		cfKey.CustomKey.Host = &cloudflare.RulesetRuleActionParametersCustomKeyHost{
-			Resolved: key.Host.Resolved,
-		}
-	}
-
-	return cfKey
-}
-
-// convertRateLimit converts rate limit settings
-func (*Reconciler) convertRateLimit(rl *networkingv1alpha2.RulesetRuleRateLimit) *cloudflare.RulesetRuleRateLimit {
-	cfRL := &cloudflare.RulesetRuleRateLimit{
-		Characteristics:         rl.Characteristics,
-		CountingExpression:      rl.CountingExpression,
-		ScoreResponseHeaderName: rl.ScoreResponseHeaderName,
-	}
-	if rl.RequestsToOrigin != nil {
-		cfRL.RequestsToOrigin = *rl.RequestsToOrigin
-	}
-	if rl.Period > 0 {
-		cfRL.Period = rl.Period
-	}
-	if rl.RequestsPerPeriod > 0 {
-		cfRL.RequestsPerPeriod = rl.RequestsPerPeriod
-	}
-	if rl.MitigationTimeout > 0 {
-		cfRL.MitigationTimeout = rl.MitigationTimeout
-	}
-	if rl.ScorePerPeriod > 0 {
-		cfRL.ScorePerPeriod = rl.ScorePerPeriod
-	}
-	return cfRL
-}
-
-// getZoneID gets the zone ID for the zone name
-func (r *Reconciler) getZoneID(cfAPI *cf.API) (string, error) {
-	// Set the domain on the API
-	cfAPI.Domain = r.ruleset.Spec.Zone
-
-	// Get zone ID
-	zoneID, err := cfAPI.GetZoneId()
-	if err != nil {
-		return "", fmt.Errorf("failed to get zone ID for %s: %w", r.ruleset.Spec.Zone, err)
-	}
-	return zoneID, nil
-}
-
-// getAPIClient creates a Cloudflare API client from credentials
-func (r *Reconciler) getAPIClient() (*cf.API, error) {
-	if r.ruleset.Spec.CredentialsRef != nil {
-		ref := &networkingv1alpha2.CloudflareCredentialsRef{
-			Name: r.ruleset.Spec.CredentialsRef.Name,
-		}
-		return cf.NewAPIClientFromCredentialsRef(r.ctx, r.Client, ref)
-	}
-	return cf.NewAPIClientFromDefaultCredentials(r.ctx, r.Client)
-}
-
-// updateState updates the state and status of the ZoneRuleset
-func (r *Reconciler) updateState(state networkingv1alpha2.ZoneRulesetState, message string) {
-	r.ruleset.Status.State = state
-	r.ruleset.Status.Message = message
-	r.ruleset.Status.ObservedGeneration = r.ruleset.Generation
-
-	condition := metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionFalse,
-		ObservedGeneration: r.ruleset.Generation,
-		LastTransitionTime: metav1.Now(),
-		Reason:             string(state),
-		Message:            message,
-	}
-
-	if state == networkingv1alpha2.ZoneRulesetStateReady {
-		condition.Status = metav1.ConditionTrue
-		condition.Reason = "RulesetReady"
-	}
-
-	controller.SetCondition(&r.ruleset.Status.Conditions, condition.Type, condition.Status, condition.Reason, condition.Message)
-
-	if err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.ruleset, func() {
-		r.ruleset.Status.State = state
-		r.ruleset.Status.Message = message
-		r.ruleset.Status.ObservedGeneration = r.ruleset.Generation
-		controller.SetCondition(&r.ruleset.Status.Conditions, condition.Type, condition.Status, condition.Reason, condition.Message)
-	}); err != nil {
-		r.log.Error(err, "failed to update status")
-	}
+	// Requeue to check for sync completion
+	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 }
 
 // findRulesetsForCredentials returns ZoneRulesets that reference the given credentials
@@ -576,12 +355,52 @@ func (r *Reconciler) findRulesetsForCredentials(ctx context.Context, obj client.
 	return requests
 }
 
+// findRulesetsForSyncState returns ZoneRulesets that are sources for the given SyncState
+func (*Reconciler) findRulesetsForSyncState(ctx context.Context, obj client.Object) []reconcile.Request {
+	logger := log.FromContext(ctx)
+
+	syncState, ok := obj.(*networkingv1alpha2.CloudflareSyncState)
+	if !ok {
+		return nil
+	}
+
+	// Only process ZoneRuleset type SyncStates
+	if syncState.Spec.ResourceType != networkingv1alpha2.SyncResourceZoneRuleset {
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, source := range syncState.Spec.Sources {
+		if source.Ref.Kind == "ZoneRuleset" {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      source.Ref.Name,
+					Namespace: source.Ref.Namespace,
+				},
+			})
+		}
+	}
+
+	logger.V(1).Info("Found ZoneRulesets for SyncState update",
+		"syncState", syncState.Name,
+		"rulesetCount", len(requests))
+
+	return requests
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.Recorder = mgr.GetEventRecorderFor("zoneruleset-controller")
+
+	// Initialize ZoneRulesetService
+	r.zoneRulesetService = rulesetsvc.NewZoneRulesetService(mgr.GetClient())
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.ZoneRuleset{}).
 		Watches(&networkingv1alpha2.CloudflareCredentials{},
 			handler.EnqueueRequestsFromMapFunc(r.findRulesetsForCredentials)).
+		Watches(&networkingv1alpha2.CloudflareSyncState{},
+			handler.EnqueueRequestsFromMapFunc(r.findRulesetsForSyncState)).
 		Named("zoneruleset").
 		Complete(r)
 }

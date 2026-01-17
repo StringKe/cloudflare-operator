@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2025-2026 The Cloudflare Operator Authors
 
+// Package cloudflaredomain implements the controller for CloudflareDomain resources.
 package cloudflaredomain
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/cloudflare/cloudflare-go"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -54,7 +56,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// Get the CloudflareDomain resource
 	r.domain = &networkingv1alpha2.CloudflareDomain{}
 	if err := r.Get(ctx, req.NamespacedName, r.domain); err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
 		r.log.Error(err, "unable to fetch CloudflareDomain")
@@ -176,7 +178,7 @@ func (r *Reconciler) getCredentials() (*networkingv1alpha2.CloudflareCredentials
 		}
 	}
 
-	return nil, fmt.Errorf("no default CloudflareCredentials found, please create one with isDefault=true or specify credentialsRef")
+	return nil, errors.New("no default CloudflareCredentials found, please create one with isDefault=true or specify credentialsRef")
 }
 
 // verifyDomain verifies the domain exists in Cloudflare and retrieves zone information

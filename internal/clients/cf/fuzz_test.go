@@ -43,7 +43,7 @@ func FuzzConfigurationRoundTrip(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, tunnelId, sourceFile, metrics string, warpEnabled bool, hostname, service string) {
 		config := &Configuration{
-			TunnelId:   tunnelId,
+			TunnelID:   tunnelId,
 			SourceFile: sourceFile,
 			Metrics:    metrics,
 			WarpRouting: WarpRoutingConfig{
@@ -71,8 +71,8 @@ func FuzzConfigurationRoundTrip(f *testing.F) {
 		}
 
 		// Verify critical fields are preserved
-		if restored.TunnelId != tunnelId {
-			t.Errorf("TunnelId mismatch: got %q, want %q", restored.TunnelId, tunnelId)
+		if restored.TunnelID != tunnelId {
+			t.Errorf("TunnelID mismatch: got %q, want %q", restored.TunnelID, tunnelId)
 		}
 		if restored.SourceFile != sourceFile {
 			t.Errorf("SourceFile mismatch: got %q, want %q", restored.SourceFile, sourceFile)

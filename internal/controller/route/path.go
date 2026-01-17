@@ -67,10 +67,7 @@ func ConvertGatewayPathType(path string, pathType *gatewayv1.PathMatchType) stri
 			return path + ".*"
 		}
 		return path + "(/.*)?$"
-	case gatewayv1.PathMatchRegularExpression:
-		// Already a regex, use as-is
-		return path
-	default:
+	default: // includes PathMatchRegularExpression - already a regex, use as-is
 		return path
 	}
 }

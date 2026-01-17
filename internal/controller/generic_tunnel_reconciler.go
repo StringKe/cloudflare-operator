@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/clients/k8s"
+	"github.com/StringKe/cloudflare-operator/internal/service"
+	tunnelsvc "github.com/StringKe/cloudflare-operator/internal/service/tunnel"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -24,6 +27,10 @@ import (
 const (
 	CredentialsJsonFilename string = "credentials.json"
 	CloudflaredLatestImage  string = "cloudflare/cloudflared:latest"
+
+	// Tunnel kind constants for SyncState source identification
+	kindTunnel        = "Tunnel"
+	kindClusterTunnel = "ClusterTunnel"
 )
 
 type GenericTunnelReconciler interface {
@@ -251,6 +258,8 @@ func setupNewTunnel(r GenericTunnelReconciler) error {
 
 // updateTunnelStatusMinimal updates only the essential tunnel status fields (TunnelId, TunnelName, AccountId)
 // This is called immediately after tunnel creation to prevent duplicate creation on re-reconcile
+//
+//nolint:unused // internal helper, may be used in future
 func updateTunnelStatusMinimal(r GenericTunnelReconciler) error {
 	status := r.GetTunnel().GetStatus()
 	status.AccountId = r.GetCfAPI().ValidAccountId
@@ -424,9 +433,33 @@ func cleanupTunnel(r GenericTunnelReconciler) (ctrl.Result, bool, error) {
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, false, nil
 		}
 		if bypass || *cfDeployment.Spec.Replicas == 0 {
+			tunnelID := r.GetTunnel().GetStatus().TunnelId
+
+			// Unregister from SyncState before deleting the tunnel
+			// This removes the Tunnel/ClusterTunnel's contribution to the configuration
+			if tunnelID != "" {
+				tunnelKind := kindTunnel
+				if r.GetTunnel().GetNamespace() == "" {
+					tunnelKind = kindClusterTunnel
+				}
+
+				svc := tunnelsvc.NewService(r.GetClient())
+				source := service.Source{
+					Kind:      tunnelKind,
+					Namespace: r.GetTunnel().GetNamespace(),
+					Name:      r.GetTunnel().GetName(),
+				}
+
+				if err := svc.Unregister(r.GetContext(), tunnelID, source); err != nil {
+					r.GetLog().Error(err, "Failed to unregister from SyncState", "tunnelId", tunnelID)
+					// Don't block deletion on SyncState cleanup failure
+				} else {
+					r.GetLog().Info("Unregistered from SyncState", "tunnelId", tunnelID)
+				}
+			}
+
 			// P0 FIX: Delete all routes associated with this tunnel BEFORE deleting the tunnel
 			// This prevents the "Cannot delete tunnel because it has Warp routing configured" error
-			tunnelID := r.GetTunnel().GetStatus().TunnelId
 			if tunnelID != "" {
 				deletedCount, err := r.GetCfAPI().DeleteTunnelRoutesByTunnelID(tunnelID)
 				if err != nil {
@@ -656,19 +689,19 @@ func updateTunnelStatus(r GenericTunnelReconciler) error {
 	return fmt.Errorf("failed to update tunnel status after %d retries: %w", maxRetries, lastErr)
 }
 
-// syncWarpRoutingConfig syncs the warp-routing configuration from Tunnel/ClusterTunnel spec
-// to Cloudflare's remote configuration using read-merge-write pattern.
+// syncWarpRoutingConfig registers the warp-routing configuration from Tunnel/ClusterTunnel spec
+// to the CloudflareSyncState CRD via TunnelConfigService.
 //
-// This is critical for --token mode where cloudflared pulls configuration from Cloudflare cloud
-// instead of local ConfigMap. Uses MergeAndSync to avoid race conditions with other controllers
-// (Ingress, Gateway, TunnelBinding) that might also be updating the tunnel configuration.
+// This is part of the unified sync architecture where:
+// - Tunnel/ClusterTunnel controllers register settings via TunnelConfigService
+// - TunnelConfigSyncController aggregates all sources and syncs to Cloudflare API
 //
 // The Tunnel/ClusterTunnel controller is the ONLY source of truth for:
 // - warp-routing configuration
 // - fallback target
+// - global origin request settings
 //
-// Other controllers (Ingress, Gateway, TunnelBinding) should preserve existing warp-routing
-// by passing WarpRouting: nil to MergeAndSync.
+// Other controllers (Ingress, Gateway, TunnelBinding) only contribute ingress rules.
 func syncWarpRoutingConfig(r GenericTunnelReconciler) error {
 	tunnelID := r.GetTunnel().GetStatus().TunnelId
 	if tunnelID == "" {
@@ -681,46 +714,64 @@ func syncWarpRoutingConfig(r GenericTunnelReconciler) error {
 		fallbackTarget = "http_status:404"
 	}
 
-	// Build source identifier for logging and debugging
-	tunnelKind := "Tunnel"
+	// Determine tunnel kind for source identification
+	tunnelKind := kindTunnel
 	if r.GetTunnel().GetNamespace() == "" {
-		tunnelKind = "ClusterTunnel"
-	}
-	source := fmt.Sprintf("%s/%s", tunnelKind, r.GetTunnel().GetName())
-
-	r.GetLog().Info("Syncing warp-routing and fallback configuration using MergeAndSync",
-		"tunnelId", tunnelID, "source", source, "enableWarpRouting", enableWarpRouting, "fallbackTarget", fallbackTarget)
-
-	// Use MergeAndSync to safely update warp-routing and fallback without overwriting ingress rules
-	// The Tunnel controller doesn't add any ingress rules - it only controls warp-routing and fallback
-	// PreviousHostnames is empty because Tunnel controller doesn't own any hostnames
-	mergeOpts := cf.MergeOptions{
-		Source:            source,
-		PreviousHostnames: r.GetTunnel().GetStatus().SyncedHostnames, // Should be empty for Tunnel controller
-		CurrentRules:      nil,                                       // Tunnel controller doesn't add ingress rules
-		WarpRouting:       &cf.WarpRoutingConfig{Enabled: enableWarpRouting},
-		FallbackTarget:    fallbackTarget,
+		tunnelKind = kindClusterTunnel
 	}
 
-	result, err := r.GetCfAPI().MergeAndSync(tunnelID, mergeOpts)
-	if err != nil {
-		return fmt.Errorf("failed to merge and sync tunnel configuration: %w", err)
+	r.GetLog().Info("Registering tunnel settings to SyncState",
+		"tunnelId", tunnelID,
+		"kind", tunnelKind,
+		"name", r.GetTunnel().GetName(),
+		"enableWarpRouting", enableWarpRouting,
+		"fallbackTarget", fallbackTarget)
+
+	// Build credentials reference from Tunnel spec
+	credRef := getCredentialsReference(r)
+
+	// Create TunnelConfigService and register settings
+	svc := tunnelsvc.NewService(r.GetClient())
+	opts := tunnelsvc.RegisterSettingsOptions{
+		TunnelID:       tunnelID,
+		AccountID:      r.GetCfAPI().ValidAccountId,
+		CredentialsRef: credRef,
+		Source: service.Source{
+			Kind:      tunnelKind,
+			Namespace: r.GetTunnel().GetNamespace(),
+			Name:      r.GetTunnel().GetName(),
+		},
+		Settings: tunnelsvc.TunnelSettings{
+			WarpRouting:    &tunnelsvc.WarpRoutingConfig{Enabled: enableWarpRouting},
+			FallbackTarget: fallbackTarget,
+		},
 	}
 
-	r.GetLog().Info("Successfully synced warp-routing and fallback configuration",
-		"tunnelId", tunnelID, "source", source, "configVersion", result.Version,
-		"enableWarpRouting", enableWarpRouting, "fallbackTarget", fallbackTarget)
+	if err := svc.RegisterSettings(r.GetContext(), opts); err != nil {
+		return fmt.Errorf("failed to register tunnel settings: %w", err)
+	}
+
+	r.GetLog().Info("Successfully registered tunnel settings to SyncState",
+		"tunnelId", tunnelID,
+		"kind", tunnelKind,
+		"name", r.GetTunnel().GetName())
 	r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal,
-		"ConfigSynced", fmt.Sprintf("Tunnel configuration synced: warp-routing=%v, fallback=%s", enableWarpRouting, fallbackTarget))
-
-	// Update tunnel status with config version (SyncedHostnames should remain empty for Tunnel controller)
-	status := r.GetTunnel().GetStatus()
-	status.ConfigVersion = result.Version
-	status.SyncedHostnames = result.SyncedHostnames // Should be empty
-	r.GetTunnel().SetStatus(status)
-	// Note: Status will be saved in updateTunnelStatus which calls this function
+		"SettingsRegistered", fmt.Sprintf("Tunnel settings registered: warp-routing=%v, fallback=%s", enableWarpRouting, fallbackTarget))
 
 	return nil
+}
+
+// getCredentialsReference extracts the CredentialsReference from Tunnel spec.
+// If credentialsRef is specified, use it; otherwise return an empty reference.
+func getCredentialsReference(r GenericTunnelReconciler) v1alpha2.CredentialsReference {
+	spec := r.GetTunnel().GetSpec()
+	if spec.Cloudflare.CredentialsRef != nil {
+		return v1alpha2.CredentialsReference{
+			Name: spec.Cloudflare.CredentialsRef.Name,
+		}
+	}
+	// Legacy mode: no CredentialsRef, return empty (sync controller will need to handle this)
+	return v1alpha2.CredentialsReference{}
 }
 
 func createManagedResources(r GenericTunnelReconciler) (ctrl.Result, error) {
@@ -808,7 +859,7 @@ func secretForTunnel(r GenericTunnelReconciler) *corev1.Secret {
 		StringData: map[string]string{CredentialsJsonFilename: r.GetTunnelCreds()},
 	}
 	// Set Tunnel instance as the owner and controller
-	ctrl.SetControllerReference(r.GetTunnel().GetObject(), sec, r.GetScheme())
+	_ = ctrl.SetControllerReference(r.GetTunnel().GetObject(), sec, r.GetScheme())
 	return sec
 }
 
@@ -955,6 +1006,6 @@ func deploymentForTunnel(r GenericTunnelReconciler) *appsv1.Deployment {
 		},
 	}
 	// Set Tunnel instance as the owner and controller
-	ctrl.SetControllerReference(r.GetTunnel().GetObject(), dep, r.GetScheme())
+	_ = ctrl.SetControllerReference(r.GetTunnel().GetObject(), dep, r.GetScheme())
 	return dep
 }

@@ -36,11 +36,11 @@ var (
 	// ErrPermissionDenied indicates permission was denied
 	ErrPermissionDenied = errors.New("permission denied")
 
-	// ErrInvalidTunnelId indicates tunnel ID is missing or invalid
-	ErrInvalidTunnelId = errors.New("invalid or missing tunnel ID")
+	// ErrInvalidTunnelID indicates tunnel ID is missing or invalid
+	ErrInvalidTunnelID = errors.New("invalid or missing tunnel ID")
 
-	// ErrInvalidZoneId indicates zone ID is missing or invalid
-	ErrInvalidZoneId = errors.New("invalid or missing zone ID")
+	// ErrInvalidZoneID indicates zone ID is missing or invalid
+	ErrInvalidZoneID = errors.New("invalid or missing zone ID")
 )
 
 // APIError wraps a Cloudflare API error with additional context

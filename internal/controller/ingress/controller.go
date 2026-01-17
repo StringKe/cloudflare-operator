@@ -27,6 +27,8 @@ import (
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
 	"github.com/StringKe/cloudflare-operator/internal/resolver"
+	"github.com/StringKe/cloudflare-operator/internal/service"
+	tunnelsvc "github.com/StringKe/cloudflare-operator/internal/service/tunnel"
 )
 
 const (
@@ -306,6 +308,30 @@ func (r *Reconciler) handleDeletion(
 	if err := r.rebuildTunnelConfig(ctx, config, ingress); err != nil {
 		logger.Error(err, "Failed to rebuild tunnel config")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+
+	// Check if this was the last Ingress for this config - if so, unregister from SyncState
+	remainingIngresses, _ := r.getIngressesForConfig(ctx, config)
+	isLastIngress := len(remainingIngresses) == 0 ||
+		(len(remainingIngresses) == 1 &&
+			remainingIngresses[0].Name == ingress.Name &&
+			remainingIngresses[0].Namespace == ingress.Namespace)
+	if isLastIngress {
+		tunnel, err := r.getTunnel(ctx, config)
+		if err == nil && tunnel.GetStatus().TunnelId != "" {
+			svc := tunnelsvc.NewService(r.Client)
+			source := service.Source{
+				Kind:      "Ingress",
+				Namespace: config.Namespace,
+				Name:      config.Name,
+			}
+			if err := svc.Unregister(ctx, tunnel.GetStatus().TunnelId, source); err != nil {
+				logger.Error(err, "Failed to unregister from SyncState")
+				// Don't block deletion on SyncState cleanup failure
+			} else {
+				logger.Info("Unregistered from SyncState")
+			}
+		}
 	}
 
 	// Remove finalizer
@@ -850,11 +876,15 @@ func (r *Reconciler) findIngressesForService(ctx context.Context, obj client.Obj
 	return requests
 }
 
-// syncTunnelConfigToAPI syncs the tunnel configuration to Cloudflare API using read-merge-write.
-// This uses MergeAndSync to avoid race conditions with other controllers (TunnelBinding, Gateway, Tunnel).
+// syncTunnelConfigToAPI registers ingress rules to the CloudflareSyncState CRD
+// via TunnelConfigService. The actual sync to Cloudflare API is handled by TunnelConfigSyncController.
+//
+// This is part of the unified sync architecture where:
+// - Ingress controller registers rules via TunnelConfigService
+// - TunnelConfigSyncController aggregates all sources and syncs to Cloudflare API
+//
 // This is necessary for AccessApplication domain validation - Cloudflare Access API
 // validates that domains are registered as public hostnames in the tunnel configuration.
-// Without this sync, AccessApplication creation fails with "domain not included in destinations".
 func (r *Reconciler) syncTunnelConfigToAPI(
 	ctx context.Context,
 	tunnel TunnelInterface,
@@ -870,46 +900,81 @@ func (r *Reconciler) syncTunnelConfigToAPI(
 		return nil
 	}
 
-	// Initialize API client
-	apiClient, err := r.initAPIClient(ctx, tunnel, config)
-	if err != nil {
-		return fmt.Errorf("failed to initialize API client: %w", err)
+	// Convert cf.UnvalidatedIngressRule to tunnelsvc.IngressRule
+	tunnelRules := make([]tunnelsvc.IngressRule, 0, len(rules))
+	for _, rule := range rules {
+		// Skip catch-all rule (empty hostname) - it will be added by SyncController
+		if rule.Hostname == "" {
+			continue
+		}
+
+		tunnelRule := tunnelsvc.IngressRule{
+			Hostname: rule.Hostname,
+			Path:     rule.Path,
+			Service:  rule.Service,
+		}
+
+		// Convert origin request config if present
+		if rule.OriginRequest.NoTLSVerify != nil ||
+			rule.OriginRequest.HTTP2Origin != nil ||
+			rule.OriginRequest.CAPool != nil ||
+			rule.OriginRequest.ProxyAddress != nil ||
+			rule.OriginRequest.ProxyPort != nil ||
+			rule.OriginRequest.ProxyType != nil {
+			tunnelRule.OriginRequest = &tunnelsvc.OriginRequestConfig{
+				NoTLSVerify:  rule.OriginRequest.NoTLSVerify,
+				HTTP2Origin:  rule.OriginRequest.HTTP2Origin,
+				CAPool:       rule.OriginRequest.CAPool,
+				ProxyAddress: rule.OriginRequest.ProxyAddress,
+				ProxyPort:    rule.OriginRequest.ProxyPort,
+				ProxyType:    rule.OriginRequest.ProxyType,
+			}
+		}
+
+		tunnelRules = append(tunnelRules, tunnelRule)
 	}
 
-	// Prepare merge options for read-merge-write
-	source := fmt.Sprintf("Ingress/%s/%s", config.Namespace, config.Name)
-	mergeOpts := cf.MergeOptions{
-		Source:            source,
-		PreviousHostnames: config.Status.SyncedHostnames, // Use previously synced hostnames for cleanup
-		CurrentRules:      rules,
-		FallbackTarget:    tunnel.GetSpec().FallbackTarget,
-		// Note: WarpRouting is controlled by Tunnel/ClusterTunnel controller, not Ingress
-		// Ingress should preserve existing warp-routing state
-		WarpRouting: nil,
+	// Get credentials reference from tunnel
+	credRef := r.getCredentialsReferenceFromTunnel(tunnel)
+
+	// Get account ID from tunnel status or API client
+	accountID := tunnel.GetStatus().AccountId
+
+	// Register rules to SyncState via TunnelConfigService
+	svc := tunnelsvc.NewService(r.Client)
+	opts := tunnelsvc.RegisterRulesOptions{
+		TunnelID:       tunnelID,
+		AccountID:      accountID,
+		CredentialsRef: credRef,
+		Source: service.Source{
+			Kind:      "Ingress",
+			Namespace: config.Namespace,
+			Name:      config.Name,
+		},
+		Rules:    tunnelRules,
+		Priority: tunnelsvc.PriorityIngress,
 	}
 
-	// Use MergeAndSync for safe read-merge-write operation
-	// This prevents race conditions with other controllers
-	result, err := apiClient.MergeAndSync(tunnelID, mergeOpts)
-	if err != nil {
-		return fmt.Errorf("failed to merge and sync tunnel configuration: %w", err)
+	if err := svc.RegisterRules(ctx, opts); err != nil {
+		return fmt.Errorf("failed to register rules to SyncState: %w", err)
 	}
 
-	// Update TunnelIngressClassConfig status with synced hostnames and config version
-	if err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, config, func() {
-		config.Status.SyncedHostnames = result.SyncedHostnames
-		config.Status.ConfigVersion = result.Version
-	}); err != nil {
-		logger.Error(err, "Failed to update TunnelIngressClassConfig status with sync result")
-		// Don't return error - the sync itself succeeded
-	}
-
-	logger.Info("Merged and synced tunnel configuration to Cloudflare API",
+	logger.Info("Registered ingress rules to SyncState",
 		"tunnel", tunnel.GetName(),
 		"tunnelId", tunnelID,
-		"source", source,
-		"syncedHostnames", result.SyncedHostnames,
-		"configVersion", result.Version)
+		"ruleCount", len(tunnelRules),
+		"source", fmt.Sprintf("Ingress/%s/%s", config.Namespace, config.Name))
 
 	return nil
+}
+
+// getCredentialsReferenceFromTunnel extracts the CredentialsReference from a Tunnel or ClusterTunnel.
+func (*Reconciler) getCredentialsReferenceFromTunnel(tunnel TunnelInterface) networkingv1alpha2.CredentialsReference {
+	spec := tunnel.GetSpec()
+	if spec.Cloudflare.CredentialsRef != nil {
+		return networkingv1alpha2.CredentialsReference{
+			Name: spec.Cloudflare.CredentialsRef.Name,
+		}
+	}
+	return networkingv1alpha2.CredentialsReference{}
 }

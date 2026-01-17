@@ -19,7 +19,7 @@ func TestNewOriginRequestBuilder(t *testing.T) {
 	require.NotNil(t, builder)
 	config := builder.Build()
 	assert.Nil(t, config.NoTLSVerify)
-	assert.Nil(t, config.Http2Origin)
+	assert.Nil(t, config.HTTP2Origin)
 	assert.Nil(t, config.CAPool)
 }
 
@@ -64,8 +64,8 @@ func TestOriginRequestBuilder_WithDefaults_AllFields(t *testing.T) {
 	require.NotNil(t, config.NoTLSVerify)
 	assert.True(t, *config.NoTLSVerify)
 
-	require.NotNil(t, config.Http2Origin)
-	assert.True(t, *config.Http2Origin)
+	require.NotNil(t, config.HTTP2Origin)
+	assert.True(t, *config.HTTP2Origin)
 
 	require.NotNil(t, config.CAPool)
 	assert.Equal(t, "/etc/cloudflared/certs/custom-ca.pem", *config.CAPool)
@@ -120,8 +120,8 @@ func TestOriginRequestBuilder_WithDefaults_PartialFields(t *testing.T) {
 	require.NotNil(t, config.NoTLSVerify)
 	assert.True(t, *config.NoTLSVerify)
 
-	require.NotNil(t, config.Http2Origin)
-	assert.False(t, *config.Http2Origin)
+	require.NotNil(t, config.HTTP2Origin)
+	assert.False(t, *config.HTTP2Origin)
 
 	assert.Nil(t, config.CAPool)
 
@@ -169,12 +169,12 @@ func TestOriginRequestBuilder_SetHTTP2Origin(t *testing.T) {
 	builder := NewOriginRequestBuilder()
 
 	builder.SetHTTP2Origin(nil)
-	assert.Nil(t, builder.Build().Http2Origin)
+	assert.Nil(t, builder.Build().HTTP2Origin)
 
 	trueVal := true
 	builder.SetHTTP2Origin(&trueVal)
-	require.NotNil(t, builder.Build().Http2Origin)
-	assert.True(t, *builder.Build().Http2Origin)
+	require.NotNil(t, builder.Build().HTTP2Origin)
+	assert.True(t, *builder.Build().HTTP2Origin)
 }
 
 func TestOriginRequestBuilder_SetCAPool(t *testing.T) {
@@ -334,8 +334,8 @@ func TestOriginRequestBuilder_Chaining(t *testing.T) {
 	require.NotNil(t, config.NoTLSVerify)
 	assert.True(t, *config.NoTLSVerify)
 
-	require.NotNil(t, config.Http2Origin)
-	assert.True(t, *config.Http2Origin)
+	require.NotNil(t, config.HTTP2Origin)
+	assert.True(t, *config.HTTP2Origin)
 
 	require.NotNil(t, config.CAPool)
 	assert.Contains(t, *config.CAPool, "chain-ca.pem")

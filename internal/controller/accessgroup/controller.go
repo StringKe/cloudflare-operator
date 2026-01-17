@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -17,341 +18,270 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/log"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
+	"github.com/StringKe/cloudflare-operator/internal/service"
+	accesssvc "github.com/StringKe/cloudflare-operator/internal/service/access"
 )
 
 const (
 	FinalizerName = "accessgroup.networking.cloudflare-operator.io/finalizer"
 )
 
-// AccessGroupReconciler reconciles an AccessGroup object
-type AccessGroupReconciler struct {
+// Reconciler reconciles an AccessGroup object
+type Reconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
+
+	// Service layer
+	groupService *accesssvc.GroupService
+
+	// Runtime state
+	ctx         context.Context
+	log         logr.Logger
+	accessGroup *networkingv1alpha2.AccessGroup
+	cfAPI       *cf.API
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=accessgroups,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=accessgroups/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=accessgroups/finalizers,verbs=update
 
-func (r *AccessGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
+// Reconcile implements the reconciliation loop for AccessGroup resources.
+//
+//nolint:revive // cognitive complexity is acceptable for this controller reconciliation loop
+func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	r.ctx = ctx
+	r.log = ctrllog.FromContext(ctx)
 
 	// Fetch the AccessGroup instance
-	accessGroup := &networkingv1alpha2.AccessGroup{}
-	if err := r.Get(ctx, req.NamespacedName, accessGroup); err != nil {
+	r.accessGroup = &networkingv1alpha2.AccessGroup{}
+	if err := r.Get(ctx, req.NamespacedName, r.accessGroup); err != nil {
 		if errors.IsNotFound(err) {
+			r.log.Info("AccessGroup deleted, nothing to do")
 			return ctrl.Result{}, nil
 		}
+		r.log.Error(err, "unable to fetch AccessGroup")
 		return ctrl.Result{}, err
 	}
 
-	// Initialize API client
-	// AccessGroup is cluster-scoped, use operator namespace for legacy inline secrets
-	apiClient, err := cf.NewAPIClientFromDetails(ctx, r.Client, controller.OperatorNamespace, accessGroup.Spec.Cloudflare)
-	if err != nil {
-		logger.Error(err, "Failed to initialize Cloudflare API client")
-		return r.updateStatusError(ctx, accessGroup, err)
-	}
-
-	// Handle deletion
-	if !accessGroup.DeletionTimestamp.IsZero() {
-		return r.handleDeletion(ctx, accessGroup, apiClient)
+	// Check if AccessGroup is being deleted
+	if r.accessGroup.GetDeletionTimestamp() != nil {
+		// Initialize API client for deletion
+		if err := r.initAPIClient(); err != nil {
+			r.log.Error(err, "failed to initialize API client for deletion")
+			r.setCondition(metav1.ConditionFalse, controller.EventReasonAPIError, err.Error())
+			return ctrl.Result{}, err
+		}
+		return r.handleDeletion()
 	}
 
 	// Add finalizer if not present
-	if !controllerutil.ContainsFinalizer(accessGroup, FinalizerName) {
-		controllerutil.AddFinalizer(accessGroup, FinalizerName)
-		if err := r.Update(ctx, accessGroup); err != nil {
+	if !controllerutil.ContainsFinalizer(r.accessGroup, FinalizerName) {
+		controllerutil.AddFinalizer(r.accessGroup, FinalizerName)
+		if err := r.Update(ctx, r.accessGroup); err != nil {
+			r.log.Error(err, "failed to add finalizer")
 			return ctrl.Result{}, err
 		}
+		r.Recorder.Event(r.accessGroup, corev1.EventTypeNormal, controller.EventReasonFinalizerSet, "Finalizer added")
 	}
 
-	// Reconcile the access group
-	return r.reconcileAccessGroup(ctx, accessGroup, apiClient)
-}
-
-func (r *AccessGroupReconciler) handleDeletion(ctx context.Context, accessGroup *networkingv1alpha2.AccessGroup, apiClient *cf.API) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
-
-	if controllerutil.ContainsFinalizer(accessGroup, FinalizerName) {
-		// Delete from Cloudflare
-		if accessGroup.Status.GroupID != "" {
-			logger.Info("Deleting Access Group from Cloudflare", "groupId", accessGroup.Status.GroupID)
-			if err := apiClient.DeleteAccessGroup(accessGroup.Status.GroupID); err != nil {
-				// P0 FIX: Check if resource already deleted
-				if !cf.IsNotFoundError(err) {
-					logger.Error(err, "Failed to delete Access Group from Cloudflare")
-					r.Recorder.Event(accessGroup, corev1.EventTypeWarning, controller.EventReasonDeleteFailed,
-						fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
-					return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-				}
-				logger.Info("Access Group already deleted from Cloudflare")
-				r.Recorder.Event(accessGroup, corev1.EventTypeNormal, "AlreadyDeleted", "Access Group was already deleted from Cloudflare")
-			} else {
-				r.Recorder.Event(accessGroup, corev1.EventTypeNormal, controller.EventReasonDeleted, "Deleted from Cloudflare")
-			}
-		}
-
-		// P0 FIX: Remove finalizer with retry logic to handle conflicts
-		if err := controller.UpdateWithConflictRetry(ctx, r.Client, accessGroup, func() {
-			controllerutil.RemoveFinalizer(accessGroup, FinalizerName)
-		}); err != nil {
-			logger.Error(err, "failed to remove finalizer")
-			return ctrl.Result{}, err
-		}
-		r.Recorder.Event(accessGroup, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
+	// Reconcile the AccessGroup through service layer
+	if err := r.reconcileAccessGroup(); err != nil {
+		r.log.Error(err, "failed to reconcile AccessGroup")
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 
 	return ctrl.Result{}, nil
 }
 
-func (r *AccessGroupReconciler) reconcileAccessGroup(ctx context.Context, accessGroup *networkingv1alpha2.AccessGroup, apiClient *cf.API) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
-
-	// Use the Name from the spec, or fall back to the resource name
-	groupName := accessGroup.Spec.Name
-	if groupName == "" {
-		groupName = accessGroup.Name
+// initAPIClient initializes the Cloudflare API client.
+func (r *Reconciler) initAPIClient() error {
+	// AccessGroup is cluster-scoped, use operator namespace for legacy inline secrets
+	api, err := cf.NewAPIClientFromDetails(r.ctx, r.Client, controller.OperatorNamespace, r.accessGroup.Spec.Cloudflare)
+	if err != nil {
+		r.log.Error(err, "failed to initialize API client")
+		r.Recorder.Event(r.accessGroup, corev1.EventTypeWarning, controller.EventReasonAPIError, "Failed to initialize API client: "+err.Error())
+		return err
 	}
 
-	// Build access group params
-	params := cf.AccessGroupParams{
-		Name: groupName,
-	}
-
-	// Build include, exclude, require rules from spec
-	params.Include = r.buildGroupRules(accessGroup.Spec.Include)
-	params.Exclude = r.buildGroupRules(accessGroup.Spec.Exclude)
-	params.Require = r.buildGroupRules(accessGroup.Spec.Require)
-
-	var result *cf.AccessGroupResult
-	var err error
-
-	if accessGroup.Status.GroupID == "" {
-		// Create new access group
-		logger.Info("Creating Access Group", "name", params.Name)
-		r.Recorder.Event(accessGroup, corev1.EventTypeNormal, "Creating",
-			fmt.Sprintf("Creating Access Group '%s' in Cloudflare", params.Name))
-		result, err = apiClient.CreateAccessGroup(params)
-		if err != nil {
-			r.Recorder.Event(accessGroup, corev1.EventTypeWarning, controller.EventReasonCreateFailed,
-				fmt.Sprintf("Failed to create Access Group: %s", cf.SanitizeErrorMessage(err)))
-			return r.updateStatusError(ctx, accessGroup, err)
-		}
-		r.Recorder.Event(accessGroup, corev1.EventTypeNormal, controller.EventReasonCreated,
-			fmt.Sprintf("Created Access Group with ID '%s'", result.ID))
-	} else {
-		// Update existing access group
-		logger.Info("Updating Access Group", "groupId", accessGroup.Status.GroupID)
-		r.Recorder.Event(accessGroup, corev1.EventTypeNormal, "Updating",
-			fmt.Sprintf("Updating Access Group '%s' in Cloudflare", accessGroup.Status.GroupID))
-		result, err = apiClient.UpdateAccessGroup(accessGroup.Status.GroupID, params)
-		if err != nil {
-			r.Recorder.Event(accessGroup, corev1.EventTypeWarning, controller.EventReasonUpdateFailed,
-				fmt.Sprintf("Failed to update Access Group: %s", cf.SanitizeErrorMessage(err)))
-			return r.updateStatusError(ctx, accessGroup, err)
-		}
-		r.Recorder.Event(accessGroup, corev1.EventTypeNormal, controller.EventReasonUpdated,
-			fmt.Sprintf("Updated Access Group '%s'", result.ID))
-	}
-
-	// Update status
-	return r.updateStatusSuccess(ctx, accessGroup, result)
+	api.ValidAccountId = r.accessGroup.Status.AccountID
+	r.cfAPI = api
+	return nil
 }
 
-// buildGroupRules converts CRD group rules to API params.
+// handleDeletion handles the deletion of an AccessGroup.
 //
-//nolint:revive // cognitive complexity is acceptable for this conversion
-func (*AccessGroupReconciler) buildGroupRules(rules []networkingv1alpha2.AccessGroupRule) []cf.AccessGroupRuleParams {
-	if len(rules) == 0 {
-		return nil
+//nolint:revive // cognitive complexity is acceptable for deletion handling
+func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
+	if !controllerutil.ContainsFinalizer(r.accessGroup, FinalizerName) {
+		return ctrl.Result{}, nil
 	}
 
-	result := make([]cf.AccessGroupRuleParams, 0, len(rules))
-	for _, rule := range rules {
-		params := cf.AccessGroupRuleParams{}
-		hasRule := false
+	r.log.Info("Deleting AccessGroup")
+	r.Recorder.Event(r.accessGroup, corev1.EventTypeNormal, "Deleting", "Starting AccessGroup deletion")
 
-		if rule.Email != nil {
-			params.Email = &cf.AccessGroupEmailRuleParams{Email: rule.Email.Email}
-			hasRule = true
-		}
-		if rule.EmailDomain != nil {
-			params.EmailDomain = &cf.AccessGroupEmailDomainRuleParams{Domain: rule.EmailDomain.Domain}
-			hasRule = true
-		}
-		if rule.EmailList != nil {
-			params.EmailList = &cf.AccessGroupEmailListRuleParams{ID: rule.EmailList.ID}
-			hasRule = true
-		}
-		if rule.IPRanges != nil && len(rule.IPRanges.IP) > 0 {
-			params.IPRanges = &cf.AccessGroupIPRangesRuleParams{IP: rule.IPRanges.IP}
-			hasRule = true
-		}
-		if rule.IPList != nil {
-			params.IPList = &cf.AccessGroupIPListRuleParams{ID: rule.IPList.ID}
-			hasRule = true
-		}
-		if rule.Everyone {
-			params.Everyone = true
-			hasRule = true
-		}
-		if rule.Group != nil {
-			params.Group = &cf.AccessGroupGroupRuleParams{ID: rule.Group.ID}
-			hasRule = true
-		}
-		if rule.AnyValidServiceToken {
-			params.AnyValidServiceToken = true
-			hasRule = true
-		}
-		if rule.ServiceToken != nil {
-			params.ServiceToken = &cf.AccessGroupServiceTokenRuleParams{TokenID: rule.ServiceToken.TokenID}
-			hasRule = true
-		}
-		if rule.ExternalEvaluation != nil {
-			params.ExternalEvaluation = &cf.AccessGroupExternalEvaluationRuleParams{
-				EvaluateURL: rule.ExternalEvaluation.EvaluateURL,
-				KeysURL:     rule.ExternalEvaluation.KeysURL,
-			}
-			hasRule = true
-		}
-		if rule.Country != nil && len(rule.Country.Country) > 0 {
-			params.Country = &cf.AccessGroupCountryRuleParams{Country: rule.Country.Country}
-			hasRule = true
-		}
-		if rule.DevicePosture != nil {
-			params.DevicePosture = &cf.AccessGroupDevicePostureRuleParams{IntegrationUID: rule.DevicePosture.IntegrationUID}
-			hasRule = true
-		}
-		if rule.CommonName != nil {
-			params.CommonName = &cf.AccessGroupCommonNameRuleParams{CommonName: rule.CommonName.CommonName}
-			hasRule = true
-		}
-		if rule.Certificate {
-			params.Certificate = true
-			hasRule = true
-		}
-		if rule.SAML != nil {
-			params.SAML = &cf.AccessGroupSAMLRuleParams{
-				AttributeName:      rule.SAML.AttributeName,
-				AttributeValue:     rule.SAML.AttributeValue,
-				IdentityProviderID: rule.SAML.IdentityProviderID,
-			}
-			hasRule = true
-		}
-		if rule.OIDC != nil {
-			params.OIDC = &cf.AccessGroupOIDCRuleParams{
-				ClaimName:          rule.OIDC.ClaimName,
-				ClaimValue:         rule.OIDC.ClaimValue,
-				IdentityProviderID: rule.OIDC.IdentityProviderID,
-			}
-			hasRule = true
-		}
-		if rule.GSuite != nil {
-			params.GSuite = &cf.AccessGroupGSuiteRuleParams{
-				Email:              rule.GSuite.Email,
-				IdentityProviderID: rule.GSuite.IdentityProviderID,
-			}
-			hasRule = true
-		}
-		if rule.Azure != nil {
-			params.Azure = &cf.AccessGroupAzureRuleParams{
-				ID:                 rule.Azure.ID,
-				IdentityProviderID: rule.Azure.IdentityProviderID,
-			}
-			hasRule = true
-		}
-		if rule.GitHub != nil {
-			params.GitHub = &cf.AccessGroupGitHubRuleParams{
-				Name:               rule.GitHub.Name,
-				Teams:              rule.GitHub.Teams,
-				IdentityProviderID: rule.GitHub.IdentityProviderID,
-			}
-			hasRule = true
-		}
-		if rule.Okta != nil {
-			params.Okta = &cf.AccessGroupOktaRuleParams{
-				Name:               rule.Okta.Name,
-				IdentityProviderID: rule.Okta.IdentityProviderID,
-			}
-			hasRule = true
-		}
-		if rule.AuthMethod != nil {
-			params.AuthMethod = &cf.AccessGroupAuthMethodRuleParams{AuthMethod: rule.AuthMethod.AuthMethod}
-			hasRule = true
-		}
-		if rule.AuthContext != nil {
-			params.AuthContext = &cf.AccessGroupAuthContextRuleParams{
-				ID:                 rule.AuthContext.ID,
-				AcID:               rule.AuthContext.AcID,
-				IdentityProviderID: rule.AuthContext.IdentityProviderID,
-			}
-			hasRule = true
-		}
-		if rule.LoginMethod != nil {
-			params.LoginMethod = &cf.AccessGroupLoginMethodRuleParams{ID: rule.LoginMethod.ID}
-			hasRule = true
-		}
-
-		if hasRule {
-			result = append(result, params)
+	// Try to get Group ID from status or by looking up by name
+	groupID := r.accessGroup.Status.GroupID
+	if groupID == "" {
+		// Status ID is empty - try to find by name to prevent orphaned resources
+		groupName := r.accessGroup.GetAccessGroupName()
+		r.log.Info("Status.GroupID is empty, trying to find group by name", "name", groupName)
+		existing, err := r.cfAPI.ListAccessGroupsByName(groupName)
+		if err == nil && existing != nil {
+			groupID = existing.ID
+			r.log.Info("Found AccessGroup by name", "id", groupID)
+		} else {
+			r.log.Info("AccessGroup not found by name, assuming it was never created or already deleted")
 		}
 	}
 
-	return result
+	// Delete from Cloudflare if we have an ID
+	if groupID != "" {
+		if err := r.cfAPI.DeleteAccessGroup(groupID); err != nil {
+			if !cf.IsNotFoundError(err) {
+				r.log.Error(err, "failed to delete AccessGroup from Cloudflare")
+				r.Recorder.Event(r.accessGroup, corev1.EventTypeWarning,
+					controller.EventReasonDeleteFailed, cf.SanitizeErrorMessage(err))
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+			}
+			r.log.Info("AccessGroup already deleted from Cloudflare", "id", groupID)
+			r.Recorder.Event(r.accessGroup, corev1.EventTypeNormal,
+				"AlreadyDeleted", "AccessGroup was already deleted from Cloudflare")
+		} else {
+			r.log.Info("AccessGroup deleted from Cloudflare", "id", groupID)
+			r.Recorder.Event(r.accessGroup, corev1.EventTypeNormal,
+				controller.EventReasonDeleted, "Deleted from Cloudflare")
+		}
+	}
+
+	// Unregister from SyncState
+	source := service.Source{
+		Kind: "AccessGroup",
+		Name: r.accessGroup.Name,
+	}
+	if err := r.groupService.Unregister(r.ctx, groupID, source); err != nil {
+		r.log.Error(err, "failed to unregister from SyncState")
+		// Non-fatal - continue with finalizer removal
+	}
+
+	// Remove finalizer with retry logic to handle conflicts
+	if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.accessGroup, func() {
+		controllerutil.RemoveFinalizer(r.accessGroup, FinalizerName)
+	}); err != nil {
+		r.log.Error(err, "failed to remove finalizer")
+		return ctrl.Result{}, err
+	}
+	r.Recorder.Event(r.accessGroup, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
+
+	return ctrl.Result{}, nil
 }
 
-func (r *AccessGroupReconciler) updateStatusError(ctx context.Context, accessGroup *networkingv1alpha2.AccessGroup, err error) (ctrl.Result, error) {
-	// P0 FIX: Use UpdateStatusWithConflictRetry for status updates
-	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, accessGroup, func() {
-		accessGroup.Status.State = "Error"
-		meta.SetStatusCondition(&accessGroup.Status.Conditions, metav1.Condition{
-			Type:               "Ready",
-			Status:             metav1.ConditionFalse,
-			ObservedGeneration: accessGroup.Generation,
-			Reason:             "ReconcileError",
-			Message:            cf.SanitizeErrorMessage(err),
-			LastTransitionTime: metav1.Now(),
-		})
-		accessGroup.Status.ObservedGeneration = accessGroup.Generation
+// reconcileAccessGroup ensures the AccessGroup configuration is registered with the service layer.
+func (r *Reconciler) reconcileAccessGroup() error {
+	groupName := r.accessGroup.GetAccessGroupName()
+
+	// Build the configuration
+	config := accesssvc.AccessGroupConfig{
+		Name:      groupName,
+		Include:   r.accessGroup.Spec.Include,
+		Exclude:   r.accessGroup.Spec.Exclude,
+		Require:   r.accessGroup.Spec.Require,
+		IsDefault: r.accessGroup.Spec.IsDefault,
+	}
+
+	// Build source reference
+	source := service.Source{
+		Kind: "AccessGroup",
+		Name: r.accessGroup.Name,
+	}
+
+	// Build credentials reference
+	credRef := networkingv1alpha2.CredentialsReference{
+		Name: r.accessGroup.Spec.Cloudflare.CredentialsRef.Name,
+	}
+
+	// Get account ID - need to initialize API client first if not already done
+	accountID := r.accessGroup.Status.AccountID
+	if accountID == "" {
+		// Initialize API client to get account ID
+		if err := r.initAPIClient(); err != nil {
+			return fmt.Errorf("initialize API client for account ID: %w", err)
+		}
+		accountID, _ = r.cfAPI.GetAccountId()
+	}
+
+	// Register with service
+	opts := accesssvc.AccessGroupRegisterOptions{
+		AccountID:      accountID,
+		GroupID:        r.accessGroup.Status.GroupID,
+		Source:         source,
+		Config:         config,
+		CredentialsRef: credRef,
+	}
+
+	if err := r.groupService.Register(r.ctx, opts); err != nil {
+		r.log.Error(err, "failed to register AccessGroup configuration")
+		r.setCondition(metav1.ConditionFalse, controller.EventReasonCreateFailed, err.Error())
+		r.Recorder.Event(r.accessGroup, corev1.EventTypeWarning, controller.EventReasonCreateFailed, err.Error())
+		return err
+	}
+
+	// Update status to Pending if not already synced
+	return r.updateStatusPending()
+}
+
+// updateStatusPending updates the AccessGroup status to Pending state.
+//
+//nolint:revive // cognitive complexity is acceptable for status update logic
+func (r *Reconciler) updateStatusPending() error {
+	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.accessGroup, func() {
+		r.accessGroup.Status.ObservedGeneration = r.accessGroup.Generation
+
+		// Keep existing state if already active, otherwise set to pending
+		if r.accessGroup.Status.State != "Ready" {
+			r.accessGroup.Status.State = "pending"
+		}
+
+		// Set account ID if we have it
+		if r.cfAPI != nil {
+			if accountID, err := r.cfAPI.GetAccountId(); err == nil {
+				r.accessGroup.Status.AccountID = accountID
+			}
+		}
+
+		r.setCondition(metav1.ConditionTrue, "Pending", "Configuration registered, waiting for sync")
 	})
-	if updateErr != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
+
+	if err != nil {
+		r.log.Error(err, "failed to update AccessGroup status")
+		return err
 	}
 
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	r.log.Info("AccessGroup configuration registered", "name", r.accessGroup.Name)
+	return nil
 }
 
-func (r *AccessGroupReconciler) updateStatusSuccess(ctx context.Context, accessGroup *networkingv1alpha2.AccessGroup, result *cf.AccessGroupResult) (ctrl.Result, error) {
-	// P0 FIX: Use UpdateStatusWithConflictRetry for status updates
-	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, accessGroup, func() {
-		accessGroup.Status.GroupID = result.ID
-		accessGroup.Status.State = "Ready"
-		meta.SetStatusCondition(&accessGroup.Status.Conditions, metav1.Condition{
-			Type:               "Ready",
-			Status:             metav1.ConditionTrue,
-			ObservedGeneration: accessGroup.Generation,
-			Reason:             "Reconciled",
-			Message:            "Access Group successfully reconciled",
-			LastTransitionTime: metav1.Now(),
-		})
-		accessGroup.Status.ObservedGeneration = accessGroup.Generation
+// setCondition sets a condition on the AccessGroup status.
+func (r *Reconciler) setCondition(status metav1.ConditionStatus, reason, message string) {
+	meta.SetStatusCondition(&r.accessGroup.Status.Conditions, metav1.Condition{
+		Type:               "Ready",
+		Status:             status,
+		ObservedGeneration: r.accessGroup.Generation,
+		LastTransitionTime: metav1.Now(),
+		Reason:             reason,
+		Message:            message,
 	})
-	if updateErr != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
-	}
-
-	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 }
 
-func (r *AccessGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
+// SetupWithManager sets up the controller with the Manager.
+func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("accessgroup-controller")
+	r.groupService = accesssvc.NewGroupService(mgr.GetClient())
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.AccessGroup{}).
 		Complete(r)

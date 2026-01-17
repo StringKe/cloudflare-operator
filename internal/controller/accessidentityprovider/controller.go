@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cloudflare/cloudflare-go"
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -18,317 +18,269 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/log"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
+	"github.com/StringKe/cloudflare-operator/internal/service"
+	accesssvc "github.com/StringKe/cloudflare-operator/internal/service/access"
 )
 
 const (
 	FinalizerName = "accessidentityprovider.networking.cloudflare-operator.io/finalizer"
 )
 
-// AccessIdentityProviderReconciler reconciles an AccessIdentityProvider object
-type AccessIdentityProviderReconciler struct {
+// Reconciler reconciles an AccessIdentityProvider object
+type Reconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
+
+	// Service layer
+	idpService *accesssvc.IdentityProviderService
+
+	// Runtime state
+	ctx   context.Context
+	log   logr.Logger
+	idp   *networkingv1alpha2.AccessIdentityProvider
+	cfAPI *cf.API
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=accessidentityproviders,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=accessidentityproviders/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=accessidentityproviders/finalizers,verbs=update
 
-func (r *AccessIdentityProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
+// Reconcile implements the reconciliation loop for AccessIdentityProvider resources.
+//
+//nolint:revive // cognitive complexity is acceptable for this controller reconciliation loop
+func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	r.ctx = ctx
+	r.log = ctrllog.FromContext(ctx)
 
 	// Fetch the AccessIdentityProvider instance
-	idp := &networkingv1alpha2.AccessIdentityProvider{}
-	if err := r.Get(ctx, req.NamespacedName, idp); err != nil {
+	r.idp = &networkingv1alpha2.AccessIdentityProvider{}
+	if err := r.Get(ctx, req.NamespacedName, r.idp); err != nil {
 		if errors.IsNotFound(err) {
+			r.log.Info("AccessIdentityProvider deleted, nothing to do")
 			return ctrl.Result{}, nil
 		}
+		r.log.Error(err, "unable to fetch AccessIdentityProvider")
 		return ctrl.Result{}, err
 	}
 
-	// Initialize API client
-	// AccessIdentityProvider is cluster-scoped, use operator namespace for legacy inline secrets
-	apiClient, err := cf.NewAPIClientFromDetails(ctx, r.Client, controller.OperatorNamespace, idp.Spec.Cloudflare)
-	if err != nil {
-		logger.Error(err, "Failed to initialize Cloudflare API client")
-		return r.updateStatusError(ctx, idp, err)
-	}
-
-	// Handle deletion
-	if !idp.DeletionTimestamp.IsZero() {
-		return r.handleDeletion(ctx, idp, apiClient)
+	// Check if AccessIdentityProvider is being deleted
+	if r.idp.GetDeletionTimestamp() != nil {
+		// Initialize API client for deletion
+		if err := r.initAPIClient(); err != nil {
+			r.log.Error(err, "failed to initialize API client for deletion")
+			r.setCondition(metav1.ConditionFalse, controller.EventReasonAPIError, err.Error())
+			return ctrl.Result{}, err
+		}
+		return r.handleDeletion()
 	}
 
 	// Add finalizer if not present
-	if !controllerutil.ContainsFinalizer(idp, FinalizerName) {
-		controllerutil.AddFinalizer(idp, FinalizerName)
-		if err := r.Update(ctx, idp); err != nil {
+	if !controllerutil.ContainsFinalizer(r.idp, FinalizerName) {
+		controllerutil.AddFinalizer(r.idp, FinalizerName)
+		if err := r.Update(ctx, r.idp); err != nil {
+			r.log.Error(err, "failed to add finalizer")
 			return ctrl.Result{}, err
 		}
+		r.Recorder.Event(r.idp, corev1.EventTypeNormal, controller.EventReasonFinalizerSet, "Finalizer added")
 	}
 
-	// Reconcile the identity provider
-	return r.reconcileIdentityProvider(ctx, idp, apiClient)
-}
-
-func (r *AccessIdentityProviderReconciler) handleDeletion(ctx context.Context, idp *networkingv1alpha2.AccessIdentityProvider, apiClient *cf.API) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
-
-	if controllerutil.ContainsFinalizer(idp, FinalizerName) {
-		// Delete from Cloudflare
-		if idp.Status.ProviderID != "" {
-			logger.Info("Deleting Access Identity Provider from Cloudflare", "providerId", idp.Status.ProviderID)
-			if err := apiClient.DeleteAccessIdentityProvider(idp.Status.ProviderID); err != nil {
-				// P0 FIX: Check if resource already deleted
-				if !cf.IsNotFoundError(err) {
-					logger.Error(err, "Failed to delete Access Identity Provider from Cloudflare")
-					r.Recorder.Event(idp, corev1.EventTypeWarning, controller.EventReasonDeleteFailed,
-						fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
-					return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-				}
-				logger.Info("Access Identity Provider already deleted from Cloudflare")
-				r.Recorder.Event(idp, corev1.EventTypeNormal, "AlreadyDeleted", "Access Identity Provider was already deleted from Cloudflare")
-			} else {
-				r.Recorder.Event(idp, corev1.EventTypeNormal, controller.EventReasonDeleted, "Deleted from Cloudflare")
-			}
-		}
-
-		// P0 FIX: Remove finalizer with retry logic to handle conflicts
-		if err := controller.UpdateWithConflictRetry(ctx, r.Client, idp, func() {
-			controllerutil.RemoveFinalizer(idp, FinalizerName)
-		}); err != nil {
-			logger.Error(err, "failed to remove finalizer")
-			return ctrl.Result{}, err
-		}
-		r.Recorder.Event(idp, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
+	// Reconcile the AccessIdentityProvider through service layer
+	if err := r.reconcileIdentityProvider(); err != nil {
+		r.log.Error(err, "failed to reconcile AccessIdentityProvider")
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 
 	return ctrl.Result{}, nil
 }
 
-func (r *AccessIdentityProviderReconciler) reconcileIdentityProvider(ctx context.Context, idp *networkingv1alpha2.AccessIdentityProvider, apiClient *cf.API) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
-
-	// Build identity provider params
-	params := cf.AccessIdentityProviderParams{
-		Name: idp.GetProviderName(),
-		Type: idp.Spec.Type,
+// initAPIClient initializes the Cloudflare API client.
+func (r *Reconciler) initAPIClient() error {
+	// AccessIdentityProvider is cluster-scoped, use operator namespace for legacy inline secrets
+	api, err := cf.NewAPIClientFromDetails(r.ctx, r.Client, controller.OperatorNamespace, r.idp.Spec.Cloudflare)
+	if err != nil {
+		r.log.Error(err, "failed to initialize API client")
+		r.Recorder.Event(r.idp, corev1.EventTypeWarning, controller.EventReasonAPIError, "Failed to initialize API client: "+err.Error())
+		return err
 	}
 
-	// Build config based on type
-	if idp.Spec.Config != nil {
-		params.Config = r.buildConfig(idp.Spec.Config)
+	api.ValidAccountId = r.idp.Status.AccountID
+	r.cfAPI = api
+	return nil
+}
+
+// handleDeletion handles the deletion of an AccessIdentityProvider.
+//
+//nolint:revive // cognitive complexity is acceptable for deletion handling
+func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
+	if !controllerutil.ContainsFinalizer(r.idp, FinalizerName) {
+		return ctrl.Result{}, nil
 	}
 
-	// Build SCIM config if present
-	if idp.Spec.ScimConfig != nil {
-		params.ScimConfig = r.buildScimConfig(idp.Spec.ScimConfig)
-	}
+	r.log.Info("Deleting AccessIdentityProvider")
+	r.Recorder.Event(r.idp, corev1.EventTypeNormal, "Deleting", "Starting AccessIdentityProvider deletion")
 
-	var result *cf.AccessIdentityProviderResult
-	var err error
-
-	if idp.Status.ProviderID == "" {
-		// Create new identity provider
-		logger.Info("Creating Access Identity Provider", "name", params.Name, "type", params.Type)
-		r.Recorder.Event(idp, corev1.EventTypeNormal, "Creating",
-			fmt.Sprintf("Creating Access Identity Provider '%s' (type: %s) in Cloudflare", params.Name, params.Type))
-		result, err = apiClient.CreateAccessIdentityProvider(params)
-		if err != nil {
-			r.Recorder.Event(idp, corev1.EventTypeWarning, controller.EventReasonCreateFailed,
-				fmt.Sprintf("Failed to create Access Identity Provider: %s", cf.SanitizeErrorMessage(err)))
-			return r.updateStatusError(ctx, idp, err)
+	// Try to get Provider ID from status or by looking up by name
+	providerID := r.idp.Status.ProviderID
+	if providerID == "" {
+		// Status ID is empty - try to find by name to prevent orphaned resources
+		providerName := r.idp.GetProviderName()
+		r.log.Info("Status.ProviderID is empty, trying to find provider by name", "name", providerName)
+		existing, err := r.cfAPI.ListAccessIdentityProvidersByName(providerName)
+		if err == nil && existing != nil {
+			providerID = existing.ID
+			r.log.Info("Found AccessIdentityProvider by name", "id", providerID)
+		} else {
+			r.log.Info("AccessIdentityProvider not found by name, assuming it was never created or already deleted")
 		}
-		r.Recorder.Event(idp, corev1.EventTypeNormal, controller.EventReasonCreated,
-			fmt.Sprintf("Created Access Identity Provider with ID '%s'", result.ID))
-	} else {
-		// Update existing identity provider
-		logger.Info("Updating Access Identity Provider", "providerId", idp.Status.ProviderID)
-		r.Recorder.Event(idp, corev1.EventTypeNormal, "Updating",
-			fmt.Sprintf("Updating Access Identity Provider '%s' in Cloudflare", idp.Status.ProviderID))
-		result, err = apiClient.UpdateAccessIdentityProvider(idp.Status.ProviderID, params)
-		if err != nil {
-			r.Recorder.Event(idp, corev1.EventTypeWarning, controller.EventReasonUpdateFailed,
-				fmt.Sprintf("Failed to update Access Identity Provider: %s", cf.SanitizeErrorMessage(err)))
-			return r.updateStatusError(ctx, idp, err)
+	}
+
+	// Delete from Cloudflare if we have an ID
+	if providerID != "" {
+		if err := r.cfAPI.DeleteAccessIdentityProvider(providerID); err != nil {
+			if !cf.IsNotFoundError(err) {
+				r.log.Error(err, "failed to delete AccessIdentityProvider from Cloudflare")
+				r.Recorder.Event(r.idp, corev1.EventTypeWarning,
+					controller.EventReasonDeleteFailed, cf.SanitizeErrorMessage(err))
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+			}
+			r.log.Info("AccessIdentityProvider already deleted from Cloudflare", "id", providerID)
+			r.Recorder.Event(r.idp, corev1.EventTypeNormal,
+				"AlreadyDeleted", "AccessIdentityProvider was already deleted from Cloudflare")
+		} else {
+			r.log.Info("AccessIdentityProvider deleted from Cloudflare", "id", providerID)
+			r.Recorder.Event(r.idp, corev1.EventTypeNormal,
+				controller.EventReasonDeleted, "Deleted from Cloudflare")
 		}
-		r.Recorder.Event(idp, corev1.EventTypeNormal, controller.EventReasonUpdated,
-			fmt.Sprintf("Updated Access Identity Provider '%s'", result.ID))
 	}
 
-	// Update status
-	return r.updateStatusSuccess(ctx, idp, result)
+	// Unregister from SyncState
+	source := service.Source{
+		Kind: "AccessIdentityProvider",
+		Name: r.idp.Name,
+	}
+	if err := r.idpService.Unregister(r.ctx, providerID, source); err != nil {
+		r.log.Error(err, "failed to unregister from SyncState")
+		// Non-fatal - continue with finalizer removal
+	}
+
+	// Remove finalizer with retry logic to handle conflicts
+	if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.idp, func() {
+		controllerutil.RemoveFinalizer(r.idp, FinalizerName)
+	}); err != nil {
+		r.log.Error(err, "failed to remove finalizer")
+		return ctrl.Result{}, err
+	}
+	r.Recorder.Event(r.idp, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
+
+	return ctrl.Result{}, nil
 }
 
-func (r *AccessIdentityProviderReconciler) buildConfig(config *networkingv1alpha2.IdentityProviderConfig) cloudflare.AccessIdentityProviderConfiguration {
-	result := cloudflare.AccessIdentityProviderConfiguration{}
+// reconcileIdentityProvider ensures the AccessIdentityProvider configuration is registered with the service layer.
+func (r *Reconciler) reconcileIdentityProvider() error {
+	providerName := r.idp.GetProviderName()
 
-	if config.ClientID != "" {
-		result.ClientID = config.ClientID
-	}
-	if config.ClientSecret != "" {
-		result.ClientSecret = config.ClientSecret
-	}
-	if config.AuthURL != "" {
-		result.AuthURL = config.AuthURL
-	}
-	if config.TokenURL != "" {
-		result.TokenURL = config.TokenURL
-	}
-	if config.CertsURL != "" {
-		result.CertsURL = config.CertsURL
-	}
-	// Handle IdP public cert - prefer single cert field, fallback to array
-	if config.IdPPublicCert != "" {
-		result.IdpPublicCert = config.IdPPublicCert
-	} else if len(config.IdPPublicCerts) > 0 {
-		result.IdpPublicCert = config.IdPPublicCerts[0]
-	}
-	if config.SSOTargetURL != "" {
-		result.SsoTargetURL = config.SSOTargetURL
-	}
-	if config.SignRequest != nil {
-		result.SignRequest = *config.SignRequest
-	}
-	if config.EmailClaimName != "" {
-		result.EmailClaimName = config.EmailClaimName
-	}
-	if len(config.Claims) > 0 {
-		result.Claims = config.Claims
-	}
-	if len(config.Scopes) > 0 {
-		result.Scopes = config.Scopes
-	}
-	if len(config.Attributes) > 0 {
-		result.Attributes = config.Attributes
-	}
-	if config.DirectoryID != "" {
-		result.DirectoryID = config.DirectoryID
-	}
-	if config.AppsDomain != "" {
-		result.AppsDomain = config.AppsDomain
-	}
-	if config.PKCEEnabled != nil {
-		result.PKCEEnabled = config.PKCEEnabled
-	}
-	if config.ConditionalAccessEnabled != nil {
-		result.ConditionalAccessEnabled = *config.ConditionalAccessEnabled
-	}
-	if config.SupportGroups != nil {
-		result.SupportGroups = *config.SupportGroups
-	}
-	if config.IssuerURL != "" {
-		result.IssuerURL = config.IssuerURL
-	}
-	if config.EmailAttributeName != "" {
-		result.EmailAttributeName = config.EmailAttributeName
-	}
-	if config.APIToken != "" {
-		result.APIToken = config.APIToken
-	}
-	if config.OktaAccount != "" {
-		result.OktaAccount = config.OktaAccount
-	}
-	if config.OktaAuthorizationServerID != "" {
-		result.OktaAuthorizationServerID = config.OktaAuthorizationServerID
-	}
-	if config.OneloginAccount != "" {
-		result.OneloginAccount = config.OneloginAccount
-	}
-	if config.PingEnvID != "" {
-		result.PingEnvID = config.PingEnvID
-	}
-	if config.CentrifyAccount != "" {
-		result.CentrifyAccount = config.CentrifyAccount
-	}
-	if config.CentrifyAppID != "" {
-		result.CentrifyAppID = config.CentrifyAppID
-	}
-	if config.RedirectURL != "" {
-		result.RedirectURL = config.RedirectURL
+	// Build the configuration
+	config := accesssvc.AccessIdentityProviderConfig{
+		Name:       providerName,
+		Type:       r.idp.Spec.Type,
+		Config:     r.idp.Spec.Config,
+		ScimConfig: r.idp.Spec.ScimConfig,
 	}
 
-	return result
+	// Build source reference
+	source := service.Source{
+		Kind: "AccessIdentityProvider",
+		Name: r.idp.Name,
+	}
+
+	// Build credentials reference
+	credRef := networkingv1alpha2.CredentialsReference{
+		Name: r.idp.Spec.Cloudflare.CredentialsRef.Name,
+	}
+
+	// Get account ID - need to initialize API client first if not already done
+	accountID := r.idp.Status.AccountID
+	if accountID == "" {
+		// Initialize API client to get account ID
+		if err := r.initAPIClient(); err != nil {
+			return fmt.Errorf("initialize API client for account ID: %w", err)
+		}
+		accountID, _ = r.cfAPI.GetAccountId()
+	}
+
+	// Register with service
+	opts := accesssvc.AccessIdentityProviderRegisterOptions{
+		AccountID:      accountID,
+		ProviderID:     r.idp.Status.ProviderID,
+		Source:         source,
+		Config:         config,
+		CredentialsRef: credRef,
+	}
+
+	if err := r.idpService.Register(r.ctx, opts); err != nil {
+		r.log.Error(err, "failed to register AccessIdentityProvider configuration")
+		r.setCondition(metav1.ConditionFalse, controller.EventReasonCreateFailed, err.Error())
+		r.Recorder.Event(r.idp, corev1.EventTypeWarning, controller.EventReasonCreateFailed, err.Error())
+		return err
+	}
+
+	// Update status to Pending if not already synced
+	return r.updateStatusPending()
 }
 
-func (*AccessIdentityProviderReconciler) buildScimConfig(
-	config *networkingv1alpha2.IdentityProviderScimConfig,
-) cloudflare.AccessIdentityProviderScimConfiguration {
-	result := cloudflare.AccessIdentityProviderScimConfiguration{}
+// updateStatusPending updates the AccessIdentityProvider status to Pending state.
+//
+//nolint:revive // cognitive complexity is acceptable for status update logic
+func (r *Reconciler) updateStatusPending() error {
+	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.idp, func() {
+		r.idp.Status.ObservedGeneration = r.idp.Generation
 
-	if config.Enabled != nil {
-		result.Enabled = *config.Enabled
-	}
-	if config.Secret != "" {
-		result.Secret = config.Secret
-	}
-	if config.UserDeprovision != nil {
-		result.UserDeprovision = *config.UserDeprovision
-	}
-	if config.SeatDeprovision != nil {
-		result.SeatDeprovision = *config.SeatDeprovision
-	}
-	if config.GroupMemberDeprovision != nil {
-		result.GroupMemberDeprovision = *config.GroupMemberDeprovision
-	}
-	if config.IdentityUpdateBehavior != "" {
-		result.IdentityUpdateBehavior = config.IdentityUpdateBehavior
-	}
+		// Keep existing state if already active, otherwise set to pending
+		if r.idp.Status.State != "Ready" {
+			r.idp.Status.State = "pending"
+		}
 
-	return result
-}
+		// Set account ID if we have it
+		if r.cfAPI != nil {
+			if accountID, err := r.cfAPI.GetAccountId(); err == nil {
+				r.idp.Status.AccountID = accountID
+			}
+		}
 
-func (r *AccessIdentityProviderReconciler) updateStatusError(ctx context.Context, idp *networkingv1alpha2.AccessIdentityProvider, err error) (ctrl.Result, error) {
-	// P0 FIX: Use UpdateStatusWithConflictRetry for status updates
-	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, idp, func() {
-		idp.Status.State = "Error"
-		meta.SetStatusCondition(&idp.Status.Conditions, metav1.Condition{
-			Type:               "Ready",
-			Status:             metav1.ConditionFalse,
-			ObservedGeneration: idp.Generation,
-			Reason:             "ReconcileError",
-			Message:            cf.SanitizeErrorMessage(err),
-			LastTransitionTime: metav1.Now(),
-		})
-		idp.Status.ObservedGeneration = idp.Generation
+		r.setCondition(metav1.ConditionTrue, "Pending", "Configuration registered, waiting for sync")
 	})
-	if updateErr != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
+
+	if err != nil {
+		r.log.Error(err, "failed to update AccessIdentityProvider status")
+		return err
 	}
 
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	r.log.Info("AccessIdentityProvider configuration registered", "name", r.idp.Name)
+	return nil
 }
 
-func (r *AccessIdentityProviderReconciler) updateStatusSuccess(ctx context.Context, idp *networkingv1alpha2.AccessIdentityProvider, result *cf.AccessIdentityProviderResult) (ctrl.Result, error) {
-	// P0 FIX: Use UpdateStatusWithConflictRetry for status updates
-	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, idp, func() {
-		idp.Status.ProviderID = result.ID
-		idp.Status.State = "Ready"
-		meta.SetStatusCondition(&idp.Status.Conditions, metav1.Condition{
-			Type:               "Ready",
-			Status:             metav1.ConditionTrue,
-			ObservedGeneration: idp.Generation,
-			Reason:             "Reconciled",
-			Message:            "Access Identity Provider successfully reconciled",
-			LastTransitionTime: metav1.Now(),
-		})
-		idp.Status.ObservedGeneration = idp.Generation
+// setCondition sets a condition on the AccessIdentityProvider status.
+func (r *Reconciler) setCondition(status metav1.ConditionStatus, reason, message string) {
+	meta.SetStatusCondition(&r.idp.Status.Conditions, metav1.Condition{
+		Type:               "Ready",
+		Status:             status,
+		ObservedGeneration: r.idp.Generation,
+		LastTransitionTime: metav1.Now(),
+		Reason:             reason,
+		Message:            message,
 	})
-	if updateErr != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
-	}
-
-	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 }
 
-func (r *AccessIdentityProviderReconciler) SetupWithManager(mgr ctrl.Manager) error {
+// SetupWithManager sets up the controller with the Manager.
+func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("accessidentityprovider-controller")
+	r.idpService = accesssvc.NewIdentityProviderService(mgr.GetClient())
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.AccessIdentityProvider{}).
 		Complete(r)

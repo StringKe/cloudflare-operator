@@ -18,7 +18,7 @@ import (
 // This is critical because cloudflared expects specific YAML key names.
 func TestConfigurationYAMLSerialization(t *testing.T) {
 	config := &Configuration{
-		TunnelId:     "f25b7658-e14a-4f82-b4b9-0060d2ecaf01",
+		TunnelID:     "f25b7658-e14a-4f82-b4b9-0060d2ecaf01",
 		SourceFile:   "/etc/cloudflared/creds/credentials.json",
 		Metrics:      "0.0.0.0:2000",
 		NoAutoUpdate: true,
@@ -45,7 +45,7 @@ func TestConfigurationYAMLSerialization(t *testing.T) {
 	yamlStr := string(yamlBytes)
 
 	// Verify snake_case keys are used (as per cloudflared expectations)
-	assert.Contains(t, yamlStr, "tunnel:", "TunnelId should serialize as 'tunnel'")
+	assert.Contains(t, yamlStr, "tunnel:", "TunnelID should serialize as 'tunnel'")
 	assert.Contains(t, yamlStr, "credentials-file:", "SourceFile should serialize as 'credentials-file'")
 	assert.Contains(t, yamlStr, "metrics:", "Metrics should serialize as 'metrics'")
 	assert.Contains(t, yamlStr, "no-autoupdate:", "NoAutoUpdate should serialize as 'no-autoupdate'")
@@ -56,7 +56,7 @@ func TestConfigurationYAMLSerialization(t *testing.T) {
 	assert.Contains(t, yamlStr, "service:", "Service should serialize as 'service'")
 
 	// Verify PascalCase keys are NOT used
-	assert.NotContains(t, yamlStr, "TunnelId:", "Should not use PascalCase 'TunnelId'")
+	assert.NotContains(t, yamlStr, "TunnelID:", "Should not use PascalCase 'TunnelID'")
 	assert.NotContains(t, yamlStr, "SourceFile:", "Should not use PascalCase 'SourceFile'")
 	assert.NotContains(t, yamlStr, "NoAutoUpdate:", "Should not use PascalCase 'NoAutoUpdate'")
 	assert.NotContains(t, yamlStr, "WarpRouting:", "Should not use PascalCase 'WarpRouting'")
@@ -95,7 +95,7 @@ ingress:
 	err := yaml.Unmarshal([]byte(yamlContent), &config)
 	require.NoError(t, err)
 
-	assert.Equal(t, "f25b7658-e14a-4f82-b4b9-0060d2ecaf01", config.TunnelId)
+	assert.Equal(t, "f25b7658-e14a-4f82-b4b9-0060d2ecaf01", config.TunnelID)
 	assert.Equal(t, "/etc/cloudflared/creds/credentials.json", config.SourceFile)
 	assert.Equal(t, "0.0.0.0:2000", config.Metrics)
 	assert.True(t, config.NoAutoUpdate)
@@ -112,7 +112,7 @@ ingress:
 // and deserialized without data loss.
 func TestConfigurationRoundTrip(t *testing.T) {
 	original := &Configuration{
-		TunnelId:     "abc-123-def-456",
+		TunnelID:     "abc-123-def-456",
 		SourceFile:   "/path/to/creds.json",
 		Metrics:      "127.0.0.1:3000",
 		NoAutoUpdate: true,
@@ -121,7 +121,7 @@ func TestConfigurationRoundTrip(t *testing.T) {
 		},
 		OriginRequest: OriginRequestConfig{
 			NoTLSVerify: boolPtr(true),
-			Http2Origin: boolPtr(false),
+			HTTP2Origin: boolPtr(false),
 			BastionMode: boolPtr(false),
 		},
 		Ingress: []UnvalidatedIngressRule{
@@ -149,7 +149,7 @@ func TestConfigurationRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify all fields preserved
-	assert.Equal(t, original.TunnelId, restored.TunnelId)
+	assert.Equal(t, original.TunnelID, restored.TunnelID)
 	assert.Equal(t, original.SourceFile, restored.SourceFile)
 	assert.Equal(t, original.Metrics, restored.Metrics)
 	assert.Equal(t, original.NoAutoUpdate, restored.NoAutoUpdate)
@@ -204,7 +204,7 @@ ingress:
 
 	// Verify critical fields are preserved
 	assert.Contains(t, yamlStr, "tunnel: f25b7658-e14a-4f82-b4b9-0060d2ecaf01",
-		"TunnelId must be preserved after update")
+		"TunnelID must be preserved after update")
 	assert.Contains(t, yamlStr, "credentials-file: /etc/cloudflared/creds/credentials.json",
 		"SourceFile must be preserved after update")
 	assert.Contains(t, yamlStr, "metrics: 0.0.0.0:2000",
@@ -224,7 +224,7 @@ ingress:
 // TestConfigurationEmptyIngress tests serialization with empty ingress rules.
 func TestConfigurationEmptyIngress(t *testing.T) {
 	config := &Configuration{
-		TunnelId:   "test-tunnel-id",
+		TunnelID:   "test-tunnel-id",
 		SourceFile: "/path/to/creds",
 		Ingress:    []UnvalidatedIngressRule{},
 	}
@@ -241,7 +241,7 @@ func TestConfigurationEmptyIngress(t *testing.T) {
 // TestConfigurationNilPointerFields tests that nil pointer fields are omitted.
 func TestConfigurationNilPointerFields(t *testing.T) {
 	config := &Configuration{
-		TunnelId:      "test-tunnel-id",
+		TunnelID:      "test-tunnel-id",
 		SourceFile:    "/path/to/creds",
 		OriginRequest: OriginRequestConfig{
 			// All pointer fields are nil
@@ -315,7 +315,7 @@ func TestUnvalidatedIngressRuleYAMLSerialization(t *testing.T) {
 				Service:  "https://secure:443",
 				OriginRequest: OriginRequestConfig{
 					NoTLSVerify: boolPtr(true),
-					Http2Origin: boolPtr(true),
+					HTTP2Origin: boolPtr(true),
 				},
 			},
 			wantKeys: []string{"hostname:", "service:", "originRequest:", "noTLSVerify:", "http2Origin:"},
@@ -359,7 +359,7 @@ func TestOriginRequestConfigYAMLSerialization(t *testing.T) {
 		TCPKeepAlive:           &keepAlive,
 		HTTPHostHeader:         &host,
 		NoTLSVerify:            boolPtr(true),
-		Http2Origin:            boolPtr(false),
+		HTTP2Origin:            boolPtr(false),
 		DisableChunkedEncoding: boolPtr(true),
 		BastionMode:            boolPtr(false),
 		ProxyPort:              &port,
@@ -419,7 +419,7 @@ func TestConfigurationWithAllFields(t *testing.T) {
 	timeout := 30 * time.Second
 
 	config := &Configuration{
-		TunnelId:     "complete-tunnel-id",
+		TunnelID:     "complete-tunnel-id",
 		SourceFile:   "/etc/cloudflared/creds/credentials.json",
 		Metrics:      "0.0.0.0:2000",
 		NoAutoUpdate: true,
@@ -457,7 +457,7 @@ func TestConfigurationWithAllFields(t *testing.T) {
 	err = yaml.Unmarshal(yamlBytes, &restored)
 	require.NoError(t, err)
 
-	assert.Equal(t, config.TunnelId, restored.TunnelId)
+	assert.Equal(t, config.TunnelID, restored.TunnelID)
 	assert.Equal(t, config.SourceFile, restored.SourceFile)
 	assert.Equal(t, config.Metrics, restored.Metrics)
 	assert.Equal(t, config.NoAutoUpdate, restored.NoAutoUpdate)

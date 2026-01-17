@@ -91,7 +91,9 @@ func (l *Loader) LoadDefault(ctx context.Context) (*Credentials, error) {
 
 // LoadFromCloudflareDetails loads credentials from legacy CloudflareDetails
 // This maintains backwards compatibility with existing resources
-func (l *Loader) LoadFromCloudflareDetails(ctx context.Context, details *networkingv1alpha2.CloudflareDetails, namespace string) (*Credentials, error) {
+func (l *Loader) LoadFromCloudflareDetails(
+	ctx context.Context, details *networkingv1alpha2.CloudflareDetails, namespace string,
+) (*Credentials, error) {
 	// If credentialsRef is specified, use it
 	if details.CredentialsRef != nil {
 		return l.loadFromCredentialsRefWithDomain(ctx, details.CredentialsRef, details.Domain)
@@ -107,7 +109,9 @@ func (l *Loader) LoadFromCloudflareDetails(ctx context.Context, details *network
 }
 
 // loadFromCredentialsRefWithDomain loads credentials and overrides domain if specified
-func (l *Loader) loadFromCredentialsRefWithDomain(ctx context.Context, ref *networkingv1alpha2.CloudflareCredentialsRef, domain string) (*Credentials, error) {
+func (l *Loader) loadFromCredentialsRefWithDomain(
+	ctx context.Context, ref *networkingv1alpha2.CloudflareCredentialsRef, domain string,
+) (*Credentials, error) {
 	creds, err := l.LoadFromCredentialsRef(ctx, ref)
 	if err != nil {
 		return nil, err

@@ -60,8 +60,6 @@ func BuildServiceURLFromPort(protocol, serviceName, namespace string, port int32
 // ProtocolFromGatewayProtocol converts Gateway API ProtocolType to cloudflared protocol.
 func ProtocolFromGatewayProtocol(protocol gatewayv1.ProtocolType) string {
 	switch protocol {
-	case gatewayv1.HTTPProtocolType:
-		return ProtocolHTTP
 	case gatewayv1.HTTPSProtocolType, gatewayv1.TLSProtocolType:
 		// Both HTTPS and TLS map to https protocol in Cloudflare
 		return ProtocolHTTPS
@@ -69,7 +67,7 @@ func ProtocolFromGatewayProtocol(protocol gatewayv1.ProtocolType) string {
 		return ProtocolTCP
 	case gatewayv1.UDPProtocolType:
 		return ProtocolUDP
-	default:
+	default: // includes HTTPProtocolType
 		return ProtocolHTTP
 	}
 }

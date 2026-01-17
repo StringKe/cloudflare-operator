@@ -115,3 +115,14 @@ const (
 	ManagementMarkerPrefix = "[managed:"
 	ManagementMarkerSuffix = "]"
 )
+
+// CredentialsResult holds the result of resolving credentials for a resource.
+// Used to reduce the number of return values in resolveCredentials functions.
+type CredentialsResult struct {
+	// CredentialsName is the name of the CloudflareCredentials resource
+	CredentialsName string
+	// AccountID is the Cloudflare account ID
+	AccountID string
+	// ZoneID is the Cloudflare zone ID (optional, may be empty)
+	ZoneID string
+}

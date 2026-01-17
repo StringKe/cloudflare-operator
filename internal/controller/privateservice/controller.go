@@ -201,7 +201,7 @@ func (r *Reconciler) reconcilePrivateService() error {
 	}
 
 	if svc.Spec.ClusterIP == "" || svc.Spec.ClusterIP == "None" {
-		err := fmt.Errorf("Service %s has no ClusterIP", svc.Name)
+		err := fmt.Errorf("service %s has no ClusterIP", svc.Name)
 		r.log.Error(err, "Service must have a ClusterIP")
 		r.setCondition(metav1.ConditionFalse, controller.EventReasonInvalidConfig, err.Error())
 		return err
@@ -278,7 +278,7 @@ func (r *Reconciler) resolveTunnelRef() (string, string, error) {
 			return "", "", fmt.Errorf("failed to get Tunnel %s/%s: %w", namespace, ref.Name, err)
 		}
 		if tunnel.Status.TunnelId == "" {
-			return "", "", fmt.Errorf("Tunnel %s/%s does not have a tunnelId yet", namespace, ref.Name)
+			return "", "", fmt.Errorf("tunnel %s/%s does not have a tunnelId yet", namespace, ref.Name)
 		}
 		return tunnel.Status.TunnelId, tunnel.Status.TunnelName, nil
 	}

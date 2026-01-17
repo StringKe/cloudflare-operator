@@ -29,6 +29,10 @@ linters:
     - interfacebloat
     - usestdlibvars
   settings:
+    dupl:
+      # Increased threshold for structural duplication in controller/service patterns
+      # These duplications are intentional - each resource type needs similar boilerplate
+      threshold: 300
     revive:
       enable-all-rules: true
       rules:
@@ -55,6 +59,11 @@ linters:
           - revive
         path: _test\.go
         text: "dot-imports"
+      # Exclude sync controllers from dupl - structural duplication is intentional
+      # Each sync controller follows the same pattern for its resource type
+      - linters:
+          - dupl
+        path: internal/sync/
 formatters:
   enable:
     - gofmt

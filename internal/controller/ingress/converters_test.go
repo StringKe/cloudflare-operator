@@ -369,8 +369,8 @@ func TestBuildOriginRequest_Defaults(t *testing.T) {
 	require.NotNil(t, config.NoTLSVerify)
 	assert.True(t, *config.NoTLSVerify)
 
-	require.NotNil(t, config.Http2Origin)
-	assert.True(t, *config.Http2Origin)
+	require.NotNil(t, config.HTTP2Origin)
+	assert.True(t, *config.HTTP2Origin)
 
 	require.NotNil(t, config.CAPool)
 	assert.Equal(t, "/etc/cloudflared/certs/custom-ca.pem", *config.CAPool)
@@ -442,8 +442,8 @@ func TestBuildOriginRequest_AnnotationOverrides(t *testing.T) {
 	require.NotNil(t, config.NoTLSVerify)
 	assert.True(t, *config.NoTLSVerify)
 
-	require.NotNil(t, config.Http2Origin)
-	assert.False(t, *config.Http2Origin)
+	require.NotNil(t, config.HTTP2Origin)
+	assert.False(t, *config.HTTP2Origin)
 
 	require.NotNil(t, config.CAPool)
 	assert.Equal(t, "/etc/cloudflared/certs/annotation-ca.pem", *config.CAPool)
@@ -509,7 +509,7 @@ func TestConvertTunnelBindingToRules(t *testing.T) {
 					Target:       "",
 					Path:         "/api",
 					NoTlsVerify:  true,
-					Http2Origin:  false,
+					HTTP2Origin:  false,
 					ProxyAddress: "127.0.0.1",
 					ProxyPort:    8080,
 					ProxyType:    "socks5",
@@ -547,8 +547,8 @@ func TestConvertTunnelBindingToRules(t *testing.T) {
 	assert.Equal(t, "http://api-service:80", rules[0].Service)
 	require.NotNil(t, rules[0].OriginRequest.NoTLSVerify)
 	assert.True(t, *rules[0].OriginRequest.NoTLSVerify)
-	require.NotNil(t, rules[0].OriginRequest.Http2Origin)
-	assert.False(t, *rules[0].OriginRequest.Http2Origin)
+	require.NotNil(t, rules[0].OriginRequest.HTTP2Origin)
+	assert.False(t, *rules[0].OriginRequest.HTTP2Origin)
 	require.NotNil(t, rules[0].OriginRequest.ProxyAddress)
 	assert.Equal(t, "127.0.0.1", *rules[0].OriginRequest.ProxyAddress)
 	require.NotNil(t, rules[0].OriginRequest.ProxyPort)

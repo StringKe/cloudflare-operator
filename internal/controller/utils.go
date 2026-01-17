@@ -162,8 +162,11 @@ func CreateCloudflareClientFromCreds(creds *credentials.Credentials) (*cloudflar
 	}
 }
 
-// getCloudflareClient returns an initialized *cloudflare.API using either an API Key + Email or an API Token
-// Deprecated: Use createCloudflareClientFromCreds instead
+// getCloudflareClient returns an initialized *cloudflare.API using either an API Key + Email or an API Token.
+//
+// Deprecated: Use createCloudflareClientFromCreds instead.
+//
+//nolint:unused // kept for backward compatibility
 func getCloudflareClient(apiKey, apiEmail, apiToken string) (*cloudflare.API, error) {
 	if apiToken != "" {
 		return cloudflare.NewWithAPIToken(apiToken)

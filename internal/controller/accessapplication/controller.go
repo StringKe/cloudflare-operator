@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -30,10 +29,14 @@ import (
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
+	"github.com/StringKe/cloudflare-operator/internal/service"
+	accesssvc "github.com/StringKe/cloudflare-operator/internal/service/access"
 )
 
 const (
-	AccessApplicationFinalizer = "cloudflare.com/accessapplication-finalizer"
+	FinalizerName = "cloudflare.com/accessapplication-finalizer"
+	// StateActive indicates the resource is actively synced with Cloudflare
+	StateActive = "active"
 )
 
 // Reconciler reconciles an AccessApplication object
@@ -42,6 +45,10 @@ type Reconciler struct {
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
 
+	// Service layer
+	appService *accesssvc.ApplicationService
+
+	// Runtime state
 	ctx   context.Context
 	log   logr.Logger
 	app   *networkingv1alpha2.AccessApplication
@@ -54,147 +61,145 @@ type Reconciler struct {
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
+// Reconcile implements the reconciliation loop for AccessApplication resources.
+//
+//nolint:revive // cognitive complexity is acceptable for this controller reconciliation loop
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	r.ctx = ctx
 	r.log = ctrllog.FromContext(ctx)
 
+	// Fetch the AccessApplication instance
 	r.app = &networkingv1alpha2.AccessApplication{}
 	if err := r.Get(ctx, req.NamespacedName, r.app); err != nil {
 		if apierrors.IsNotFound(err) {
+			r.log.Info("AccessApplication deleted, nothing to do")
 			return ctrl.Result{}, nil
 		}
+		r.log.Error(err, "unable to fetch AccessApplication")
 		return ctrl.Result{}, err
 	}
 
-	if err := r.initAPIClient(); err != nil {
-		r.setCondition(metav1.ConditionFalse, controller.EventReasonAPIError, err.Error())
-		return ctrl.Result{}, err
-	}
-
+	// Check if AccessApplication is being deleted
 	if r.app.GetDeletionTimestamp() != nil {
+		// Initialize API client for deletion
+		if err := r.initAPIClient(); err != nil {
+			r.log.Error(err, "failed to initialize API client for deletion")
+			r.setCondition(metav1.ConditionFalse, controller.EventReasonAPIError, err.Error())
+			return ctrl.Result{}, err
+		}
 		return r.handleDeletion()
 	}
 
-	if !controllerutil.ContainsFinalizer(r.app, AccessApplicationFinalizer) {
-		controllerutil.AddFinalizer(r.app, AccessApplicationFinalizer)
+	// Add finalizer if not present
+	if !controllerutil.ContainsFinalizer(r.app, FinalizerName) {
+		controllerutil.AddFinalizer(r.app, FinalizerName)
 		if err := r.Update(ctx, r.app); err != nil {
+			r.log.Error(err, "failed to add finalizer")
 			return ctrl.Result{}, err
 		}
+		r.Recorder.Event(r.app, corev1.EventTypeNormal, controller.EventReasonFinalizerSet, "Finalizer added")
 	}
 
+	// Reconcile the AccessApplication through service layer
 	if err := r.reconcileApplication(); err != nil {
-		// Smart retry based on error type
-		return r.handleReconcileError(err)
+		r.log.Error(err, "failed to reconcile AccessApplication")
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 
 	return ctrl.Result{}, nil
 }
 
-// handleReconcileError determines the appropriate retry strategy based on error type.
-func (r *Reconciler) handleReconcileError(err error) (ctrl.Result, error) {
-	switch {
-	case cf.IsDomainNotInDestinationsError(err):
-		// Domain not in tunnel destinations yet - this is likely a timing issue
-		// where the Ingress controller hasn't synced the tunnel config yet.
-		// Use a shorter retry interval since this should resolve quickly.
-		r.log.Info("Domain not in tunnel destinations, waiting for Ingress sync",
-			"domain", r.app.Spec.Domain,
-			"retryAfter", "15s")
-		r.Recorder.Event(r.app, corev1.EventTypeWarning, "WaitingForTunnel",
-			"Domain not yet registered in tunnel, waiting for Ingress controller sync")
-		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
-
-	case cf.IsUnknownApplicationError(err):
-		// Application ID in status doesn't exist in Cloudflare anymore.
-		// Clear the status and retry to recreate.
-		r.log.Info("Application not found in Cloudflare, clearing status to recreate",
-			"applicationId", r.app.Status.ApplicationID)
-		r.Recorder.Event(r.app, corev1.EventTypeWarning, "ApplicationNotFound",
-			"Application was deleted from Cloudflare, will recreate")
-
-		// Clear the ApplicationID to trigger recreation
-		if clearErr := r.clearApplicationStatus(); clearErr != nil {
-			r.log.Error(clearErr, "failed to clear application status")
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, clearErr
-		}
-		return ctrl.Result{Requeue: true}, nil
-
-	case cf.IsRateLimitError(err):
-		// Rate limited - use longer backoff
-		r.log.Info("Rate limited by Cloudflare API", "retryAfter", "60s")
-		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
-
-	case cf.IsTemporaryError(err):
-		// Temporary error - use moderate backoff
-		r.log.Info("Temporary error, will retry", "retryAfter", "30s")
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-
-	default:
-		// Other errors - standard retry
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-	}
-}
-
-// clearApplicationStatus clears the ApplicationID from status to trigger recreation.
-func (r *Reconciler) clearApplicationStatus() error {
-	return controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.app, func() {
-		r.app.Status.ApplicationID = ""
-		r.app.Status.State = "pending"
-		r.setCondition(metav1.ConditionFalse, "Recreating", "Application will be recreated")
-	})
-}
-
+// initAPIClient initializes the Cloudflare API client.
 func (r *Reconciler) initAPIClient() error {
 	// AccessApplication is cluster-scoped, use operator namespace for legacy inline secrets
 	api, err := cf.NewAPIClientFromDetails(r.ctx, r.Client, controller.OperatorNamespace, r.app.Spec.Cloudflare)
 	if err != nil {
 		r.log.Error(err, "failed to initialize API client")
+		r.Recorder.Event(r.app, corev1.EventTypeWarning, controller.EventReasonAPIError, "Failed to initialize API client: "+err.Error())
 		return err
 	}
 
-	// Preserve validated account ID from status
 	api.ValidAccountId = r.app.Status.AccountID
 	r.cfAPI = api
-
 	return nil
 }
 
+// handleDeletion handles the deletion of an AccessApplication.
+//
+//nolint:revive // cognitive complexity is acceptable for deletion handling
 func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
-	if !controllerutil.ContainsFinalizer(r.app, AccessApplicationFinalizer) {
+	if !controllerutil.ContainsFinalizer(r.app, FinalizerName) {
 		return ctrl.Result{}, nil
 	}
 
-	if r.app.Status.ApplicationID != "" {
-		if err := r.cfAPI.DeleteAccessApplication(r.app.Status.ApplicationID); err != nil {
-			// P0 FIX: Check if resource is already deleted (NotFound error)
-			if !cf.IsNotFoundError(err) {
-				r.log.Error(err, "failed to delete AccessApplication from Cloudflare")
-				r.Recorder.Event(r.app, corev1.EventTypeWarning, controller.EventReasonDeleteFailed, cf.SanitizeErrorMessage(err))
-				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-			}
-			r.log.Info("AccessApplication already deleted from Cloudflare", "id", r.app.Status.ApplicationID)
-			r.Recorder.Event(r.app, corev1.EventTypeNormal, "AlreadyDeleted", "AccessApplication was already deleted from Cloudflare")
+	r.log.Info("Deleting AccessApplication")
+	r.Recorder.Event(r.app, corev1.EventTypeNormal, "Deleting", "Starting AccessApplication deletion")
+
+	// Try to get Application ID from status or by looking up by name
+	applicationID := r.app.Status.ApplicationID
+	if applicationID == "" {
+		// Status ID is empty - try to find by name to prevent orphaned resources
+		appName := r.app.GetAccessApplicationName()
+		r.log.Info("Status.ApplicationID is empty, trying to find application by name", "name", appName)
+		existing, err := r.cfAPI.ListAccessApplicationsByName(appName)
+		if err == nil && existing != nil {
+			applicationID = existing.ID
+			r.log.Info("Found AccessApplication by name", "id", applicationID)
 		} else {
-			r.Recorder.Event(r.app, corev1.EventTypeNormal, controller.EventReasonDeleted, "Deleted from Cloudflare")
+			r.log.Info("AccessApplication not found by name, assuming it was never created or already deleted")
 		}
 	}
 
-	// P0 FIX: Remove finalizer with retry logic to handle conflicts
+	// Delete from Cloudflare if we have an ID
+	if applicationID != "" {
+		if err := r.cfAPI.DeleteAccessApplication(applicationID); err != nil {
+			if !cf.IsNotFoundError(err) {
+				r.log.Error(err, "failed to delete AccessApplication from Cloudflare")
+				r.Recorder.Event(r.app, corev1.EventTypeWarning,
+					controller.EventReasonDeleteFailed, cf.SanitizeErrorMessage(err))
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+			}
+			r.log.Info("AccessApplication already deleted from Cloudflare", "id", applicationID)
+			r.Recorder.Event(r.app, corev1.EventTypeNormal,
+				"AlreadyDeleted", "AccessApplication was already deleted from Cloudflare")
+		} else {
+			r.log.Info("AccessApplication deleted from Cloudflare", "id", applicationID)
+			r.Recorder.Event(r.app, corev1.EventTypeNormal,
+				controller.EventReasonDeleted, "Deleted from Cloudflare")
+		}
+	}
+
+	// Unregister from SyncState
+	source := service.Source{
+		Kind: "AccessApplication",
+		Name: r.app.Name,
+	}
+	if err := r.appService.Unregister(r.ctx, applicationID, source); err != nil {
+		r.log.Error(err, "failed to unregister from SyncState")
+		// Non-fatal - continue with finalizer removal
+	}
+
+	// Remove finalizer with retry logic to handle conflicts
 	if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.app, func() {
-		controllerutil.RemoveFinalizer(r.app, AccessApplicationFinalizer)
+		controllerutil.RemoveFinalizer(r.app, FinalizerName)
 	}); err != nil {
 		r.log.Error(err, "failed to remove finalizer")
 		return ctrl.Result{}, err
 	}
 	r.Recorder.Event(r.app, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
+
 	return ctrl.Result{}, nil
 }
 
+// reconcileApplication ensures the AccessApplication configuration is registered with the service layer.
+//
+//nolint:revive // cognitive complexity is acceptable for this reconciliation logic
 func (r *Reconciler) reconcileApplication() error {
 	appName := r.app.GetAccessApplicationName()
 
 	// Resolve IdP references
-	allowedIdps := r.app.Spec.AllowedIdps
+	allowedIdps := make([]string, 0, len(r.app.Spec.AllowedIdps)+len(r.app.Spec.AllowedIdpRefs))
+	allowedIdps = append(allowedIdps, r.app.Spec.AllowedIdps...)
 	for _, ref := range r.app.Spec.AllowedIdpRefs {
 		idp := &networkingv1alpha2.AccessIdentityProvider{}
 		if err := r.Get(r.ctx, apitypes.NamespacedName{Name: ref.Name}, idp); err != nil {
@@ -206,18 +211,27 @@ func (r *Reconciler) reconcileApplication() error {
 		}
 	}
 
-	params := cf.AccessApplicationParams{
+	// Resolve policy references
+	policies, err := r.resolvePolicies()
+	if err != nil {
+		r.log.Error(err, "failed to resolve policies")
+		// Continue with empty policies, they will be retried
+	}
+
+	// Build the configuration
+	config := accesssvc.AccessApplicationConfig{
 		Name:                     appName,
 		Domain:                   r.app.Spec.Domain,
 		SelfHostedDomains:        r.app.Spec.SelfHostedDomains,
+		Destinations:             r.app.Spec.Destinations,
 		DomainType:               r.app.Spec.DomainType,
 		PrivateAddress:           r.app.Spec.PrivateAddress,
 		Type:                     r.app.Spec.Type,
 		SessionDuration:          r.app.Spec.SessionDuration,
 		AllowedIdps:              allowedIdps,
-		AutoRedirectToIdentity:   &r.app.Spec.AutoRedirectToIdentity,
+		AutoRedirectToIdentity:   r.app.Spec.AutoRedirectToIdentity,
 		EnableBindingCookie:      r.app.Spec.EnableBindingCookie,
-		HttpOnlyCookieAttribute:  r.app.Spec.HttpOnlyCookieAttribute,
+		HTTPOnlyCookieAttribute:  r.app.Spec.HttpOnlyCookieAttribute,
 		PathCookieAttribute:      r.app.Spec.PathCookieAttribute,
 		SameSiteCookieAttribute:  r.app.Spec.SameSiteCookieAttribute,
 		LogoURL:                  r.app.Spec.LogoURL,
@@ -232,133 +246,214 @@ func (r *Reconciler) reconcileApplication() error {
 		Tags:                     r.app.Spec.Tags,
 		CustomPages:              r.app.Spec.CustomPages,
 		GatewayRules:             r.app.Spec.GatewayRules,
+		CorsHeaders:              r.app.Spec.CorsHeaders,
+		SaasApp:                  r.app.Spec.SaasApp,
+		SCIMConfig:               r.app.Spec.SCIMConfig,
+		AppLauncherCustomization: r.app.Spec.AppLauncherCustomization,
+		TargetContexts:           r.app.Spec.TargetContexts,
+		Policies:                 policies,
 	}
 
-	// Convert Destinations
-	if len(r.app.Spec.Destinations) > 0 {
-		params.Destinations = convertDestinationsFromCRD(r.app.Spec.Destinations)
+	// Build source reference
+	source := service.Source{
+		Kind: "AccessApplication",
+		Name: r.app.Name,
 	}
 
-	// Convert CORS headers
-	if r.app.Spec.CorsHeaders != nil {
-		params.CorsHeaders = convertCorsHeadersFromCRD(r.app.Spec.CorsHeaders)
+	// Build credentials reference
+	credRef := networkingv1alpha2.CredentialsReference{
+		Name: r.app.Spec.Cloudflare.CredentialsRef.Name,
 	}
 
-	// Convert SaaS app config
-	if r.app.Spec.SaasApp != nil {
-		params.SaasApp = convertSaasAppFromCRD(r.app.Spec.SaasApp)
-	}
-
-	// Convert SCIM config
-	if r.app.Spec.SCIMConfig != nil {
-		params.SCIMConfig = convertSCIMConfigFromCRD(r.app.Spec.SCIMConfig)
-	}
-
-	// Convert App Launcher customization
-	if r.app.Spec.AppLauncherCustomization != nil {
-		params.AppLauncherCustomization = convertAppLauncherCustomizationFromCRD(r.app.Spec.AppLauncherCustomization)
-	}
-
-	// Convert Target contexts
-	if len(r.app.Spec.TargetContexts) > 0 {
-		params.TargetContexts = convertTargetContextsFromCRD(r.app.Spec.TargetContexts)
-	}
-
-	if r.app.Status.ApplicationID != "" {
-		return r.updateApplication(params)
-	}
-
-	// Try to find existing
-	existing, err := r.cfAPI.ListAccessApplicationsByName(appName)
-	if err == nil && existing != nil {
-		r.log.Info("Found existing AccessApplication, adopting", "id", existing.ID)
-
-		// Adopt the application and reconcile policies
-		if err := r.updateStatus(existing, nil); err != nil {
-			return err
+	// Get account ID - need to initialize API client first if not already done
+	accountID := r.app.Status.AccountID
+	if accountID == "" {
+		// Initialize API client to get account ID
+		if err := r.initAPIClient(); err != nil {
+			return fmt.Errorf("initialize API client for account ID: %w", err)
 		}
-
-		// Reconcile policies for adopted application
-		resolvedPolicies, policyErr := r.reconcilePolicies(existing.ID)
-		if policyErr != nil {
-			r.log.Error(policyErr, "failed to reconcile policies after adopting application")
-			r.Recorder.Event(r.app, corev1.EventTypeWarning, "PolicyReconcileFailed",
-				fmt.Sprintf("Policy reconciliation failed: %s", cf.SanitizeErrorMessage(policyErr)))
-		}
-
-		return r.updateStatus(existing, resolvedPolicies)
+		accountID, _ = r.cfAPI.GetAccountId()
 	}
 
-	return r.createApplication(params)
-}
+	// Register with service
+	opts := accesssvc.AccessApplicationRegisterOptions{
+		AccountID:      accountID,
+		ApplicationID:  r.app.Status.ApplicationID,
+		Source:         source,
+		Config:         config,
+		CredentialsRef: credRef,
+	}
 
-func (r *Reconciler) createApplication(params cf.AccessApplicationParams) error {
-	r.Recorder.Event(r.app, corev1.EventTypeNormal, "Creating", "Creating AccessApplication")
-
-	result, err := r.cfAPI.CreateAccessApplication(params)
-	if err != nil {
+	if err := r.appService.Register(r.ctx, opts); err != nil {
+		r.log.Error(err, "failed to register AccessApplication configuration")
 		r.setCondition(metav1.ConditionFalse, controller.EventReasonCreateFailed, err.Error())
+		r.Recorder.Event(r.app, corev1.EventTypeWarning, controller.EventReasonCreateFailed, err.Error())
 		return err
 	}
 
-	r.Recorder.Event(r.app, corev1.EventTypeNormal, controller.EventReasonCreated, "Created AccessApplication")
-
-	// Update status first to get ApplicationID
-	if err := r.updateStatus(result, nil); err != nil {
-		return err
-	}
-
-	// Now reconcile policies
-	resolvedPolicies, err := r.reconcilePolicies(result.ID)
-	if err != nil {
-		r.log.Error(err, "failed to reconcile policies after creating application")
-		r.Recorder.Event(r.app, corev1.EventTypeWarning, "PolicyReconcileFailed",
-			fmt.Sprintf("Policy reconciliation failed: %s", cf.SanitizeErrorMessage(err)))
-		// Don't fail the entire reconcile, policies can be retried
-	}
-
-	// Update status again with policy information
-	return r.updateStatus(result, resolvedPolicies)
+	// Update status to Pending if not already synced
+	return r.updateStatusPending()
 }
 
-func (r *Reconciler) updateApplication(params cf.AccessApplicationParams) error {
-	result, err := r.cfAPI.UpdateAccessApplication(r.app.Status.ApplicationID, params)
-	if err != nil {
-		r.setCondition(metav1.ConditionFalse, controller.EventReasonUpdateFailed, err.Error())
-		return err
+// resolvePolicies resolves all policy references and returns the policy configs.
+//
+//nolint:revive // cognitive complexity is acceptable for policy resolution logic
+func (r *Reconciler) resolvePolicies() ([]accesssvc.AccessPolicyConfig, error) {
+	if len(r.app.Spec.Policies) == 0 {
+		return nil, nil
 	}
 
-	r.Recorder.Event(r.app, corev1.EventTypeNormal, controller.EventReasonUpdated, "Updated AccessApplication")
+	policies := make([]accesssvc.AccessPolicyConfig, 0, len(r.app.Spec.Policies))
+	var errs []error
 
-	// Reconcile policies
-	resolvedPolicies, err := r.reconcilePolicies(r.app.Status.ApplicationID)
-	if err != nil {
-		r.log.Error(err, "failed to reconcile policies after updating application")
-		r.Recorder.Event(r.app, corev1.EventTypeWarning, "PolicyReconcileFailed",
-			fmt.Sprintf("Policy reconciliation failed: %s", cf.SanitizeErrorMessage(err)))
-		// Don't fail the entire reconcile, policies can be retried
+	for i, policyRef := range r.app.Spec.Policies {
+		precedence := policyRef.Precedence
+		if precedence == 0 {
+			precedence = i + 1 // Auto-assign precedence based on order
+		}
+
+		groupID, groupName, err := r.resolveAccessGroupID(policyRef)
+		if err != nil {
+			r.log.Error(err, "failed to resolve access group",
+				"policyIndex", i, "precedence", precedence)
+			r.Recorder.Event(r.app, corev1.EventTypeWarning, "PolicyResolutionFailed",
+				fmt.Sprintf("Failed to resolve policy at precedence %d: %s", precedence, cf.SanitizeErrorMessage(err)))
+			errs = append(errs, err)
+			continue
+		}
+
+		decision := policyRef.Decision
+		if decision == "" {
+			decision = "allow"
+		}
+
+		policies = append(policies, accesssvc.AccessPolicyConfig{
+			GroupID:         groupID,
+			GroupName:       groupName,
+			Decision:        decision,
+			Precedence:      precedence,
+			PolicyName:      policyRef.PolicyName,
+			SessionDuration: policyRef.SessionDuration,
+		})
 	}
 
-	return r.updateStatus(result, resolvedPolicies)
+	if len(errs) > 0 {
+		return policies, errors.Join(errs...)
+	}
+	return policies, nil
 }
 
-func (r *Reconciler) updateStatus(result *cf.AccessApplicationResult, resolvedPolicies []networkingv1alpha2.ResolvedPolicyStatus) error {
-	// Use retry logic for status updates to handle conflicts
-	return controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.app, func() {
-		r.app.Status.ApplicationID = result.ID
-		r.app.Status.AUD = result.AUD
-		r.app.Status.AccountID = r.cfAPI.ValidAccountId
-		r.app.Status.Domain = result.Domain
-		r.app.Status.SelfHostedDomains = result.SelfHostedDomains
-		r.app.Status.SaasAppClientID = result.SaasAppClientID
-		r.app.Status.State = "active"
+// ErrNoGroupReference is returned when no group reference is specified in a policy.
+var ErrNoGroupReference = errors.New("no group reference specified in policy (must specify one of: name, groupId, cloudflareGroupName)")
+
+// resolveAccessGroupID resolves the group ID from various reference types.
+// Priority: groupId > cloudflareGroupName > name
+//
+//nolint:revive // cognitive complexity is acceptable for this decision tree
+func (r *Reconciler) resolveAccessGroupID(ref networkingv1alpha2.AccessPolicyRef) (string, string, error) {
+	switch {
+	case ref.GroupID != "":
+		return r.resolveByGroupID(ref.GroupID)
+	case ref.CloudflareGroupName != "":
+		return r.resolveByCloudflareGroupName(ref.CloudflareGroupName)
+	case ref.Name != "":
+		return r.resolveByK8sAccessGroup(ref.Name)
+	default:
+		return "", "", ErrNoGroupReference
+	}
+}
+
+// resolveByGroupID validates and resolves a direct Cloudflare group ID.
+//
+//nolint:revive // confusing-results: naming not needed for simple ID, name returns
+func (r *Reconciler) resolveByGroupID(groupID string) (string, string, error) {
+	// Initialize API client if needed
+	if r.cfAPI == nil {
+		if err := r.initAPIClient(); err != nil {
+			return "", "", err
+		}
+	}
+
+	group, err := r.cfAPI.GetAccessGroup(groupID)
+	if err != nil {
+		if cf.IsNotFoundError(err) {
+			return "", "", fmt.Errorf("cloudflare access group not found: %s", groupID)
+		}
+		return "", "", fmt.Errorf("failed to validate cloudflare group: %w", err)
+	}
+	return groupID, group.Name, nil
+}
+
+// resolveByCloudflareGroupName looks up a Cloudflare group by its display name.
+//
+//nolint:revive // confusing-results: naming not needed for simple ID, name returns
+func (r *Reconciler) resolveByCloudflareGroupName(groupName string) (string, string, error) {
+	// Initialize API client if needed
+	if r.cfAPI == nil {
+		if err := r.initAPIClient(); err != nil {
+			return "", "", err
+		}
+	}
+
+	group, err := r.cfAPI.ListAccessGroupsByName(groupName)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to lookup cloudflare group by name: %w", err)
+	}
+	if group == nil {
+		return "", "", fmt.Errorf("cloudflare access group not found by name: %s", groupName)
+	}
+	return group.ID, group.Name, nil
+}
+
+// resolveByK8sAccessGroup looks up a Kubernetes AccessGroup resource.
+//
+//nolint:revive // confusing-results: naming not needed for simple ID, name returns
+func (r *Reconciler) resolveByK8sAccessGroup(name string) (string, string, error) {
+	accessGroup := &networkingv1alpha2.AccessGroup{}
+	if err := r.Get(r.ctx, apitypes.NamespacedName{Name: name}, accessGroup); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", "", fmt.Errorf("kubernetes AccessGroup resource not found: %s", name)
+		}
+		return "", "", fmt.Errorf("failed to get AccessGroup resource: %w", err)
+	}
+	if accessGroup.Status.GroupID == "" {
+		return "", "", fmt.Errorf("AccessGroup %s not yet ready (no GroupID in status)", name)
+	}
+	return accessGroup.Status.GroupID, accessGroup.GetAccessGroupName(), nil
+}
+
+// updateStatusPending updates the AccessApplication status to Pending state.
+//
+//nolint:revive // cognitive complexity is acceptable for status update logic
+func (r *Reconciler) updateStatusPending() error {
+	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.app, func() {
 		r.app.Status.ObservedGeneration = r.app.Generation
-		r.app.Status.ResolvedPolicies = resolvedPolicies
 
-		r.setCondition(metav1.ConditionTrue, controller.EventReasonReconciled, "Reconciled successfully")
+		// Keep existing state if already active, otherwise set to pending
+		if r.app.Status.State != StateActive {
+			r.app.Status.State = "pending"
+		}
+
+		// Set account ID if we have it
+		if r.cfAPI != nil {
+			if accountID, err := r.cfAPI.GetAccountId(); err == nil {
+				r.app.Status.AccountID = accountID
+			}
+		}
+
+		r.setCondition(metav1.ConditionTrue, "Pending", "Configuration registered, waiting for sync")
 	})
+
+	if err != nil {
+		r.log.Error(err, "failed to update AccessApplication status")
+		return err
+	}
+
+	r.log.Info("AccessApplication configuration registered", "name", r.app.Name)
+	return nil
 }
 
+// setCondition sets a condition on the AccessApplication status.
 func (r *Reconciler) setCondition(status metav1.ConditionStatus, reason, message string) {
 	meta.SetStatusCondition(&r.app.Status.Conditions, metav1.Condition{
 		Type:               "Ready",
@@ -370,251 +465,9 @@ func (r *Reconciler) setCondition(status metav1.ConditionStatus, reason, message
 	})
 }
 
-// resolvedPolicy contains the resolved information for a single policy.
-type resolvedPolicy struct {
-	ref       networkingv1alpha2.AccessPolicyRef
-	groupID   string
-	groupName string
-	source    string // k8s, groupId, cloudflareGroupName
-}
-
-// getPolicyName returns the policy name for Cloudflare.
-func (p *resolvedPolicy) getPolicyName(appName string, precedence int) string {
-	if p.ref.PolicyName != "" {
-		return p.ref.PolicyName
-	}
-	return fmt.Sprintf("%s-policy-%d", appName, precedence)
-}
-
-// ErrNoGroupReference is returned when no group reference is specified in a policy.
-var ErrNoGroupReference = errors.New("no group reference specified in policy (must specify one of: name, groupId, cloudflareGroupName)")
-
-// resolveAccessGroupID resolves the group ID from various reference types.
-// Priority: groupId > cloudflareGroupName > name
-// Returns: (groupID, groupName, source, error)
-//
-//nolint:revive // cognitive complexity is acceptable for this decision tree
-func (r *Reconciler) resolveAccessGroupID(ref networkingv1alpha2.AccessPolicyRef) (string, string, string, error) {
-	switch {
-	case ref.GroupID != "":
-		return r.resolveByGroupID(ref.GroupID)
-	case ref.CloudflareGroupName != "":
-		return r.resolveByCloudflareGroupName(ref.CloudflareGroupName)
-	case ref.Name != "":
-		return r.resolveByK8sAccessGroup(ref.Name)
-	default:
-		return "", "", "", ErrNoGroupReference
-	}
-}
-
-// resolveByGroupID validates and resolves a direct Cloudflare group ID.
-//
-//nolint:revive // 4 return values are needed to match resolveAccessGroupID signature
-func (r *Reconciler) resolveByGroupID(groupID string) (resolvedGroupID, resolvedGroupName, source string, err error) {
-	group, err := r.cfAPI.GetAccessGroup(groupID)
-	if err != nil {
-		if cf.IsNotFoundError(err) {
-			return "", "", "", fmt.Errorf("cloudflare access group not found: %s", groupID)
-		}
-		return "", "", "", fmt.Errorf("failed to validate cloudflare group: %w", err)
-	}
-	return groupID, group.Name, "groupId", nil
-}
-
-// resolveByCloudflareGroupName looks up a Cloudflare group by its display name.
-//
-//nolint:revive // 4 return values are needed to match resolveAccessGroupID signature
-func (r *Reconciler) resolveByCloudflareGroupName(groupName string) (resolvedGroupID, resolvedGroupName, source string, err error) {
-	group, err := r.cfAPI.ListAccessGroupsByName(groupName)
-	if err != nil {
-		return "", "", "", fmt.Errorf("failed to lookup cloudflare group by name: %w", err)
-	}
-	if group == nil {
-		return "", "", "", fmt.Errorf("cloudflare access group not found by name: %s", groupName)
-	}
-	return group.ID, group.Name, "cloudflareGroupName", nil
-}
-
-// resolveByK8sAccessGroup looks up a Kubernetes AccessGroup resource.
-//
-//nolint:revive // 4 return values are needed to match resolveAccessGroupID signature
-func (r *Reconciler) resolveByK8sAccessGroup(name string) (resolvedGroupID, resolvedGroupName, source string, err error) {
-	accessGroup := &networkingv1alpha2.AccessGroup{}
-	if err := r.Get(r.ctx, apitypes.NamespacedName{Name: name}, accessGroup); err != nil {
-		if apierrors.IsNotFound(err) {
-			return "", "", "", fmt.Errorf("kubernetes AccessGroup resource not found: %s", name)
-		}
-		return "", "", "", fmt.Errorf("failed to get AccessGroup resource: %w", err)
-	}
-	if accessGroup.Status.GroupID == "" {
-		return "", "", "", fmt.Errorf("AccessGroup %s not yet ready (no GroupID in status)", name)
-	}
-	return accessGroup.Status.GroupID, accessGroup.GetAccessGroupName(), "k8s", nil
-}
-
-// reconcilePolicies manages the Access Policies for an application.
-//
-//nolint:revive // cognitive complexity is acceptable for this reconciliation logic
-func (r *Reconciler) reconcilePolicies(applicationID string) ([]networkingv1alpha2.ResolvedPolicyStatus, error) {
-	if len(r.app.Spec.Policies) == 0 {
-		// No policies specified, clean up any existing policies
-		if err := r.cleanupAllPolicies(applicationID); err != nil {
-			return nil, err
-		}
-		return nil, nil
-	}
-
-	// Resolve all policies
-	desiredPolicies := make(map[int]resolvedPolicy)
-	resolvedStatuses := make([]networkingv1alpha2.ResolvedPolicyStatus, 0, len(r.app.Spec.Policies))
-
-	for i, policyRef := range r.app.Spec.Policies {
-		precedence := policyRef.Precedence
-		if precedence == 0 {
-			precedence = i + 1 // Auto-assign precedence based on order
-		}
-
-		groupID, groupName, source, err := r.resolveAccessGroupID(policyRef)
-		if err != nil {
-			r.log.Error(err, "failed to resolve access group",
-				"policyIndex", i, "precedence", precedence)
-			r.Recorder.Event(r.app, corev1.EventTypeWarning, "PolicyResolutionFailed",
-				fmt.Sprintf("Failed to resolve policy at precedence %d: %s", precedence, cf.SanitizeErrorMessage(err)))
-			// Continue with other policies but record this failure
-			continue
-		}
-
-		desiredPolicies[precedence] = resolvedPolicy{
-			ref:       policyRef,
-			groupID:   groupID,
-			groupName: groupName,
-			source:    source,
-		}
-	}
-
-	// Sync policies to Cloudflare
-	policyStatuses, err := r.syncPolicies(applicationID, desiredPolicies)
-	if err != nil {
-		return nil, err
-	}
-
-	resolvedStatuses = append(resolvedStatuses, policyStatuses...)
-
-	// Sort by precedence for consistent status
-	sort.Slice(resolvedStatuses, func(i, j int) bool {
-		return resolvedStatuses[i].Precedence < resolvedStatuses[j].Precedence
-	})
-
-	return resolvedStatuses, nil
-}
-
-// syncPolicies ensures the Cloudflare policies match the desired state.
-//
-//nolint:revive // cognitive complexity is acceptable for this sync logic
-func (r *Reconciler) syncPolicies(applicationID string, desired map[int]resolvedPolicy) ([]networkingv1alpha2.ResolvedPolicyStatus, error) {
-	// Get existing policies
-	existing, err := r.cfAPI.ListAccessPolicies(applicationID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list existing policies: %w", err)
-	}
-
-	existingMap := make(map[int]*cf.AccessPolicyResult)
-	for i := range existing {
-		existingMap[existing[i].Precedence] = &existing[i]
-	}
-
-	resolvedStatuses := make([]networkingv1alpha2.ResolvedPolicyStatus, 0, len(desired))
-
-	// Create or update policies
-	for precedence, policy := range desired {
-		decision := policy.ref.Decision
-		if decision == "" {
-			decision = "allow"
-		}
-
-		params := cf.AccessPolicyParams{
-			ApplicationID: applicationID,
-			Name:          policy.getPolicyName(r.app.GetAccessApplicationName(), precedence),
-			Decision:      decision,
-			Precedence:    precedence,
-			Include:       []cf.AccessGroupRuleParams{cf.BuildGroupIncludeRule(policy.groupID)},
-		}
-
-		if policy.ref.SessionDuration != "" {
-			params.SessionDuration = &policy.ref.SessionDuration
-		}
-
-		var policyID string
-		if existingPolicy, ok := existingMap[precedence]; ok {
-			// Update existing policy
-			result, err := r.cfAPI.UpdateAccessPolicy(existingPolicy.ID, params)
-			if err != nil {
-				r.log.Error(err, "failed to update policy", "precedence", precedence)
-				r.Recorder.Event(r.app, corev1.EventTypeWarning, "PolicyUpdateFailed",
-					fmt.Sprintf("Failed to update policy at precedence %d: %s", precedence, cf.SanitizeErrorMessage(err)))
-				continue
-			}
-			policyID = result.ID
-			delete(existingMap, precedence) // Mark as processed
-		} else {
-			// Create new policy
-			result, err := r.cfAPI.CreateAccessPolicy(params)
-			if err != nil {
-				r.log.Error(err, "failed to create policy", "precedence", precedence)
-				r.Recorder.Event(r.app, corev1.EventTypeWarning, "PolicyCreateFailed",
-					fmt.Sprintf("Failed to create policy at precedence %d: %s", precedence, cf.SanitizeErrorMessage(err)))
-				continue
-			}
-			policyID = result.ID
-		}
-
-		resolvedStatuses = append(resolvedStatuses, networkingv1alpha2.ResolvedPolicyStatus{
-			Precedence: precedence,
-			PolicyID:   policyID,
-			GroupID:    policy.groupID,
-			GroupName:  policy.groupName,
-			Source:     policy.source,
-			Decision:   decision,
-		})
-	}
-
-	// Delete orphaned policies (policies that exist in Cloudflare but not in desired)
-	for precedence, orphan := range existingMap {
-		if err := r.cfAPI.DeleteAccessPolicy(applicationID, orphan.ID); err != nil {
-			if !cf.IsNotFoundError(err) {
-				r.log.Error(err, "failed to delete orphaned policy",
-					"policyId", orphan.ID, "precedence", precedence)
-			}
-		} else {
-			r.log.Info("Deleted orphaned policy", "policyId", orphan.ID, "precedence", precedence)
-		}
-	}
-
-	return resolvedStatuses, nil
-}
-
-// cleanupAllPolicies removes all policies for an application.
-//
-//nolint:revive // cognitive complexity is acceptable for cleanup logic
-func (r *Reconciler) cleanupAllPolicies(applicationID string) error {
-	policies, err := r.cfAPI.ListAccessPolicies(applicationID)
-	if err != nil {
-		if cf.IsNotFoundError(err) {
-			return nil
-		}
-		return fmt.Errorf("failed to list policies for cleanup: %w", err)
-	}
-
-	for _, policy := range policies {
-		if err := r.cfAPI.DeleteAccessPolicy(applicationID, policy.ID); err != nil {
-			if !cf.IsNotFoundError(err) {
-				r.log.Error(err, "failed to delete policy during cleanup", "policyId", policy.ID)
-			}
-		}
-	}
-
-	return nil
-}
+// ============================================================================
+// Watch handler helper functions
+// ============================================================================
 
 // appReferencesIDP checks if an AccessApplication references the given AccessIdentityProvider.
 func appReferencesIDP(app *networkingv1alpha2.AccessApplication, idpName string) bool {
@@ -646,7 +499,6 @@ func (r *Reconciler) findAccessApplicationsForIdentityProvider(ctx context.Conte
 	}
 	logger := ctrllog.FromContext(ctx)
 
-	// Find all AccessApplications that reference this IdP
 	appList := &networkingv1alpha2.AccessApplicationList{}
 	if err := r.List(ctx, appList); err != nil {
 		logger.Error(err, "Failed to list AccessApplications for IdentityProvider watch")
@@ -662,13 +514,9 @@ func (r *Reconciler) findAccessApplicationsForIdentityProvider(ctx context.Conte
 
 		logger.Info("AccessIdentityProvider changed, triggering AccessApplication reconcile",
 			"identityprovider", idp.Name,
-			"accessapplication", app.Name,
-			"namespace", app.Namespace)
+			"accessapplication", app.Name)
 		requests = append(requests, reconcile.Request{
-			NamespacedName: apitypes.NamespacedName{
-				Name:      app.Name,
-				Namespace: app.Namespace,
-			},
+			NamespacedName: apitypes.NamespacedName{Name: app.Name},
 		})
 	}
 
@@ -684,7 +532,6 @@ func (r *Reconciler) findAccessApplicationsForAccessGroup(ctx context.Context, o
 	}
 	logger := ctrllog.FromContext(ctx)
 
-	// Find all AccessApplications that reference this AccessGroup
 	appList := &networkingv1alpha2.AccessApplicationList{}
 	if err := r.List(ctx, appList); err != nil {
 		logger.Error(err, "Failed to list AccessApplications for AccessGroup watch")
@@ -702,18 +549,192 @@ func (r *Reconciler) findAccessApplicationsForAccessGroup(ctx context.Context, o
 			"accessgroup", accessGroup.Name,
 			"accessapplication", app.Name)
 		requests = append(requests, reconcile.Request{
-			NamespacedName: apitypes.NamespacedName{
-				Name:      app.Name,
-				Namespace: app.Namespace,
-			},
+			NamespacedName: apitypes.NamespacedName{Name: app.Name},
 		})
 	}
 
 	return requests
 }
 
+// findAccessApplicationsForIngress returns reconcile requests for AccessApplications
+// whose domains match the Ingress hosts.
+func (r *Reconciler) findAccessApplicationsForIngress(ctx context.Context, obj client.Object) []reconcile.Request {
+	ing, ok := obj.(*networkingv1.Ingress)
+	if !ok {
+		return nil
+	}
+	logger := ctrllog.FromContext(ctx)
+
+	hosts := make([]string, 0)
+	for _, rule := range ing.Spec.Rules {
+		if rule.Host != "" {
+			hosts = append(hosts, rule.Host)
+		}
+	}
+	if len(hosts) == 0 {
+		return nil
+	}
+
+	return r.findAccessApplicationsMatchingDomains(ctx, logger, hosts, "Ingress", ing.Name)
+}
+
+// findAccessApplicationsForClusterTunnel returns reconcile requests for AccessApplications
+// when a ClusterTunnel changes.
+func (r *Reconciler) findAccessApplicationsForClusterTunnel(ctx context.Context, obj client.Object) []reconcile.Request {
+	tunnel, ok := obj.(*networkingv1alpha2.ClusterTunnel)
+	if !ok {
+		return nil
+	}
+	logger := ctrllog.FromContext(ctx)
+
+	return r.findPendingAccessApplications(ctx, logger, "ClusterTunnel", tunnel.Name)
+}
+
+// findAccessApplicationsForTunnel returns reconcile requests for AccessApplications
+// when a Tunnel changes.
+func (r *Reconciler) findAccessApplicationsForTunnel(ctx context.Context, obj client.Object) []reconcile.Request {
+	tunnel, ok := obj.(*networkingv1alpha2.Tunnel)
+	if !ok {
+		return nil
+	}
+	logger := ctrllog.FromContext(ctx)
+
+	return r.findPendingAccessApplications(ctx, logger, "Tunnel", tunnel.Name)
+}
+
+// findAccessApplicationsMatchingDomains finds AccessApplications whose domain
+// matches any of the given hosts.
+func (r *Reconciler) findAccessApplicationsMatchingDomains(
+	ctx context.Context,
+	logger logr.Logger,
+	hosts []string,
+	sourceType, sourceName string,
+) []reconcile.Request {
+	appList := &networkingv1alpha2.AccessApplicationList{}
+	if err := r.List(ctx, appList); err != nil {
+		logger.Error(err, "Failed to list AccessApplications for domain matching")
+		return nil
+	}
+
+	requests := make([]reconcile.Request, 0)
+	for i := range appList.Items {
+		app := &appList.Items[i]
+
+		// Only trigger if the app is in a non-ready state
+		if app.Status.State == StateActive {
+			continue
+		}
+
+		if domainMatchesHosts(app.Spec.Domain, hosts) ||
+			anyDomainMatchesHosts(app.Spec.SelfHostedDomains, hosts) {
+			logger.Info("Domain match found, triggering AccessApplication reconcile",
+				"sourceType", sourceType,
+				"sourceName", sourceName,
+				"accessapplication", app.Name,
+				"domain", app.Spec.Domain)
+			requests = append(requests, reconcile.Request{
+				NamespacedName: apitypes.NamespacedName{Name: app.Name},
+			})
+		}
+	}
+
+	return requests
+}
+
+// findPendingAccessApplications finds AccessApplications that are not in ready state.
+func (r *Reconciler) findPendingAccessApplications(
+	ctx context.Context,
+	logger logr.Logger,
+	sourceType, sourceName string,
+) []reconcile.Request {
+	appList := &networkingv1alpha2.AccessApplicationList{}
+	if err := r.List(ctx, appList); err != nil {
+		logger.Error(err, "Failed to list AccessApplications for tunnel watch")
+		return nil
+	}
+
+	requests := make([]reconcile.Request, 0)
+	for i := range appList.Items {
+		app := &appList.Items[i]
+
+		// Only trigger if the app is in a non-ready state
+		if app.Status.State == StateActive {
+			continue
+		}
+
+		readyCondition := meta.FindStatusCondition(app.Status.Conditions, "Ready")
+		if readyCondition != nil && readyCondition.Status == metav1.ConditionFalse {
+			logger.Info("Tunnel changed, triggering pending AccessApplication reconcile",
+				"sourceType", sourceType,
+				"sourceName", sourceName,
+				"accessapplication", app.Name,
+				"currentState", app.Status.State,
+				"reason", readyCondition.Reason)
+			requests = append(requests, reconcile.Request{
+				NamespacedName: apitypes.NamespacedName{Name: app.Name},
+			})
+		}
+	}
+
+	return requests
+}
+
+// domainMatchesHosts checks if a domain matches any of the given hosts.
+// DNS domain names are case-insensitive, so comparisons are done in lowercase.
+//
+//nolint:revive // cognitive complexity is acceptable for this domain matching logic
+func domainMatchesHosts(domain string, hosts []string) bool {
+	if domain == "" {
+		return false
+	}
+
+	// Normalize domain to lowercase for case-insensitive comparison
+	domainLower := strings.ToLower(domain)
+
+	for _, host := range hosts {
+		// Normalize host to lowercase for case-insensitive comparison
+		hostLower := strings.ToLower(host)
+
+		if domainLower == hostLower {
+			return true
+		}
+		// Check wildcard matching
+		if len(hostLower) > 2 && hostLower[:2] == "*." {
+			baseDomain := hostLower[2:]
+			if len(domainLower) > len(baseDomain)+1 && domainLower[len(domainLower)-len(baseDomain)-1:] == "."+baseDomain {
+				return true
+			}
+			if domainLower == baseDomain {
+				return true
+			}
+		}
+		if len(domainLower) > 2 && domainLower[:2] == "*." {
+			baseDomain := domainLower[2:]
+			if len(hostLower) > len(baseDomain)+1 && hostLower[len(hostLower)-len(baseDomain)-1:] == "."+baseDomain {
+				return true
+			}
+			if hostLower == baseDomain {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// anyDomainMatchesHosts checks if any domain in the list matches any host.
+func anyDomainMatchesHosts(domains []string, hosts []string) bool {
+	for _, domain := range domains {
+		if domainMatchesHosts(domain, hosts) {
+			return true
+		}
+	}
+	return false
+}
+
+// SetupWithManager sets up the controller with the Manager.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("accessapplication-controller")
+	r.appService = accesssvc.NewApplicationService(mgr.GetClient())
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.AccessApplication{}).
 		// Watch AccessIdentityProvider changes for IdP reference updates
@@ -743,414 +764,4 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.findAccessApplicationsForTunnel),
 		).
 		Complete(r)
-}
-
-// ============================================================================
-// Ingress and Tunnel Watch handlers
-// ============================================================================
-
-// findAccessApplicationsForIngress returns reconcile requests for AccessApplications
-// whose domains match the Ingress hosts. This allows AccessApplications to be
-// reconciled when their target Ingress is created/updated.
-func (r *Reconciler) findAccessApplicationsForIngress(ctx context.Context, obj client.Object) []reconcile.Request {
-	ing, ok := obj.(*networkingv1.Ingress)
-	if !ok {
-		return nil
-	}
-	logger := ctrllog.FromContext(ctx)
-
-	// Extract all hosts from the Ingress
-	hosts := make([]string, 0)
-	for _, rule := range ing.Spec.Rules {
-		if rule.Host != "" {
-			hosts = append(hosts, rule.Host)
-		}
-	}
-	if len(hosts) == 0 {
-		return nil
-	}
-
-	// Find AccessApplications that match these hosts
-	return r.findAccessApplicationsMatchingDomains(ctx, logger, hosts, "Ingress", ing.Name)
-}
-
-// findAccessApplicationsForClusterTunnel returns reconcile requests for AccessApplications
-// when a ClusterTunnel changes. This triggers reconciliation for applications that might
-// be waiting for tunnel sync.
-func (r *Reconciler) findAccessApplicationsForClusterTunnel(ctx context.Context, obj client.Object) []reconcile.Request {
-	tunnel, ok := obj.(*networkingv1alpha2.ClusterTunnel)
-	if !ok {
-		return nil
-	}
-	logger := ctrllog.FromContext(ctx)
-
-	// When a tunnel changes, reconcile all AccessApplications in pending/error state
-	return r.findPendingAccessApplications(ctx, logger, "ClusterTunnel", tunnel.Name)
-}
-
-// findAccessApplicationsForTunnel returns reconcile requests for AccessApplications
-// when a Tunnel changes.
-func (r *Reconciler) findAccessApplicationsForTunnel(ctx context.Context, obj client.Object) []reconcile.Request {
-	tunnel, ok := obj.(*networkingv1alpha2.Tunnel)
-	if !ok {
-		return nil
-	}
-	logger := ctrllog.FromContext(ctx)
-
-	// When a tunnel changes, reconcile all AccessApplications in pending/error state
-	return r.findPendingAccessApplications(ctx, logger, "Tunnel", tunnel.Name)
-}
-
-// findAccessApplicationsMatchingDomains finds AccessApplications whose domain
-// matches any of the given hosts.
-func (r *Reconciler) findAccessApplicationsMatchingDomains(
-	ctx context.Context,
-	logger logr.Logger,
-	hosts []string,
-	sourceType, sourceName string,
-) []reconcile.Request {
-	appList := &networkingv1alpha2.AccessApplicationList{}
-	if err := r.List(ctx, appList); err != nil {
-		logger.Error(err, "Failed to list AccessApplications for domain matching")
-		return nil
-	}
-
-	requests := make([]reconcile.Request, 0)
-	for i := range appList.Items {
-		app := &appList.Items[i]
-
-		// Only trigger if the app is in a non-ready state
-		if app.Status.State == "active" {
-			continue
-		}
-
-		// Check if app's domain matches any of the hosts
-		if domainMatchesHosts(app.Spec.Domain, hosts) ||
-			anyDomainMatchesHosts(app.Spec.SelfHostedDomains, hosts) {
-			logger.Info("Domain match found, triggering AccessApplication reconcile",
-				"sourceType", sourceType,
-				"sourceName", sourceName,
-				"accessapplication", app.Name,
-				"domain", app.Spec.Domain)
-			requests = append(requests, reconcile.Request{
-				NamespacedName: apitypes.NamespacedName{
-					Name:      app.Name,
-					Namespace: app.Namespace,
-				},
-			})
-		}
-	}
-
-	return requests
-}
-
-// findPendingAccessApplications finds AccessApplications that are not in ready state.
-// This is used when a Tunnel changes to retry applications that might be waiting.
-func (r *Reconciler) findPendingAccessApplications(
-	ctx context.Context,
-	logger logr.Logger,
-	sourceType, sourceName string,
-) []reconcile.Request {
-	appList := &networkingv1alpha2.AccessApplicationList{}
-	if err := r.List(ctx, appList); err != nil {
-		logger.Error(err, "Failed to list AccessApplications for tunnel watch")
-		return nil
-	}
-
-	requests := make([]reconcile.Request, 0)
-	for i := range appList.Items {
-		app := &appList.Items[i]
-
-		// Only trigger if the app is in a non-ready state
-		if app.Status.State == "active" {
-			continue
-		}
-
-		// Check if there's a "WaitingForTunnel" or error condition
-		readyCondition := meta.FindStatusCondition(app.Status.Conditions, "Ready")
-		if readyCondition != nil && readyCondition.Status == metav1.ConditionFalse {
-			logger.Info("Tunnel changed, triggering pending AccessApplication reconcile",
-				"sourceType", sourceType,
-				"sourceName", sourceName,
-				"accessapplication", app.Name,
-				"currentState", app.Status.State,
-				"reason", readyCondition.Reason)
-			requests = append(requests, reconcile.Request{
-				NamespacedName: apitypes.NamespacedName{
-					Name:      app.Name,
-					Namespace: app.Namespace,
-				},
-			})
-		}
-	}
-
-	return requests
-}
-
-// domainMatchesHosts checks if a domain matches any of the given hosts.
-// Supports exact match and wildcard subdomain matching.
-//
-//nolint:revive // cognitive complexity is acceptable for this domain matching logic
-func domainMatchesHosts(domain string, hosts []string) bool {
-	if domain == "" {
-		return false
-	}
-	domain = strings.ToLower(domain)
-
-	for _, host := range hosts {
-		host = strings.ToLower(host)
-		if domain == host {
-			return true
-		}
-		// Check if domain is a subdomain of host
-		// e.g., domain="app.example.com" matches host="*.example.com"
-		if strings.HasPrefix(host, "*.") {
-			baseDomain := host[2:] // Remove "*."
-			if strings.HasSuffix(domain, "."+baseDomain) || domain == baseDomain {
-				return true
-			}
-		}
-		// Check reverse: host is subdomain of domain pattern
-		if strings.HasPrefix(domain, "*.") {
-			baseDomain := domain[2:]
-			if strings.HasSuffix(host, "."+baseDomain) || host == baseDomain {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// anyDomainMatchesHosts checks if any domain in the list matches any host.
-func anyDomainMatchesHosts(domains []string, hosts []string) bool {
-	for _, domain := range domains {
-		if domainMatchesHosts(domain, hosts) {
-			return true
-		}
-	}
-	return false
-}
-
-// ============================================================================
-// CRD to CF Params conversion helper functions
-// ============================================================================
-
-// convertDestinationsFromCRD converts CRD destinations to CF params.
-func convertDestinationsFromCRD(destinations []networkingv1alpha2.AccessDestination) []cf.AccessDestinationParams {
-	result := make([]cf.AccessDestinationParams, 0, len(destinations))
-	for _, dest := range destinations {
-		result = append(result, cf.AccessDestinationParams{
-			Type:       dest.Type,
-			URI:        dest.URI,
-			Hostname:   dest.Hostname,
-			CIDR:       dest.CIDR,
-			PortRange:  dest.PortRange,
-			L4Protocol: dest.L4Protocol,
-			VnetID:     dest.VnetID,
-		})
-	}
-	return result
-}
-
-// convertCorsHeadersFromCRD converts CRD CORS headers to CF params.
-func convertCorsHeadersFromCRD(cors *networkingv1alpha2.AccessApplicationCorsHeaders) *cf.AccessApplicationCorsHeadersParams {
-	if cors == nil {
-		return nil
-	}
-	return &cf.AccessApplicationCorsHeadersParams{
-		AllowedMethods:   cors.AllowedMethods,
-		AllowedOrigins:   cors.AllowedOrigins,
-		AllowedHeaders:   cors.AllowedHeaders,
-		AllowAllMethods:  cors.AllowAllMethods,
-		AllowAllHeaders:  cors.AllowAllHeaders,
-		AllowAllOrigins:  cors.AllowAllOrigins,
-		AllowCredentials: cors.AllowCredentials,
-		MaxAge:           cors.MaxAge,
-	}
-}
-
-// convertSaasAppFromCRD converts CRD SaaS app config to CF params.
-//
-//nolint:revive // cognitive complexity is acceptable for this conversion
-func convertSaasAppFromCRD(saas *networkingv1alpha2.SaasApplicationConfig) *cf.SaasApplicationParams {
-	if saas == nil {
-		return nil
-	}
-
-	result := &cf.SaasApplicationParams{
-		AuthType:                      saas.AuthType,
-		ConsumerServiceURL:            saas.ConsumerServiceURL,
-		SPEntityID:                    saas.SPEntityID,
-		NameIDFormat:                  saas.NameIDFormat,
-		DefaultRelayState:             saas.DefaultRelayState,
-		NameIDTransformJsonata:        saas.NameIDTransformJsonata,
-		SamlAttributeTransformJsonata: saas.SamlAttributeTransformJsonata,
-		RedirectURIs:                  saas.RedirectURIs,
-		GrantTypes:                    saas.GrantTypes,
-		Scopes:                        saas.Scopes,
-		AppLauncherURL:                saas.AppLauncherURL,
-		GroupFilterRegex:              saas.GroupFilterRegex,
-		AllowPKCEWithoutClientSecret:  saas.AllowPKCEWithoutClientSecret,
-		AccessTokenLifetime:           saas.AccessTokenLifetime,
-	}
-
-	// Convert SAML custom attributes
-	if len(saas.CustomAttributes) > 0 {
-		attrs := make([]cf.SAMLAttributeConfigParams, 0, len(saas.CustomAttributes))
-		for _, attr := range saas.CustomAttributes {
-			attrs = append(attrs, cf.SAMLAttributeConfigParams{
-				Name:         attr.Name,
-				NameFormat:   attr.NameFormat,
-				FriendlyName: attr.FriendlyName,
-				Required:     attr.Required,
-				Source: cf.SAMLAttributeSourceParams{
-					Name:      attr.Source.Name,
-					NameByIDP: attr.Source.NameByIDP,
-				},
-			})
-		}
-		result.CustomAttributes = attrs
-	}
-
-	// Convert OIDC custom claims
-	if len(saas.CustomClaims) > 0 {
-		claims := make([]cf.OIDCClaimConfigParams, 0, len(saas.CustomClaims))
-		for _, claim := range saas.CustomClaims {
-			claims = append(claims, cf.OIDCClaimConfigParams{
-				Name:     claim.Name,
-				Required: claim.Required,
-				Scope:    claim.Scope,
-				Source: cf.OIDCClaimSourceParams{
-					Name:      claim.Source.Name,
-					NameByIDP: claim.Source.NameByIDP,
-				},
-			})
-		}
-		result.CustomClaims = claims
-	}
-
-	// Convert refresh token options
-	if saas.RefreshTokenOptions != nil {
-		result.RefreshTokenOptions = &cf.RefreshTokenOptionsParams{
-			Lifetime: saas.RefreshTokenOptions.Lifetime,
-		}
-	}
-
-	// Convert hybrid and implicit options
-	if saas.HybridAndImplicitOptions != nil {
-		result.HybridAndImplicitOptions = &cf.HybridAndImplicitOptionsParams{
-			ReturnIDTokenFromAuthorizationEndpoint:     saas.HybridAndImplicitOptions.ReturnIDTokenFromAuthorizationEndpoint,
-			ReturnAccessTokenFromAuthorizationEndpoint: saas.HybridAndImplicitOptions.ReturnAccessTokenFromAuthorizationEndpoint,
-		}
-	}
-
-	return result
-}
-
-// convertSCIMConfigFromCRD converts CRD SCIM config to CF params.
-//
-//nolint:revive // cognitive complexity is acceptable for this conversion
-func convertSCIMConfigFromCRD(scim *networkingv1alpha2.AccessApplicationSCIMConfig) *cf.AccessApplicationSCIMConfigParams {
-	if scim == nil {
-		return nil
-	}
-
-	result := &cf.AccessApplicationSCIMConfigParams{
-		Enabled:            scim.Enabled,
-		RemoteURI:          scim.RemoteURI,
-		IDPUID:             scim.IDPUID,
-		DeactivateOnDelete: scim.DeactivateOnDelete,
-	}
-
-	// Convert authentication
-	if scim.Authentication != nil {
-		result.Authentication = &cf.SCIMAuthenticationParams{
-			Scheme:           scim.Authentication.Scheme,
-			User:             scim.Authentication.User,
-			Password:         scim.Authentication.Password,
-			Token:            scim.Authentication.Token,
-			ClientID:         scim.Authentication.ClientID,
-			ClientSecret:     scim.Authentication.ClientSecret,
-			AuthorizationURL: scim.Authentication.AuthorizationURL,
-			TokenURL:         scim.Authentication.TokenURL,
-			Scopes:           scim.Authentication.Scopes,
-		}
-	}
-
-	// Convert mappings
-	if len(scim.Mappings) > 0 {
-		mappings := make([]cf.SCIMMappingParams, 0, len(scim.Mappings))
-		for _, m := range scim.Mappings {
-			mapping := cf.SCIMMappingParams{
-				Schema:           m.Schema,
-				Enabled:          m.Enabled,
-				Filter:           m.Filter,
-				TransformJsonata: m.TransformJsonata,
-				Strictness:       m.Strictness,
-			}
-			if m.Operations != nil {
-				mapping.Operations = &cf.SCIMMappingOperationsParams{
-					Create: m.Operations.Create,
-					Update: m.Operations.Update,
-					Delete: m.Operations.Delete,
-				}
-			}
-			mappings = append(mappings, mapping)
-		}
-		result.Mappings = mappings
-	}
-
-	return result
-}
-
-// convertAppLauncherCustomizationFromCRD converts CRD app launcher customization to CF params.
-func convertAppLauncherCustomizationFromCRD(custom *networkingv1alpha2.AccessAppLauncherCustomization) *cf.AccessAppLauncherCustomizationParams {
-	if custom == nil {
-		return nil
-	}
-
-	result := &cf.AccessAppLauncherCustomizationParams{
-		AppLauncherLogoURL:       custom.AppLauncherLogoURL,
-		HeaderBackgroundColor:    custom.HeaderBackgroundColor,
-		BackgroundColor:          custom.BackgroundColor,
-		SkipAppLauncherLoginPage: custom.SkipAppLauncherLoginPage,
-	}
-
-	// Convert landing page design
-	if custom.LandingPageDesign != nil {
-		result.LandingPageDesign = &cf.AccessLandingPageDesignParams{
-			Title:           custom.LandingPageDesign.Title,
-			Message:         custom.LandingPageDesign.Message,
-			ImageURL:        custom.LandingPageDesign.ImageURL,
-			ButtonColor:     custom.LandingPageDesign.ButtonColor,
-			ButtonTextColor: custom.LandingPageDesign.ButtonTextColor,
-		}
-	}
-
-	// Convert footer links
-	if len(custom.FooterLinks) > 0 {
-		links := make([]cf.AccessFooterLinkParams, 0, len(custom.FooterLinks))
-		for _, link := range custom.FooterLinks {
-			links = append(links, cf.AccessFooterLinkParams{
-				Name: link.Name,
-				URL:  link.URL,
-			})
-		}
-		result.FooterLinks = links
-	}
-
-	return result
-}
-
-// convertTargetContextsFromCRD converts CRD target contexts to CF params.
-func convertTargetContextsFromCRD(contexts []networkingv1alpha2.AccessInfrastructureTargetContext) []cf.AccessInfrastructureTargetContextParams {
-	result := make([]cf.AccessInfrastructureTargetContextParams, 0, len(contexts))
-	for _, ctx := range contexts {
-		result = append(result, cf.AccessInfrastructureTargetContextParams{
-			TargetAttributes: ctx.TargetAttributes,
-			Port:             ctx.Port,
-			Protocol:         ctx.Protocol,
-		})
-	}
-	return result
 }

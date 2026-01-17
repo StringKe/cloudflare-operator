@@ -31,7 +31,7 @@ func (b *OriginRequestBuilder) WithDefaults(defaults *networkingv1alpha2.OriginR
 	}
 
 	b.config.NoTLSVerify = &defaults.NoTLSVerify
-	b.config.Http2Origin = &defaults.HTTP2Origin
+	b.config.HTTP2Origin = &defaults.HTTP2Origin
 
 	if defaults.CAPool != "" {
 		caPath := fmt.Sprintf("/etc/cloudflared/certs/%s", defaults.CAPool)
@@ -103,7 +103,7 @@ func (b *OriginRequestBuilder) SetNoTLSVerify(v *bool) *OriginRequestBuilder {
 // SetHTTP2Origin sets the HTTP2Origin option.
 func (b *OriginRequestBuilder) SetHTTP2Origin(v *bool) *OriginRequestBuilder {
 	if v != nil {
-		b.config.Http2Origin = v
+		b.config.HTTP2Origin = v
 	}
 	return b
 }

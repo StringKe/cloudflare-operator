@@ -107,7 +107,9 @@ var sampleFilledNewTunnel = v1alpha2.Tunnel{
 func TestUpgradeTunnel(t *testing.T) {
 	// Convert
 	convertedNewTunnel := &v1alpha2.Tunnel{}
-	sampleFilledOldTunnel.ConvertTo(convertedNewTunnel)
+	if err := sampleFilledOldTunnel.ConvertTo(convertedNewTunnel); err != nil {
+		t.Fatalf("ConvertTo failed: %v", err)
+	}
 
 	// Validate
 	convertedDeployPatch := convertedNewTunnel.Spec.DeployPatch
@@ -140,7 +142,9 @@ func TestDowngradeTunnel(t *testing.T) {
 	filledNewTunnel.Spec.DeployPatch = string(deployPatch)
 
 	convertedOldTunnel := &v1alpha1.Tunnel{}
-	convertedOldTunnel.ConvertFrom(filledNewTunnel)
+	if err := convertedOldTunnel.ConvertFrom(filledNewTunnel); err != nil {
+		t.Fatalf("ConvertFrom failed: %v", err)
+	}
 
 	if equality.Semantic.DeepEqualWithNilDifferentFromEmpty(convertedOldTunnel, sampleFilledOldTunnel) {
 		converted, err := json.Marshal(convertedOldTunnel)

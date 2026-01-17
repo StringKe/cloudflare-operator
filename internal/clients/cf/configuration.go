@@ -15,7 +15,7 @@ type TunnelConfigurationResult = cloudflare.TunnelConfigurationResult
 // Note: Both yaml and json tags are required because sigs.k8s.io/yaml uses
 // json.Marshal internally, which only recognizes json tags.
 type Configuration struct {
-	TunnelId      string                   `yaml:"tunnel" json:"tunnel"`
+	TunnelID      string                   `yaml:"tunnel" json:"tunnel"`
 	Ingress       []UnvalidatedIngressRule `yaml:"ingress,omitempty" json:"ingress,omitempty"`
 	WarpRouting   WarpRoutingConfig        `yaml:"warp-routing,omitempty" json:"warp-routing,omitempty"`
 	OriginRequest OriginRequestConfig      `yaml:"originRequest,omitempty" json:"originRequest,omitempty"`
@@ -63,7 +63,7 @@ type OriginRequestConfig struct {
 	// Note: The connection from your machine to Cloudflare's Edge is still encrypted.
 	NoTLSVerify *bool `yaml:"noTLSVerify,omitempty" json:"noTLSVerify,omitempty"`
 	// Attempt to connect to origin using HTTP2. Origin must be configured as https.
-	Http2Origin *bool `yaml:"http2Origin,omitempty" json:"http2Origin,omitempty"`
+	HTTP2Origin *bool `yaml:"http2Origin,omitempty" json:"http2Origin,omitempty"`
 	// Disables chunked transfer encoding.
 	// Useful if you are running a WSGI server.
 	DisableChunkedEncoding *bool `yaml:"disableChunkedEncoding,omitempty" json:"disableChunkedEncoding,omitempty"`

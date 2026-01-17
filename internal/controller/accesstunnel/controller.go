@@ -29,7 +29,7 @@ import (
 	networkingv1alpha1 "github.com/StringKe/cloudflare-operator/api/v1alpha1"
 )
 
-const CONTAINER_PORT int32 = 8000
+const containerPort int32 = 8000
 
 // Reconciler reconciles a Access object
 type Reconciler struct {
@@ -65,14 +65,18 @@ func (*Reconciler) GetReconcilerName() string {
 
 var _ k8s.GenericReconciler = &Reconciler{}
 
-func cloudflaredDeploymentService(accessTunnel *networkingv1alpha1.AccessTunnel, secret *corev1.Secret, scheme *runtime.Scheme) (*appsv1.Deployment, *corev1.Service) {
+func cloudflaredDeploymentService(
+	accessTunnel *networkingv1alpha1.AccessTunnel,
+	secret *corev1.Secret,
+	_ *runtime.Scheme,
+) (*appsv1.Deployment, *corev1.Service) {
 	svcName := accessTunnel.GetName()
 	if accessTunnel.Target.Svc.Name != "" {
 		svcName = accessTunnel.Target.Svc.Name
 	}
 	port := accessTunnel.Target.Svc.Port
 	if port == 0 {
-		port = CONTAINER_PORT
+		port = containerPort
 	}
 	namespace := accessTunnel.GetNamespace()
 	image := accessTunnel.Target.Image
@@ -84,7 +88,7 @@ func cloudflaredDeploymentService(accessTunnel *networkingv1alpha1.AccessTunnel,
 	}
 
 	// Args for cloudflared
-	args := []string{"access", protocol, "--listener", fmt.Sprintf("0.0.0.0:%d", CONTAINER_PORT), "--hostname", fqdn}
+	args := []string{"access", protocol, "--listener", fmt.Sprintf("0.0.0.0:%d", containerPort), "--hostname", fqdn}
 	if accessTunnel.ServiceToken != nil && secret != nil {
 		id := secret.Data[accessTunnel.ServiceToken.CLOUDFLARE_ACCESS_SERVICE_TOKEN_ID]
 		token := secret.Data[accessTunnel.ServiceToken.CLOUDFLARE_ACCESS_SERVICE_TOKEN_TOKEN]
@@ -125,7 +129,7 @@ func cloudflaredDeploymentService(accessTunnel *networkingv1alpha1.AccessTunnel,
 							Ports: []corev1.ContainerPort{
 								{
 									Name:          accessTunnel.Name,
-									ContainerPort: CONTAINER_PORT,
+									ContainerPort: containerPort,
 									Protocol:      corev1Protocol,
 								},
 							},
@@ -189,7 +193,7 @@ func cloudflaredDeploymentService(accessTunnel *networkingv1alpha1.AccessTunnel,
 				Ports: []corev1.ServicePort{{
 					Name:       protocol,
 					Protocol:   corev1Protocol,
-					TargetPort: intstr.FromInt32(CONTAINER_PORT),
+					TargetPort: intstr.FromInt32(containerPort),
 					Port:       port,
 				}},
 			},

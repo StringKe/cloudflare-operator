@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
-	cf "github.com/StringKe/cloudflare-operator/internal/clients/cf"
+	devicesvc "github.com/StringKe/cloudflare-operator/internal/service/device"
 )
 
 func TestBuildInput(t *testing.T) {
@@ -20,7 +20,7 @@ func TestBuildInput(t *testing.T) {
 		name     string
 		input    *networkingv1alpha2.DevicePostureInput
 		wantNil  bool
-		validate func(t *testing.T, result *cf.DevicePostureInputParams)
+		validate func(t *testing.T, result *devicesvc.DevicePostureInput)
 	}{
 		{
 			name:    "nil input returns nil",
@@ -33,7 +33,7 @@ func TestBuildInput(t *testing.T) {
 				RequireAll: boolPtr(true),
 				Enabled:    boolPtr(true),
 			},
-			validate: func(t *testing.T, result *cf.DevicePostureInputParams) {
+			validate: func(t *testing.T, result *devicesvc.DevicePostureInput) {
 				require.NotNil(t, result)
 				require.NotNil(t, result.RequireAll)
 				assert.True(t, *result.RequireAll)
@@ -48,7 +48,7 @@ func TestBuildInput(t *testing.T) {
 				Exists: boolPtr(true),
 				Sha256: "abc123def456",
 			},
-			validate: func(t *testing.T, result *cf.DevicePostureInputParams) {
+			validate: func(t *testing.T, result *devicesvc.DevicePostureInput) {
 				require.NotNil(t, result)
 				assert.Equal(t, "C:\\Program Files\\MyApp\\app.exe", result.Path)
 				require.NotNil(t, result.Exists)
@@ -62,7 +62,7 @@ func TestBuildInput(t *testing.T) {
 				Path:    "/Applications/MyApp.app",
 				Running: boolPtr(true),
 			},
-			validate: func(t *testing.T, result *cf.DevicePostureInputParams) {
+			validate: func(t *testing.T, result *devicesvc.DevicePostureInput) {
 				require.NotNil(t, result)
 				assert.Equal(t, "/Applications/MyApp.app", result.Path)
 				require.NotNil(t, result.Running)
@@ -74,7 +74,7 @@ func TestBuildInput(t *testing.T) {
 			input: &networkingv1alpha2.DevicePostureInput{
 				Domain: "example.com",
 			},
-			validate: func(t *testing.T, result *cf.DevicePostureInputParams) {
+			validate: func(t *testing.T, result *devicesvc.DevicePostureInput) {
 				require.NotNil(t, result)
 				assert.Equal(t, "example.com", result.Domain)
 			},
@@ -91,7 +91,7 @@ func TestBuildInput(t *testing.T) {
 				OSVersionExtra:   "Enterprise",
 				OperatingSystem:  "windows",
 			},
-			validate: func(t *testing.T, result *cf.DevicePostureInputParams) {
+			validate: func(t *testing.T, result *devicesvc.DevicePostureInput) {
 				require.NotNil(t, result)
 				assert.Equal(t, "Windows", result.OS)
 				assert.Equal(t, "10.0.19041", result.Version)
@@ -108,7 +108,7 @@ func TestBuildInput(t *testing.T) {
 			input: &networkingv1alpha2.DevicePostureInput{
 				Enabled: boolPtr(true),
 			},
-			validate: func(t *testing.T, result *cf.DevicePostureInputParams) {
+			validate: func(t *testing.T, result *devicesvc.DevicePostureInput) {
 				require.NotNil(t, result)
 				require.NotNil(t, result.Enabled)
 				assert.True(t, *result.Enabled)
@@ -124,7 +124,7 @@ func TestBuildInput(t *testing.T) {
 				IsActive:         boolPtr(true),
 				OperationalState: "running",
 			},
-			validate: func(t *testing.T, result *cf.DevicePostureInputParams) {
+			validate: func(t *testing.T, result *devicesvc.DevicePostureInput) {
 				require.NotNil(t, result)
 				require.NotNil(t, result.ActiveThreats)
 				assert.Equal(t, 0, *result.ActiveThreats)
@@ -146,7 +146,7 @@ func TestBuildInput(t *testing.T) {
 				CheckPrivateKey:  boolPtr(true),
 				ExtendedKeyUsage: []string{"serverAuth", "clientAuth"},
 			},
-			validate: func(t *testing.T, result *cf.DevicePostureInputParams) {
+			validate: func(t *testing.T, result *devicesvc.DevicePostureInput) {
 				require.NotNil(t, result)
 				assert.Equal(t, "cert-123", result.CertificateID)
 				assert.Equal(t, "*.example.com", result.CommonName)
@@ -164,7 +164,7 @@ func TestBuildInput(t *testing.T) {
 				TotalScore:    intPtr(100),
 				ScoreOperator: ">=",
 			},
-			validate: func(t *testing.T, result *cf.DevicePostureInputParams) {
+			validate: func(t *testing.T, result *devicesvc.DevicePostureInput) {
 				require.NotNil(t, result)
 				assert.Equal(t, "2025-01-01T00:00:00Z", result.EidLastSeen)
 				assert.Equal(t, "low", result.RiskLevel)
@@ -179,7 +179,7 @@ func TestBuildInput(t *testing.T) {
 				ComplianceStatus: "compliant",
 				ConnectionID:     "conn-456",
 			},
-			validate: func(t *testing.T, result *cf.DevicePostureInputParams) {
+			validate: func(t *testing.T, result *devicesvc.DevicePostureInput) {
 				require.NotNil(t, result)
 				assert.Equal(t, "compliant", result.ComplianceStatus)
 				assert.Equal(t, "conn-456", result.ConnectionID)
@@ -196,7 +196,7 @@ func TestBuildInput(t *testing.T) {
 				CountOperator: "<=",
 				LastSeen:      "2025-01-10T12:00:00Z",
 			},
-			validate: func(t *testing.T, result *cf.DevicePostureInputParams) {
+			validate: func(t *testing.T, result *devicesvc.DevicePostureInput) {
 				require.NotNil(t, result)
 				assert.Equal(t, "online", result.State)
 				assert.Equal(t, "pass", result.Overall)
@@ -215,7 +215,7 @@ func TestBuildInput(t *testing.T) {
 				IssueCount:    intPtr(5),
 				CountOperator: "<",
 			},
-			validate: func(t *testing.T, result *cf.DevicePostureInputParams) {
+			validate: func(t *testing.T, result *devicesvc.DevicePostureInput) {
 				require.NotNil(t, result)
 				require.NotNil(t, result.IssueCount)
 				assert.Equal(t, 5, *result.IssueCount)
@@ -227,7 +227,7 @@ func TestBuildInput(t *testing.T) {
 			input: &networkingv1alpha2.DevicePostureInput{
 				Thumbprint: "sha256fingerprint",
 			},
-			validate: func(t *testing.T, result *cf.DevicePostureInputParams) {
+			validate: func(t *testing.T, result *devicesvc.DevicePostureInput) {
 				require.NotNil(t, result)
 				assert.Equal(t, "sha256fingerprint", result.Thumbprint)
 			},
@@ -237,7 +237,7 @@ func TestBuildInput(t *testing.T) {
 			input: &networkingv1alpha2.DevicePostureInput{
 				CheckDisks: []string{"C:", "D:"},
 			},
-			validate: func(t *testing.T, result *cf.DevicePostureInputParams) {
+			validate: func(t *testing.T, result *devicesvc.DevicePostureInput) {
 				require.NotNil(t, result)
 				assert.Equal(t, []string{"C:", "D:"}, result.CheckDisks)
 			},
@@ -247,7 +247,7 @@ func TestBuildInput(t *testing.T) {
 			input: &networkingv1alpha2.DevicePostureInput{
 				ID: "custom-check-id",
 			},
-			validate: func(t *testing.T, result *cf.DevicePostureInputParams) {
+			validate: func(t *testing.T, result *devicesvc.DevicePostureInput) {
 				require.NotNil(t, result)
 				assert.Equal(t, "custom-check-id", result.ID)
 			},
@@ -255,7 +255,7 @@ func TestBuildInput(t *testing.T) {
 		{
 			name:  "empty input struct",
 			input: &networkingv1alpha2.DevicePostureInput{},
-			validate: func(t *testing.T, result *cf.DevicePostureInputParams) {
+			validate: func(t *testing.T, result *devicesvc.DevicePostureInput) {
 				require.NotNil(t, result)
 				// All fields should be zero/nil values
 				assert.Empty(t, result.Path)
@@ -308,7 +308,7 @@ func TestBuildInput(t *testing.T) {
 				ExtendedKeyUsage: []string{"any"},
 				CheckDisks:       []string{"/"},
 			},
-			validate: func(t *testing.T, result *cf.DevicePostureInputParams) {
+			validate: func(t *testing.T, result *devicesvc.DevicePostureInput) {
 				require.NotNil(t, result)
 				// Spot check several fields
 				assert.Equal(t, "full-check", result.ID)

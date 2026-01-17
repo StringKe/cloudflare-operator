@@ -60,7 +60,7 @@ func TestConvertLocalRulesToSDK(t *testing.T) {
 					Service:  "https://backend:443",
 					OriginRequest: OriginRequestConfig{
 						NoTLSVerify: boolPtr(true),
-						Http2Origin: boolPtr(true),
+						HTTP2Origin: boolPtr(true),
 					},
 				},
 			},
@@ -138,11 +138,11 @@ func TestConvertOriginRequest(t *testing.T) {
 		{
 			name: "with HTTP2Origin",
 			local: OriginRequestConfig{
-				Http2Origin: boolPtr(true),
+				HTTP2Origin: boolPtr(true),
 			},
 			check: func(t *testing.T, sdk *cloudflare.OriginRequestConfig) {
 				if sdk.Http2Origin == nil || !*sdk.Http2Origin {
-					t.Error("expected Http2Origin to be true")
+					t.Error("expected HTTP2Origin to be true")
 				}
 			},
 		},

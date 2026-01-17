@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
-	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
+	dnssvc "github.com/StringKe/cloudflare-operator/internal/service/dns"
 )
 
 //nolint:revive // cognitive-complexity: table-driven test with many test cases
@@ -21,7 +21,7 @@ func TestBuildRecordData(t *testing.T) {
 		name     string
 		data     *networkingv1alpha2.DNSRecordData
 		wantNil  bool
-		validate func(t *testing.T, result *cf.DNSRecordDataParams)
+		validate func(t *testing.T, result *dnssvc.DNSRecordData)
 	}{
 		{
 			name:    "nil data returns nil",
@@ -37,7 +37,7 @@ func TestBuildRecordData(t *testing.T) {
 				Port:    80,
 				Target:  "server.example.com",
 			},
-			validate: func(t *testing.T, result *cf.DNSRecordDataParams) {
+			validate: func(t *testing.T, result *dnssvc.DNSRecordData) {
 				require.NotNil(t, result)
 				assert.Equal(t, "_http", result.Service)
 				assert.Equal(t, "_tcp", result.Proto)
@@ -53,7 +53,7 @@ func TestBuildRecordData(t *testing.T) {
 				Tag:   "issue",
 				Value: "letsencrypt.org",
 			},
-			validate: func(t *testing.T, result *cf.DNSRecordDataParams) {
+			validate: func(t *testing.T, result *dnssvc.DNSRecordData) {
 				require.NotNil(t, result)
 				assert.Equal(t, 0, result.Flags)
 				assert.Equal(t, "issue", result.Tag)
@@ -67,7 +67,7 @@ func TestBuildRecordData(t *testing.T) {
 				Tag:   "issuewild",
 				Value: "example.com",
 			},
-			validate: func(t *testing.T, result *cf.DNSRecordDataParams) {
+			validate: func(t *testing.T, result *dnssvc.DNSRecordData) {
 				require.NotNil(t, result)
 				assert.Equal(t, 128, result.Flags)
 				assert.Equal(t, "issuewild", result.Tag)
@@ -80,7 +80,7 @@ func TestBuildRecordData(t *testing.T) {
 				Certificate: "BASE64CERTDATA",
 				KeyTag:      12345,
 			},
-			validate: func(t *testing.T, result *cf.DNSRecordDataParams) {
+			validate: func(t *testing.T, result *dnssvc.DNSRecordData) {
 				require.NotNil(t, result)
 				assert.Equal(t, 8, result.Algorithm)
 				assert.Equal(t, "BASE64CERTDATA", result.Certificate)
@@ -93,7 +93,7 @@ func TestBuildRecordData(t *testing.T) {
 				Algorithm:    2,
 				MatchingType: 1,
 			},
-			validate: func(t *testing.T, result *cf.DNSRecordDataParams) {
+			validate: func(t *testing.T, result *dnssvc.DNSRecordData) {
 				require.NotNil(t, result)
 				assert.Equal(t, 2, result.Algorithm)
 				assert.Equal(t, 1, result.MatchingType)
@@ -107,7 +107,7 @@ func TestBuildRecordData(t *testing.T) {
 				MatchingType: 1,
 				Certificate:  "TLSACERTHASH",
 			},
-			validate: func(t *testing.T, result *cf.DNSRecordDataParams) {
+			validate: func(t *testing.T, result *dnssvc.DNSRecordData) {
 				require.NotNil(t, result)
 				assert.Equal(t, 3, result.Usage)
 				assert.Equal(t, 1, result.Selector)
@@ -131,7 +131,7 @@ func TestBuildRecordData(t *testing.T) {
 				PrecisionHorz: "10.00m",
 				PrecisionVert: "10.00m",
 			},
-			validate: func(t *testing.T, result *cf.DNSRecordDataParams) {
+			validate: func(t *testing.T, result *dnssvc.DNSRecordData) {
 				require.NotNil(t, result)
 				assert.Equal(t, 37, result.LatDegrees)
 				assert.Equal(t, 46, result.LatMinutes)
@@ -154,7 +154,7 @@ func TestBuildRecordData(t *testing.T) {
 				Target:     "https://example.com/resource",
 				ContentURI: "https://example.com/resource",
 			},
-			validate: func(t *testing.T, result *cf.DNSRecordDataParams) {
+			validate: func(t *testing.T, result *dnssvc.DNSRecordData) {
 				require.NotNil(t, result)
 				assert.Equal(t, 10, result.Weight)
 				assert.Equal(t, "https://example.com/resource", result.Target)
@@ -164,7 +164,7 @@ func TestBuildRecordData(t *testing.T) {
 		{
 			name: "empty data struct",
 			data: &networkingv1alpha2.DNSRecordData{},
-			validate: func(t *testing.T, result *cf.DNSRecordDataParams) {
+			validate: func(t *testing.T, result *dnssvc.DNSRecordData) {
 				require.NotNil(t, result)
 				// All fields should be zero values
 				assert.Empty(t, result.Service)
@@ -179,7 +179,7 @@ func TestBuildRecordData(t *testing.T) {
 				Proto:   "_udp",
 				Target:  "sipserver.example.com",
 			},
-			validate: func(t *testing.T, result *cf.DNSRecordDataParams) {
+			validate: func(t *testing.T, result *dnssvc.DNSRecordData) {
 				require.NotNil(t, result)
 				assert.Equal(t, "_sip", result.Service)
 				assert.Equal(t, "_udp", result.Proto)
@@ -225,7 +225,7 @@ func TestBuildRecordData(t *testing.T) {
 				// URI field
 				ContentURI: "https://api.example.com/v1",
 			},
-			validate: func(t *testing.T, result *cf.DNSRecordDataParams) {
+			validate: func(t *testing.T, result *dnssvc.DNSRecordData) {
 				require.NotNil(t, result)
 				// Verify all fields are mapped correctly
 				assert.Equal(t, "_https", result.Service)
