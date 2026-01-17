@@ -6,7 +6,6 @@
 package scenarios
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -72,7 +71,7 @@ func TestDNSRecordLifecycle(t *testing.T) {
 			Namespace: record.Namespace,
 		}, &fetched)
 		require.NoError(t, err)
-		assert.NotEmpty(t, fetched.Status.RecordId, "RecordId should be set")
+		assert.NotEmpty(t, fetched.Status.RecordID, "RecordID should be set")
 	})
 
 	t.Run("CreateCNAMERecord", func(t *testing.T) {

@@ -6,7 +6,6 @@
 package scenarios
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -85,7 +84,7 @@ func TestTunnelLifecycle(t *testing.T) {
 		require.NoError(t, err)
 
 		// Update spec
-		tunnel.Spec.NoTLSVerify = true
+		tunnel.Spec.NoTlsVerify = true
 		err = f.Client.Update(ctx, &tunnel)
 		require.NoError(t, err)
 
@@ -98,7 +97,7 @@ func TestTunnelLifecycle(t *testing.T) {
 			Namespace: tunnel.Namespace,
 		}, &tunnel)
 		require.NoError(t, err)
-		assert.True(t, tunnel.Spec.NoTLSVerify)
+		assert.True(t, tunnel.Spec.NoTlsVerify)
 	})
 
 	t.Run("DeleteTunnel", func(t *testing.T) {
@@ -137,12 +136,10 @@ func TestClusterTunnelLifecycle(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "e2e-test-cluster-tunnel",
 			},
-			Spec: v1alpha2.ClusterTunnelSpec{
-				TunnelSpec: v1alpha2.TunnelSpec{
-					Cloudflare: v1alpha2.CloudflareDetails{
-						CredentialsRef: &v1alpha2.CloudflareCredentialsRef{
-							Name: "test-credentials",
-						},
+			Spec: v1alpha2.TunnelSpec{
+				Cloudflare: v1alpha2.CloudflareDetails{
+					CredentialsRef: &v1alpha2.CloudflareCredentialsRef{
+						Name: "test-credentials",
 					},
 				},
 			},
