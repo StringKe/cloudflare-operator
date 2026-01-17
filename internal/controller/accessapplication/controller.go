@@ -49,10 +49,9 @@ type Reconciler struct {
 	appService *accesssvc.ApplicationService
 
 	// Runtime state
-	ctx   context.Context
-	log   logr.Logger
-	app   *networkingv1alpha2.AccessApplication
-	cfAPI *cf.API
+	ctx context.Context
+	log logr.Logger
+	app *networkingv1alpha2.AccessApplication
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=accessapplications,verbs=get;list;watch;create;update;patch;delete
@@ -80,13 +79,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// Check if AccessApplication is being deleted
+	// Following Unified Sync Architecture: only unregister from SyncState
+	// Sync Controller handles actual Cloudflare API deletion
 	if r.app.GetDeletionTimestamp() != nil {
-		// Initialize API client for deletion
-		if err := r.initAPIClient(); err != nil {
-			r.log.Error(err, "failed to initialize API client for deletion")
-			r.setCondition(metav1.ConditionFalse, controller.EventReasonAPIError, err.Error())
-			return ctrl.Result{}, err
-		}
 		return r.handleDeletion()
 	}
 
@@ -109,75 +104,71 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	return ctrl.Result{}, nil
 }
 
-// initAPIClient initializes the Cloudflare API client.
-func (r *Reconciler) initAPIClient() error {
+// resolveCredentials resolves the credentials reference and returns the credentials info.
+// Following Unified Sync Architecture, the Resource Controller only needs
+// credential metadata (accountID, credRef) - it does not create a Cloudflare API client.
+func (r *Reconciler) resolveCredentials() (*controller.CredentialsInfo, error) {
 	// AccessApplication is cluster-scoped, use operator namespace for legacy inline secrets
-	api, err := cf.NewAPIClientFromDetails(r.ctx, r.Client, controller.OperatorNamespace, r.app.Spec.Cloudflare)
+	info, err := controller.ResolveCredentialsForService(
+		r.ctx,
+		r.Client,
+		r.log,
+		r.app.Spec.Cloudflare,
+		controller.OperatorNamespace,
+		r.app.Status.AccountID,
+	)
 	if err != nil {
-		r.log.Error(err, "failed to initialize API client")
-		r.Recorder.Event(r.app, corev1.EventTypeWarning, controller.EventReasonAPIError, "Failed to initialize API client: "+err.Error())
-		return err
+		r.log.Error(err, "failed to resolve credentials")
+		r.Recorder.Event(r.app, corev1.EventTypeWarning, controller.EventReasonAPIError,
+			"Failed to resolve credentials: "+err.Error())
+		return nil, err
 	}
 
+	return info, nil
+}
+
+// createTemporaryAPIClient creates a temporary API client for group validation.
+// Note: This is a transitional pattern. Ideally, group validation should be moved
+// to the Sync Controller to fully comply with Unified Sync Architecture.
+func (r *Reconciler) createTemporaryAPIClient() (*cf.API, error) {
+	api, err := cf.NewAPIClientFromDetails(r.ctx, r.Client, controller.OperatorNamespace, r.app.Spec.Cloudflare)
+	if err != nil {
+		return nil, err
+	}
 	api.ValidAccountId = r.app.Status.AccountID
-	r.cfAPI = api
-	return nil
+	return api, nil
 }
 
 // handleDeletion handles the deletion of an AccessApplication.
-//
-//nolint:revive // cognitive complexity is acceptable for deletion handling
+// Following Unified Sync Architecture:
+// Resource Controller only unregisters from SyncState.
+// AccessApplication Sync Controller handles the actual Cloudflare API deletion.
 func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(r.app, FinalizerName) {
 		return ctrl.Result{}, nil
 	}
 
-	r.log.Info("Deleting AccessApplication")
-	r.Recorder.Event(r.app, corev1.EventTypeNormal, "Deleting", "Starting AccessApplication deletion")
+	r.log.Info("Unregistering AccessApplication from SyncState")
 
-	// Try to get Application ID from status or by looking up by name
+	// Get Application ID from status
 	applicationID := r.app.Status.ApplicationID
-	if applicationID == "" {
-		// Status ID is empty - try to find by name to prevent orphaned resources
-		appName := r.app.GetAccessApplicationName()
-		r.log.Info("Status.ApplicationID is empty, trying to find application by name", "name", appName)
-		existing, err := r.cfAPI.ListAccessApplicationsByName(appName)
-		if err == nil && existing != nil {
-			applicationID = existing.ID
-			r.log.Info("Found AccessApplication by name", "id", applicationID)
-		} else {
-			r.log.Info("AccessApplication not found by name, assuming it was never created or already deleted")
-		}
-	}
 
-	// Delete from Cloudflare if we have an ID
-	if applicationID != "" {
-		if err := r.cfAPI.DeleteAccessApplication(applicationID); err != nil {
-			if !cf.IsNotFoundError(err) {
-				r.log.Error(err, "failed to delete AccessApplication from Cloudflare")
-				r.Recorder.Event(r.app, corev1.EventTypeWarning,
-					controller.EventReasonDeleteFailed, cf.SanitizeErrorMessage(err))
-				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-			}
-			r.log.Info("AccessApplication already deleted from Cloudflare", "id", applicationID)
-			r.Recorder.Event(r.app, corev1.EventTypeNormal,
-				"AlreadyDeleted", "AccessApplication was already deleted from Cloudflare")
-		} else {
-			r.log.Info("AccessApplication deleted from Cloudflare", "id", applicationID)
-			r.Recorder.Event(r.app, corev1.EventTypeNormal,
-				controller.EventReasonDeleted, "Deleted from Cloudflare")
-		}
-	}
-
-	// Unregister from SyncState
+	// Unregister from SyncState - this triggers Sync Controller to delete from Cloudflare
+	// Following: Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
 	source := service.Source{
 		Kind: "AccessApplication",
 		Name: r.app.Name,
 	}
+
 	if err := r.appService.Unregister(r.ctx, applicationID, source); err != nil {
 		r.log.Error(err, "failed to unregister from SyncState")
-		// Non-fatal - continue with finalizer removal
+		r.Recorder.Event(r.app, corev1.EventTypeWarning, "UnregisterFailed",
+			fmt.Sprintf("Failed to unregister from SyncState: %s", err.Error()))
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
+
+	r.Recorder.Event(r.app, corev1.EventTypeNormal, "Unregistered",
+		"Unregistered from SyncState, Sync Controller will delete from Cloudflare")
 
 	// Remove finalizer with retry logic to handle conflicts
 	if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.app, func() {
@@ -192,10 +183,18 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 }
 
 // reconcileApplication ensures the AccessApplication configuration is registered with the service layer.
+// Following Unified Sync Architecture:
+// Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
 //
 //nolint:revive // cognitive complexity is acceptable for this reconciliation logic
 func (r *Reconciler) reconcileApplication() error {
 	appName := r.app.GetAccessApplicationName()
+
+	// Resolve credentials (without creating API client)
+	credInfo, err := r.resolveCredentials()
+	if err != nil {
+		return fmt.Errorf("resolve credentials: %w", err)
+	}
 
 	// Resolve IdP references
 	allowedIdps := make([]string, 0, len(r.app.Spec.AllowedIdps)+len(r.app.Spec.AllowedIdpRefs))
@@ -260,28 +259,13 @@ func (r *Reconciler) reconcileApplication() error {
 		Name: r.app.Name,
 	}
 
-	// Build credentials reference
-	credRef := networkingv1alpha2.CredentialsReference{
-		Name: r.app.Spec.Cloudflare.CredentialsRef.Name,
-	}
-
-	// Get account ID - need to initialize API client first if not already done
-	accountID := r.app.Status.AccountID
-	if accountID == "" {
-		// Initialize API client to get account ID
-		if err := r.initAPIClient(); err != nil {
-			return fmt.Errorf("initialize API client for account ID: %w", err)
-		}
-		accountID, _ = r.cfAPI.GetAccountId()
-	}
-
-	// Register with service
+	// Register with service using credentials info
 	opts := accesssvc.AccessApplicationRegisterOptions{
-		AccountID:      accountID,
+		AccountID:      credInfo.AccountID,
 		ApplicationID:  r.app.Status.ApplicationID,
 		Source:         source,
 		Config:         config,
-		CredentialsRef: credRef,
+		CredentialsRef: credInfo.CredentialsRef,
 	}
 
 	if err := r.appService.Register(r.ctx, opts); err != nil {
@@ -292,7 +276,7 @@ func (r *Reconciler) reconcileApplication() error {
 	}
 
 	// Update status to Pending if not already synced
-	return r.updateStatusPending()
+	return r.updateStatusPending(credInfo.AccountID)
 }
 
 // resolvePolicies resolves all policy references and returns the policy configs.
@@ -364,17 +348,17 @@ func (r *Reconciler) resolveAccessGroupID(ref networkingv1alpha2.AccessPolicyRef
 }
 
 // resolveByGroupID validates and resolves a direct Cloudflare group ID.
+// Note: This creates a temporary API client for validation. This is a transitional pattern;
+// ideally group validation should be moved to the Sync Controller.
 //
 //nolint:revive // confusing-results: naming not needed for simple ID, name returns
 func (r *Reconciler) resolveByGroupID(groupID string) (string, string, error) {
-	// Initialize API client if needed
-	if r.cfAPI == nil {
-		if err := r.initAPIClient(); err != nil {
-			return "", "", err
-		}
+	cfAPI, err := r.createTemporaryAPIClient()
+	if err != nil {
+		return "", "", err
 	}
 
-	group, err := r.cfAPI.GetAccessGroup(groupID)
+	group, err := cfAPI.GetAccessGroup(groupID)
 	if err != nil {
 		if cf.IsNotFoundError(err) {
 			return "", "", fmt.Errorf("cloudflare access group not found: %s", groupID)
@@ -385,17 +369,17 @@ func (r *Reconciler) resolveByGroupID(groupID string) (string, string, error) {
 }
 
 // resolveByCloudflareGroupName looks up a Cloudflare group by its display name.
+// Note: This creates a temporary API client for lookup. This is a transitional pattern;
+// ideally group lookup should be moved to the Sync Controller.
 //
 //nolint:revive // confusing-results: naming not needed for simple ID, name returns
 func (r *Reconciler) resolveByCloudflareGroupName(groupName string) (string, string, error) {
-	// Initialize API client if needed
-	if r.cfAPI == nil {
-		if err := r.initAPIClient(); err != nil {
-			return "", "", err
-		}
+	cfAPI, err := r.createTemporaryAPIClient()
+	if err != nil {
+		return "", "", err
 	}
 
-	group, err := r.cfAPI.ListAccessGroupsByName(groupName)
+	group, err := cfAPI.ListAccessGroupsByName(groupName)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to lookup cloudflare group by name: %w", err)
 	}
@@ -423,9 +407,7 @@ func (r *Reconciler) resolveByK8sAccessGroup(name string) (string, string, error
 }
 
 // updateStatusPending updates the AccessApplication status to Pending state.
-//
-//nolint:revive // cognitive complexity is acceptable for status update logic
-func (r *Reconciler) updateStatusPending() error {
+func (r *Reconciler) updateStatusPending(accountID string) error {
 	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.app, func() {
 		r.app.Status.ObservedGeneration = r.app.Generation
 
@@ -434,14 +416,12 @@ func (r *Reconciler) updateStatusPending() error {
 			r.app.Status.State = "pending"
 		}
 
-		// Set account ID if we have it
-		if r.cfAPI != nil {
-			if accountID, err := r.cfAPI.GetAccountId(); err == nil {
-				r.app.Status.AccountID = accountID
-			}
+		// Set account ID
+		if accountID != "" {
+			r.app.Status.AccountID = accountID
 		}
 
-		r.setCondition(metav1.ConditionTrue, "Pending", "Configuration registered, waiting for sync")
+		r.setCondition(metav1.ConditionFalse, "Pending", "Configuration registered, waiting for sync")
 	})
 
 	if err != nil {
@@ -450,6 +430,8 @@ func (r *Reconciler) updateStatusPending() error {
 	}
 
 	r.log.Info("AccessApplication configuration registered", "name", r.app.Name)
+	r.Recorder.Event(r.app, corev1.EventTypeNormal, "Registered",
+		"Configuration registered to SyncState")
 	return nil
 }
 

@@ -24,7 +24,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
-	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
 	"github.com/StringKe/cloudflare-operator/internal/service"
 	routesvc "github.com/StringKe/cloudflare-operator/internal/service/networkroute"
@@ -45,7 +44,6 @@ type Reconciler struct {
 	ctx          context.Context
 	log          logr.Logger
 	networkRoute *networkingv1alpha2.NetworkRoute
-	cfAPI        *cf.API
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=networkroutes,verbs=get;list;watch;create;update;patch;delete
@@ -76,13 +74,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// Check if NetworkRoute is being deleted
+	// Following Unified Sync Architecture: only unregister from SyncState
+	// Sync Controller handles actual Cloudflare API deletion
 	if r.networkRoute.GetDeletionTimestamp() != nil {
-		// Initialize API client for deletion
-		if err := r.initAPIClient(); err != nil {
-			r.log.Error(err, "failed to initialize API client for deletion")
-			r.setCondition(metav1.ConditionFalse, controller.EventReasonAPIError, err.Error())
-			return ctrl.Result{}, err
-		}
 		return r.handleDeletion()
 	}
 
@@ -105,93 +99,76 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	return ctrl.Result{}, nil
 }
 
-// initAPIClient initializes the Cloudflare API client using the unified credential loader.
-// For cluster-scoped resources like NetworkRoute, credentials are loaded from:
-// 1. credentialsRef (recommended) - references CloudflareCredentials resource
-// 2. inline secret (legacy) - must be in cloudflare-operator-system namespace
-// 3. default CloudflareCredentials - if no credentials specified
-func (r *Reconciler) initAPIClient() error {
+// resolveCredentials resolves the credentials reference and returns the credentials info.
+// Following Unified Sync Architecture, the Resource Controller only needs
+// credential metadata (accountID, credRef) - it does not create a Cloudflare API client.
+func (r *Reconciler) resolveCredentials() (*controller.CredentialsInfo, error) {
 	// NetworkRoute is cluster-scoped, use operator namespace for legacy inline secrets
-	api, err := cf.NewAPIClientFromDetails(r.ctx, r.Client, controller.OperatorNamespace, r.networkRoute.Spec.Cloudflare)
+	info, err := controller.ResolveCredentialsForService(
+		r.ctx,
+		r.Client,
+		r.log,
+		r.networkRoute.Spec.Cloudflare,
+		controller.OperatorNamespace,
+		r.networkRoute.Status.AccountID,
+	)
 	if err != nil {
-		r.log.Error(err, "failed to initialize API client")
-		r.Recorder.Event(r.networkRoute, corev1.EventTypeWarning, controller.EventReasonAPIError, "Failed to initialize API client")
-		return err
+		r.log.Error(err, "failed to resolve credentials")
+		r.Recorder.Event(r.networkRoute, corev1.EventTypeWarning, controller.EventReasonAPIError,
+			"Failed to resolve credentials: "+err.Error())
+		return nil, err
 	}
 
-	// Preserve validated account ID from status
-	api.ValidAccountId = r.networkRoute.Status.AccountID
-	r.cfAPI = api
-
-	return nil
+	return info, nil
 }
 
 // handleDeletion handles the deletion of a NetworkRoute.
-//
-//nolint:revive // cognitive complexity is acceptable for deletion handling
+// Following Unified Sync Architecture:
+// Resource Controller only unregisters from SyncState.
+// NetworkRoute Sync Controller handles the actual Cloudflare API deletion.
 func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(r.networkRoute, controller.NetworkRouteFinalizer) {
 		return ctrl.Result{}, nil
 	}
 
-	r.log.Info("Deleting NetworkRoute")
-	r.Recorder.Event(r.networkRoute, corev1.EventTypeNormal, "Deleting", "Starting NetworkRoute deletion")
+	r.log.Info("Unregistering NetworkRoute from SyncState")
 
-	// Try to get network from status or fall back to spec to prevent orphaned resources
+	// Get network and virtual network ID from status
 	network := r.networkRoute.Status.Network
 	if network == "" {
-		// Status is empty - use spec.Network to find and delete
 		network = r.networkRoute.Spec.Network
-		r.log.Info("Status.Network is empty, using spec.Network for deletion", "network", network)
 	}
 
-	// Delete from Cloudflare if we have a network
-	if network != "" {
-		// Determine virtual network ID - prefer status, fall back to resolving from spec
-		virtualNetworkID := r.networkRoute.Status.VirtualNetworkID
-		if virtualNetworkID == "" && r.networkRoute.Spec.VirtualNetworkRef != nil {
-			// Try to resolve from spec reference
-			vnet := &networkingv1alpha2.VirtualNetwork{}
-			if err := r.Get(r.ctx, apitypes.NamespacedName{Name: r.networkRoute.Spec.VirtualNetworkRef.Name}, vnet); err == nil {
-				virtualNetworkID = vnet.Status.VirtualNetworkId
-			}
+	virtualNetworkID := r.networkRoute.Status.VirtualNetworkID
+	if virtualNetworkID == "" && r.networkRoute.Spec.VirtualNetworkRef != nil {
+		// Try to resolve from spec reference
+		vnet := &networkingv1alpha2.VirtualNetwork{}
+		if err := r.Get(r.ctx, apitypes.NamespacedName{Name: r.networkRoute.Spec.VirtualNetworkRef.Name}, vnet); err == nil {
+			virtualNetworkID = vnet.Status.VirtualNetworkId
 		}
-		if virtualNetworkID == "" {
-			// If still no vnet, use default
-			virtualNetworkID = defaultValue
-		}
-
-		if err := r.cfAPI.DeleteTunnelRoute(network, virtualNetworkID); err != nil {
-			// P0 FIX: Check if route is already deleted (NotFound error)
-			if !cf.IsNotFoundError(err) {
-				r.log.Error(err, "failed to delete NetworkRoute from Cloudflare")
-				r.Recorder.Event(r.networkRoute, corev1.EventTypeWarning,
-					controller.EventReasonDeleteFailed, cf.SanitizeErrorMessage(err))
-				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-			}
-			r.log.Info("NetworkRoute already deleted from Cloudflare", "network", network)
-			r.Recorder.Event(r.networkRoute, corev1.EventTypeNormal,
-				"AlreadyDeleted", "NetworkRoute was already deleted from Cloudflare")
-		} else {
-			r.log.Info("NetworkRoute deleted from Cloudflare", "network", network)
-			r.Recorder.Event(r.networkRoute, corev1.EventTypeNormal,
-				controller.EventReasonDeleted, "Deleted from Cloudflare")
-		}
-
-		// Unregister from SyncState
-		source := service.Source{
-			Kind: "NetworkRoute",
-			Name: r.networkRoute.Name,
-		}
-		if err := r.routeService.Unregister(r.ctx, network, virtualNetworkID, source); err != nil {
-			r.log.Error(err, "failed to unregister from SyncState")
-			// Non-fatal - continue with finalizer removal
-		}
-	} else {
-		r.log.Info("No network specified, assuming route was never created or already deleted")
+	}
+	if virtualNetworkID == "" {
+		virtualNetworkID = defaultValue
 	}
 
-	// P2 FIX: Remove finalizer with retry logic to handle conflicts
+	// Unregister from SyncState - this triggers Sync Controller to delete from Cloudflare
+	// Following: Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
+	source := service.Source{
+		Kind: "NetworkRoute",
+		Name: r.networkRoute.Name,
+	}
+
+	if err := r.routeService.Unregister(r.ctx, network, virtualNetworkID, source); err != nil {
+		r.log.Error(err, "failed to unregister from SyncState")
+		r.Recorder.Event(r.networkRoute, corev1.EventTypeWarning, "UnregisterFailed",
+			fmt.Sprintf("Failed to unregister from SyncState: %s", err.Error()))
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+
+	r.Recorder.Event(r.networkRoute, corev1.EventTypeNormal, "Unregistered",
+		"Unregistered from SyncState, Sync Controller will delete from Cloudflare")
+
+	// Remove finalizer with retry logic to handle conflicts
 	if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.networkRoute, func() {
 		controllerutil.RemoveFinalizer(r.networkRoute, controller.NetworkRouteFinalizer)
 	}); err != nil {
@@ -204,9 +181,17 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 }
 
 // reconcileNetworkRoute ensures the NetworkRoute configuration is registered with the service layer.
+// Following Unified Sync Architecture:
+// Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
 //
 //nolint:revive // cognitive complexity is acceptable for reconciliation with dependency resolution
 func (r *Reconciler) reconcileNetworkRoute() error {
+	// Resolve credentials (without creating API client)
+	credInfo, err := r.resolveCredentials()
+	if err != nil {
+		return fmt.Errorf("resolve credentials: %w", err)
+	}
+
 	// Resolve tunnel reference to get tunnel ID
 	tunnelID, tunnelName, err := r.resolveTunnelRef()
 	if err != nil {
@@ -243,29 +228,14 @@ func (r *Reconciler) reconcileNetworkRoute() error {
 		Name: r.networkRoute.Name,
 	}
 
-	// Build credentials reference
-	credRef := networkingv1alpha2.CredentialsReference{
-		Name: r.networkRoute.Spec.Cloudflare.CredentialsRef.Name,
-	}
-
-	// Get account ID - need to initialize API client first if not already done
-	accountID := r.networkRoute.Status.AccountID
-	if accountID == "" {
-		// Initialize API client to get account ID
-		if err := r.initAPIClient(); err != nil {
-			return fmt.Errorf("initialize API client for account ID: %w", err)
-		}
-		accountID, _ = r.cfAPI.GetAccountId()
-	}
-
-	// Register with service
+	// Register with service using credentials info
 	opts := routesvc.RegisterOptions{
-		AccountID:        accountID,
+		AccountID:        credInfo.AccountID,
 		RouteNetwork:     r.networkRoute.Status.Network, // Use status network if already created
 		VirtualNetworkID: virtualNetworkID,
 		Source:           source,
 		Config:           config,
-		CredentialsRef:   credRef,
+		CredentialsRef:   credInfo.CredentialsRef,
 	}
 
 	if err := r.routeService.Register(r.ctx, opts); err != nil {
@@ -276,7 +246,7 @@ func (r *Reconciler) reconcileNetworkRoute() error {
 	}
 
 	// Update status to Pending if not already synced
-	return r.updateStatusPending(tunnelName)
+	return r.updateStatusPending(tunnelName, credInfo.AccountID)
 }
 
 // resolveTunnelRef resolves the TunnelRef to get the tunnel ID.
@@ -334,7 +304,7 @@ func (r *Reconciler) buildManagedComment() string {
 }
 
 // updateStatusPending updates the NetworkRoute status to Pending state.
-func (r *Reconciler) updateStatusPending(tunnelName string) error {
+func (r *Reconciler) updateStatusPending(tunnelName, accountID string) error {
 	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.networkRoute, func() {
 		r.networkRoute.Status.ObservedGeneration = r.networkRoute.Generation
 
@@ -348,7 +318,12 @@ func (r *Reconciler) updateStatusPending(tunnelName string) error {
 			r.networkRoute.Status.TunnelName = tunnelName
 		}
 
-		r.setCondition(metav1.ConditionTrue, "Pending", "Configuration registered, waiting for sync")
+		// Set account ID
+		if accountID != "" {
+			r.networkRoute.Status.AccountID = accountID
+		}
+
+		r.setCondition(metav1.ConditionFalse, "Pending", "Configuration registered, waiting for sync")
 	})
 
 	if err != nil {
@@ -357,6 +332,8 @@ func (r *Reconciler) updateStatusPending(tunnelName string) error {
 	}
 
 	r.log.Info("NetworkRoute configuration registered", "name", r.networkRoute.Name)
+	r.Recorder.Event(r.networkRoute, corev1.EventTypeNormal, "Registered",
+		"Configuration registered to SyncState")
 	return nil
 }
 

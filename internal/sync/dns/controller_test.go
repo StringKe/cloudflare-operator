@@ -42,6 +42,8 @@ func createDNSSyncState(name, zoneID, cloudflareID string, config *dnssvc.DNSRec
 	return &v1alpha2.CloudflareSyncState{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
+			// Include finalizer to avoid Requeue during tests
+			Finalizers: []string{FinalizerName},
 		},
 		Spec: v1alpha2.CloudflareSyncStateSpec{
 			ResourceType: v1alpha2.SyncResourceDNSRecord,
@@ -184,7 +186,9 @@ func TestController_Reconcile_WrongResourceType(t *testing.T) {
 	assert.Equal(t, ctrl.Result{}, result)
 }
 
-func TestController_Reconcile_NoSources(t *testing.T) {
+func TestController_Reconcile_NoSources_NoFinalizer(t *testing.T) {
+	// Test: SyncState with no sources and no finalizer
+	// Expected: Returns early since there's nothing to do (no finalizer means never synced to Cloudflare)
 	syncState := &v1alpha2.CloudflareSyncState{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "test-sync",
@@ -221,11 +225,61 @@ func TestController_Reconcile_NoSources(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, ctrl.Result{}, result)
 
-	// Verify status was updated to synced
+	// Without finalizer, no status update - handleDeletion returns early
 	var updatedState v1alpha2.CloudflareSyncState
 	err = client.Get(ctx, types.NamespacedName{Name: "test-sync"}, &updatedState)
 	require.NoError(t, err)
-	assert.Equal(t, v1alpha2.SyncStatusSynced, updatedState.Status.SyncStatus)
+	// Status remains unchanged since no finalizer means nothing to cleanup
+	assert.Equal(t, v1alpha2.SyncStatusPending, updatedState.Status.SyncStatus)
+}
+
+func TestController_Reconcile_NoSources_WithFinalizer(t *testing.T) {
+	// Test: SyncState with no sources but HAS finalizer
+	// Expected: Removes finalizer and deletes the orphaned SyncState
+	syncState := &v1alpha2.CloudflareSyncState{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-sync",
+			Finalizers: []string{FinalizerName},
+		},
+		Spec: v1alpha2.CloudflareSyncStateSpec{
+			ResourceType: v1alpha2.SyncResourceDNSRecord,
+			CloudflareID: "pending-abc123", // Pending ID means never created in Cloudflare
+			AccountID:    "test-account",
+			ZoneID:       "zone-123",
+			CredentialsRef: v1alpha2.CredentialsReference{
+				Name: "test-credentials",
+			},
+			Sources: []v1alpha2.ConfigSource{},
+		},
+		Status: v1alpha2.CloudflareSyncStateStatus{
+			SyncStatus: v1alpha2.SyncStatusPending,
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme.Scheme).
+		WithObjects(syncState).
+		WithStatusSubresource(syncState).
+		Build()
+
+	c := NewController(client)
+	ctx := context.Background()
+
+	req := ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name: "test-sync",
+		},
+	}
+
+	result, err := c.Reconcile(ctx, req)
+
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result)
+
+	// Verify the SyncState was deleted (orphan cleanup)
+	var updatedState v1alpha2.CloudflareSyncState
+	err = client.Get(ctx, types.NamespacedName{Name: "test-sync"}, &updatedState)
+	assert.True(t, err != nil, "SyncState should be deleted")
 }
 
 func TestController_Reconcile_DebouncePending(t *testing.T) {

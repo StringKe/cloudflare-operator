@@ -27,6 +27,12 @@ The Cloudflare Operator provides Kubernetes-native management of:
 
 ## Architecture
 
+The operator uses a **Unified Sync Architecture** with six layers:
+
+```
+K8s Resources → Resource Controllers → Core Services → SyncState CRD → Sync Controllers → Cloudflare API
+```
+
 ```mermaid
 flowchart TB
     subgraph Internet["Internet"]
@@ -39,27 +45,28 @@ flowchart TB
     end
 
     subgraph K8s["Kubernetes Cluster"]
-        subgraph CRDs["Custom Resources"]
-            Tunnel["Tunnel / ClusterTunnel"]
-            TB["TunnelBinding"]
-            VNet["VirtualNetwork"]
-            Route["NetworkRoute"]
-            Access["Access*"]
-            Gateway["Gateway*"]
+        subgraph Layer1["Layer 1: K8s Resources"]
+            CRDs["Custom Resources"]
+            K8sNative["Ingress / Gateway API"]
         end
 
-        subgraph K8sNative["Kubernetes Native"]
-            Ingress["Ingress"]
-            GatewayAPI["Gateway API"]
+        subgraph Layer2["Layer 2: Resource Controllers"]
+            RC["Resource Controllers"]
         end
 
-        subgraph Operator["Cloudflare Operator"]
-            Controller["Controller Manager"]
+        subgraph Layer3["Layer 3: Core Services"]
+            SVC["Core Services"]
+        end
+
+        subgraph Layer4["Layer 4: SyncState CRD"]
+            SyncState["CloudflareSyncState"]
+        end
+
+        subgraph Layer5["Layer 5: Sync Controllers"]
+            SC["Sync Controllers"]
         end
 
         subgraph Managed["Managed Resources"]
-            ConfigMap["ConfigMap"]
-            Secret["Secret"]
             Deployment["cloudflared"]
         end
 
@@ -69,15 +76,29 @@ flowchart TB
         end
     end
 
-    CRDs -.->|watches| Controller
-    K8sNative -.->|watches| Controller
-    Controller -->|creates| Managed
-    Controller -->|API calls| API
+    CRDs -.->|watch| RC
+    K8sNative -.->|watch| RC
+    RC -->|register config| SVC
+    SVC -->|update| SyncState
+    SyncState -.->|watch| SC
+    SC -->|"API calls (single sync point)"| API
+    SC -->|creates| Managed
     Managed -->|proxy| Service
     Service --> Pod
     Users -->|HTTPS/WARP| Edge
     Edge <-->|tunnel| Deployment
 ```
+
+### Key Benefits
+
+| Feature | Description |
+|---------|-------------|
+| **Single Sync Point** | Only Sync Controllers call Cloudflare API |
+| **Race Condition Free** | SyncState CRD uses K8s optimistic locking |
+| **Debouncing** | 500ms delay aggregates multiple changes |
+| **Hash Detection** | Skip sync when config unchanged |
+
+> See [Unified Sync Architecture](../design/UNIFIED_SYNC_ARCHITECTURE.md) for details.
 
 ## CRD Summary (30 Total)
 

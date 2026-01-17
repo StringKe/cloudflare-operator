@@ -54,7 +54,11 @@ type TunnelBindingReconciler struct {
 	tunnelID       string
 	fallbackTarget string
 	warpRouting    bool
-	cfAPI          *cf.API
+
+	// Resolved credentials data (following Unified Sync Architecture - no cfAPI field)
+	accountID        string
+	domain           string
+	cloudflareConfig networkingv1alpha2.CloudflareDetails // Used for creating temporary API clients
 }
 
 // labelsForBinding returns the labels for selecting the Bindings served by a Tunnel.
@@ -71,8 +75,6 @@ func (r *TunnelBindingReconciler) initStruct(ctx context.Context, tunnelBinding 
 	r.ctx = ctx
 	r.binding = tunnelBinding
 
-	var err error
-
 	// Process based on Tunnel Kind
 	switch strings.ToLower(r.binding.TunnelRef.Kind) {
 	case tunnelKindClusterTunnel:
@@ -87,10 +89,12 @@ func (r *TunnelBindingReconciler) initStruct(ctx context.Context, tunnelBinding 
 		r.fallbackTarget = clusterTunnel.Spec.FallbackTarget
 		r.tunnelID = clusterTunnel.Status.TunnelId
 		r.warpRouting = clusterTunnel.Spec.EnableWarpRouting
+		r.cloudflareConfig = clusterTunnel.Spec.Cloudflare
 
-		if r.cfAPI, _, err = getAPIDetails(r.ctx, r.Client, r.log, clusterTunnel.Spec, clusterTunnel.Status, r.Namespace); err != nil {
-			r.log.Error(err, "unable to get API details")
-			r.Recorder.Event(tunnelBinding, corev1.EventTypeWarning, "ErrApiConfig", "Error getting API details")
+		// Resolve credentials to get accountID and domain
+		if err := r.resolveCredentials(clusterTunnel.Spec, clusterTunnel.Status, r.Namespace); err != nil {
+			r.log.Error(err, "unable to resolve credentials")
+			r.Recorder.Event(tunnelBinding, corev1.EventTypeWarning, "ErrApiConfig", "Error resolving credentials")
 			return err
 		}
 	case tunnelKindTunnel:
@@ -105,14 +109,16 @@ func (r *TunnelBindingReconciler) initStruct(ctx context.Context, tunnelBinding 
 		r.fallbackTarget = tunnel.Spec.FallbackTarget
 		r.tunnelID = tunnel.Status.TunnelId
 		r.warpRouting = tunnel.Spec.EnableWarpRouting
+		r.cloudflareConfig = tunnel.Spec.Cloudflare
 
-		if r.cfAPI, _, err = getAPIDetails(r.ctx, r.Client, r.log, tunnel.Spec, tunnel.Status, r.binding.Namespace); err != nil {
-			r.log.Error(err, "unable to get API details")
-			r.Recorder.Event(tunnelBinding, corev1.EventTypeWarning, "ErrApiConfig", "Error getting API details")
+		// Resolve credentials to get accountID and domain
+		if err := r.resolveCredentials(tunnel.Spec, tunnel.Status, r.binding.Namespace); err != nil {
+			r.log.Error(err, "unable to resolve credentials")
+			r.Recorder.Event(tunnelBinding, corev1.EventTypeWarning, "ErrApiConfig", "Error resolving credentials")
 			return err
 		}
 	default:
-		err = fmt.Errorf("invalid kind")
+		err := fmt.Errorf("invalid kind")
 		r.log.Error(err, "unsupported tunnelRef Kind")
 		r.Recorder.Event(tunnelBinding, corev1.EventTypeWarning, "ErrTunnelKind", "Unsupported tunnel kind")
 		return err
@@ -127,6 +133,43 @@ func (r *TunnelBindingReconciler) initStruct(ctx context.Context, tunnelBinding 
 	}
 
 	return nil
+}
+
+// resolveCredentials resolves the accountID and domain from the tunnel spec and status.
+// This follows the Unified Sync Architecture pattern - no cfAPI field stored in struct.
+func (r *TunnelBindingReconciler) resolveCredentials(spec networkingv1alpha2.TunnelSpec, status networkingv1alpha2.TunnelStatus, namespace string) error {
+	// Create a temporary API client to get credentials info
+	api, _, err := getAPIDetails(r.ctx, r.Client, r.log, spec, status, namespace)
+	if err != nil {
+		return fmt.Errorf("failed to get API details: %w", err)
+	}
+
+	r.accountID = api.ValidAccountId
+	r.domain = api.Domain
+
+	return nil
+}
+
+// createTemporaryAPIClient creates a temporary Cloudflare API client for DNS operations.
+// This is a transitional pattern following Unified Sync Architecture - the API client
+// is only created when needed and not stored in the struct.
+func (r *TunnelBindingReconciler) createTemporaryAPIClient() (*cf.API, error) {
+	// Determine the namespace for credentials lookup
+	namespace := r.binding.Namespace
+	if strings.ToLower(r.binding.TunnelRef.Kind) == tunnelKindClusterTunnel {
+		namespace = r.Namespace
+	}
+
+	api, err := cf.NewAPIClientFromDetails(r.ctx, r.Client, namespace, r.cloudflareConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create API client: %w", err)
+	}
+
+	// Set the accountID and domain from resolved values
+	api.ValidAccountId = r.accountID
+	api.Domain = r.domain
+
+	return api, nil
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=tunnelbindings,verbs=get;list;watch;create;update;patch;delete
@@ -382,7 +425,15 @@ func (r *TunnelBindingReconciler) creationLogic() error {
 }
 
 func (r *TunnelBindingReconciler) createDNSLogic(hostname string) error {
-	txtId, dnsTxtResponse, canUseDns, err := r.cfAPI.GetManagedDnsTxt(hostname)
+	// Create temporary API client for DNS operations (Unified Sync Architecture pattern)
+	cfAPI, err := r.createTemporaryAPIClient()
+	if err != nil {
+		r.log.Error(err, "Failed to create API client for DNS operations")
+		r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedApiClient", "Failed to create API client")
+		return err
+	}
+
+	txtId, dnsTxtResponse, canUseDns, err := cfAPI.GetManagedDnsTxt(hostname)
 	if err != nil {
 		// We should not use this entry
 		r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedReadingTxt", "Failed to read existing TXT DNS entry")
@@ -393,7 +444,7 @@ func (r *TunnelBindingReconciler) createDNSLogic(hostname string) error {
 		r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedReadingTxt", fmt.Sprintf("FQDN already managed by Tunnel Name: %s, Id: %s", dnsTxtResponse.TunnelName, dnsTxtResponse.TunnelId))
 		return err
 	}
-	existingId, err := r.cfAPI.GetDNSCNameId(hostname)
+	existingId, err := cfAPI.GetDNSCNameId(hostname)
 	if err != nil {
 		// Real API error (not "record not found" which now returns "", nil)
 		r.log.Error(err, "Failed to check existing DNS record", "hostname", hostname)
@@ -414,7 +465,7 @@ func (r *TunnelBindingReconciler) createDNSLogic(hostname string) error {
 		dnsTxtResponse.DnsId = existingId
 	}
 
-	newDnsId, err := r.cfAPI.InsertOrUpdateCName(hostname, dnsTxtResponse.DnsId)
+	newDnsId, err := cfAPI.InsertOrUpdateCName(hostname, dnsTxtResponse.DnsId)
 	if err != nil {
 		r.log.Error(err, "Failed to insert/update DNS entry", "Hostname", hostname)
 		// P0 FIX: Use SanitizeErrorMessage to prevent sensitive info leakage
@@ -422,12 +473,12 @@ func (r *TunnelBindingReconciler) createDNSLogic(hostname string) error {
 			fmt.Sprintf("Failed to insert/update DNS entry: %s", cf.SanitizeErrorMessage(err)))
 		return err
 	}
-	if err := r.cfAPI.InsertOrUpdateTXT(hostname, txtId, newDnsId); err != nil {
+	if err := cfAPI.InsertOrUpdateTXT(hostname, txtId, newDnsId); err != nil {
 		r.log.Error(err, "Failed to insert/update TXT entry", "Hostname", hostname)
 		// P0 FIX: Use SanitizeErrorMessage to prevent sensitive info leakage
 		r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedCreatingTxt",
 			fmt.Sprintf("Failed to insert/update TXT entry: %s", cf.SanitizeErrorMessage(err)))
-		if err := r.cfAPI.DeleteDNSId(hostname, newDnsId, dnsTxtResponse.DnsId != ""); err != nil {
+		if err := cfAPI.DeleteDNSId(hostname, newDnsId, dnsTxtResponse.DnsId != ""); err != nil {
 			r.log.Info("Failed to delete DNS entry, left in broken state", "Hostname", hostname)
 			r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedDeletingDns", "Failed to delete DNS entry, left in broken state")
 			return err
@@ -448,8 +499,16 @@ func (r *TunnelBindingReconciler) createDNSLogic(hostname string) error {
 }
 
 func (r *TunnelBindingReconciler) deleteDNSLogic(hostname string) error {
+	// Create temporary API client for DNS operations (Unified Sync Architecture pattern)
+	cfAPI, err := r.createTemporaryAPIClient()
+	if err != nil {
+		r.log.Error(err, "Failed to create API client for DNS operations")
+		r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedApiClient", "Failed to create API client")
+		return err
+	}
+
 	// Delete DNS entry
-	txtId, dnsTxtResponse, canUseDns, err := r.cfAPI.GetManagedDnsTxt(hostname)
+	txtId, dnsTxtResponse, canUseDns, err := cfAPI.GetManagedDnsTxt(hostname)
 	if err != nil {
 		// We should not use this entry
 		r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedReadingTxt", "Failed to read existing TXT DNS entry, not cleaning up")
@@ -457,7 +516,7 @@ func (r *TunnelBindingReconciler) deleteDNSLogic(hostname string) error {
 		// We cannot use this entry. This should be happen if all controllers are using DNS management with the same prefix.
 		r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedReadingTxt", fmt.Sprintf("FQDN already managed by Tunnel Name: %s, Id: %s, not cleaning up", dnsTxtResponse.TunnelName, dnsTxtResponse.TunnelId))
 	} else {
-		if id, err := r.cfAPI.GetDNSCNameId(hostname); err != nil {
+		if id, err := cfAPI.GetDNSCNameId(hostname); err != nil {
 			r.log.Error(err, "Error fetching DNS record", "Hostname", hostname)
 			r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedDeletingDns", "Error fetching DNS record")
 		} else if id != dnsTxtResponse.DnsId {
@@ -465,7 +524,7 @@ func (r *TunnelBindingReconciler) deleteDNSLogic(hostname string) error {
 			r.log.Error(err, "DNS ID from TXT and real DNS record does not match", "Hostname", hostname)
 			r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedDeletingDns", "DNS/TXT ID Mismatch")
 		} else {
-			if err := r.cfAPI.DeleteDNSId(hostname, dnsTxtResponse.DnsId, true); err != nil {
+			if err := cfAPI.DeleteDNSId(hostname, dnsTxtResponse.DnsId, true); err != nil {
 				r.log.Info("Failed to delete DNS entry", "Hostname", hostname)
 				// P0 FIX: Use SanitizeErrorMessage to prevent sensitive info leakage
 				errMsg := fmt.Sprintf("Failed to delete DNS entry: %s", cf.SanitizeErrorMessage(err))
@@ -474,7 +533,7 @@ func (r *TunnelBindingReconciler) deleteDNSLogic(hostname string) error {
 			}
 			r.log.Info("Deleted DNS entry", "Hostname", hostname)
 			r.Recorder.Event(r.binding, corev1.EventTypeNormal, "DeletedDns", "Deleted DNS entry")
-			if err := r.cfAPI.DeleteDNSId(hostname, txtId, true); err != nil {
+			if err := cfAPI.DeleteDNSId(hostname, txtId, true); err != nil {
 				// P0 FIX: Use SanitizeErrorMessage to prevent sensitive info leakage
 				errMsg := fmt.Sprintf("Failed to delete TXT entry: %s", cf.SanitizeErrorMessage(err))
 				r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedDeletingTxt", errMsg)
@@ -536,8 +595,8 @@ func (r TunnelBindingReconciler) getConfigForSubject(subject networkingv1alpha1.
 	// Generate cfHostname string from Subject Spec if not provided
 	if hostname == "" {
 		r.log.Info("Using current tunnel's domain for generating config")
-		hostname = fmt.Sprintf("%s.%s", subject.Name, r.cfAPI.Domain)
-		r.log.Info("using default domain value", "domain", r.cfAPI.Domain)
+		hostname = fmt.Sprintf("%s.%s", subject.Name, r.domain)
+		r.log.Info("using default domain value", "domain", r.domain)
 	}
 
 	service := &corev1.Service{}
@@ -677,7 +736,7 @@ func (r *TunnelBindingReconciler) configureCloudflareDaemon() error {
 	svc := tunnelsvc.NewService(r.Client)
 	opts := tunnelsvc.RegisterRulesOptions{
 		TunnelID:       r.tunnelID,
-		AccountID:      r.cfAPI.ValidAccountId,
+		AccountID:      r.accountID,
 		CredentialsRef: credRef,
 		Source: service.Source{
 			Kind:      "TunnelBinding",

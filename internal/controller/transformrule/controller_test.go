@@ -675,48 +675,9 @@ func TestTransformRuleStatus(t *testing.T) {
 	assert.Len(t, status.Conditions, 1)
 }
 
-func TestClearRulesFromCloudflare_NoStatusIDs(t *testing.T) {
-	scheme := setupTestScheme(t)
-	ctx := context.Background()
-
-	rule := &networkingv1alpha2.TransformRule{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-rule",
-			Namespace: "default",
-		},
-		Spec: networkingv1alpha2.TransformRuleSpec{
-			Zone: "example.com",
-			Type: networkingv1alpha2.TransformRuleTypeURLRewrite,
-			Rules: []networkingv1alpha2.TransformRuleDefinition{
-				{
-					Name:       "test",
-					Expression: "(true)",
-					Enabled:    true,
-				},
-			},
-		},
-		Status: networkingv1alpha2.TransformRuleStatus{
-			// Empty ZoneID and RulesetID
-		},
-	}
-
-	fakeClient := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(rule).
-		Build()
-
-	r := &Reconciler{
-		Client:   fakeClient,
-		Scheme:   scheme,
-		Recorder: record.NewFakeRecorder(10),
-	}
-
-	credRef := networkingv1alpha2.CredentialsReference{Name: "test-creds"}
-	needsRequeue := r.clearRulesFromCloudflare(ctx, rule, credRef)
-
-	// Should return false when no status IDs are set
-	assert.False(t, needsRequeue)
-}
+// Note: TestClearRulesFromCloudflare_NoStatusIDs removed
+// clearRulesFromCloudflare method removed following Unified Sync Architecture
+// Deletion is now handled by SyncController, not ResourceController
 
 func TestHandleDeletion_NoFinalizer(t *testing.T) {
 	scheme := setupTestScheme(t)

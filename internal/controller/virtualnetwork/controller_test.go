@@ -223,13 +223,15 @@ func TestReconciler_UpdateStatusPending(t *testing.T) {
 		Build()
 
 	r := &Reconciler{
-		Client: client,
-		Scheme: scheme.Scheme,
-		vnet:   vnet,
-		ctx:    context.Background(),
+		Client:   client,
+		Scheme:   scheme.Scheme,
+		Recorder: record.NewFakeRecorder(10),
+		vnet:     vnet,
+		ctx:      context.Background(),
+		log:      ctrl.Log.WithName("test"),
 	}
 
-	err := r.updateStatusPending()
+	err := r.updateStatusPending("test-account-id")
 
 	require.NoError(t, err)
 
@@ -239,6 +241,7 @@ func TestReconciler_UpdateStatusPending(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), updated.Status.ObservedGeneration)
 	assert.Equal(t, "pending", updated.Status.State)
+	assert.Equal(t, "test-account-id", updated.Status.AccountId)
 }
 
 func TestReconciler_UpdateStatusPending_KeepsActive(t *testing.T) {
@@ -252,13 +255,15 @@ func TestReconciler_UpdateStatusPending_KeepsActive(t *testing.T) {
 		Build()
 
 	r := &Reconciler{
-		Client: client,
-		Scheme: scheme.Scheme,
-		vnet:   vnet,
-		ctx:    context.Background(),
+		Client:   client,
+		Scheme:   scheme.Scheme,
+		Recorder: record.NewFakeRecorder(10),
+		vnet:     vnet,
+		ctx:      context.Background(),
+		log:      ctrl.Log.WithName("test"),
 	}
 
-	err := r.updateStatusPending()
+	err := r.updateStatusPending("test-account-id")
 
 	require.NoError(t, err)
 

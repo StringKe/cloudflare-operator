@@ -14,23 +14,23 @@ import (
 
 // AccessApplicationCreateRequest represents an access application creation request.
 type AccessApplicationCreateRequest struct {
-	Name                   string                   `json:"name"`
-	Domain                 string                   `json:"domain"`
-	Type                   string                   `json:"type"`
-	SessionDuration        string                   `json:"session_duration"`
-	AutoRedirectToIdentity bool                     `json:"auto_redirect_to_identity"`
-	EnableBindingCookie    bool                     `json:"enable_binding_cookie"`
-	CustomDenyMessage      string                   `json:"custom_deny_message"`
-	CustomDenyURL          string                   `json:"custom_deny_url"`
-	SameSiteCookieAttribute string                  `json:"same_site_cookie_attribute"`
-	LogoURL                string                   `json:"logo_url"`
-	SkipInterstitial       bool                     `json:"skip_interstitial"`
-	AppLauncherVisible     bool                     `json:"app_launcher_visible"`
-	ServiceAuth401Redirect bool                     `json:"service_auth_401_redirect"`
-	AllowedIdps            []string                 `json:"allowed_idps"`
-	SelfHostedDomains      []string                 `json:"self_hosted_domains"`
-	Destinations           []models.AccessDestination `json:"destinations"`
-	Policies               []AccessPolicyCreateRequest `json:"policies"`
+	Name                    string                      `json:"name"`
+	Domain                  string                      `json:"domain"`
+	Type                    string                      `json:"type"`
+	SessionDuration         string                      `json:"session_duration"`
+	AutoRedirectToIdentity  bool                        `json:"auto_redirect_to_identity"`
+	EnableBindingCookie     bool                        `json:"enable_binding_cookie"`
+	CustomDenyMessage       string                      `json:"custom_deny_message"`
+	CustomDenyURL           string                      `json:"custom_deny_url"`
+	SameSiteCookieAttribute string                      `json:"same_site_cookie_attribute"`
+	LogoURL                 string                      `json:"logo_url"`
+	SkipInterstitial        bool                        `json:"skip_interstitial"`
+	AppLauncherVisible      bool                        `json:"app_launcher_visible"`
+	ServiceAuth401Redirect  bool                        `json:"service_auth_401_redirect"`
+	AllowedIdps             []string                    `json:"allowed_idps"`
+	SelfHostedDomains       []string                    `json:"self_hosted_domains"`
+	Destinations            []models.AccessDestination  `json:"destinations"`
+	Policies                []AccessPolicyCreateRequest `json:"policies"`
 }
 
 // CreateAccessApplication handles POST /accounts/{accountId}/access/apps.
@@ -43,25 +43,25 @@ func (h *Handlers) CreateAccessApplication(w http.ResponseWriter, r *http.Reques
 
 	now := time.Now()
 	app := &models.AccessApplication{
-		ID:                     GenerateID(),
-		Name:                   req.Name,
-		Domain:                 req.Domain,
-		Type:                   req.Type,
-		SessionDuration:        req.SessionDuration,
-		AutoRedirectToIdentity: req.AutoRedirectToIdentity,
-		EnableBindingCookie:    req.EnableBindingCookie,
-		CustomDenyMessage:      req.CustomDenyMessage,
-		CustomDenyURL:          req.CustomDenyURL,
+		ID:                      GenerateID(),
+		Name:                    req.Name,
+		Domain:                  req.Domain,
+		Type:                    req.Type,
+		SessionDuration:         req.SessionDuration,
+		AutoRedirectToIdentity:  req.AutoRedirectToIdentity,
+		EnableBindingCookie:     req.EnableBindingCookie,
+		CustomDenyMessage:       req.CustomDenyMessage,
+		CustomDenyURL:           req.CustomDenyURL,
 		SameSiteCookieAttribute: req.SameSiteCookieAttribute,
-		LogoURL:                req.LogoURL,
-		SkipInterstitial:       req.SkipInterstitial,
-		AppLauncherVisible:     req.AppLauncherVisible,
-		ServiceAuth401Redirect: req.ServiceAuth401Redirect,
-		AllowedIdps:            req.AllowedIdps,
-		SelfHostedDomains:      req.SelfHostedDomains,
-		Destinations:           req.Destinations,
-		CreatedAt:              now,
-		UpdatedAt:              now,
+		LogoURL:                 req.LogoURL,
+		SkipInterstitial:        req.SkipInterstitial,
+		AppLauncherVisible:      req.AppLauncherVisible,
+		ServiceAuth401Redirect:  req.ServiceAuth401Redirect,
+		AllowedIdps:             req.AllowedIdps,
+		SelfHostedDomains:       req.SelfHostedDomains,
+		Destinations:            req.Destinations,
+		CreatedAt:               now,
+		UpdatedAt:               now,
 	}
 
 	h.store.CreateAccessApplication(app)

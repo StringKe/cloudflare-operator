@@ -31,24 +31,24 @@ type Store struct {
 	dnsRecords map[string]*models.DNSRecord // recordID -> DNSRecord
 
 	// Access resources
-	accessApplications      map[string]*models.AccessApplication      // appID -> AccessApplication
+	accessApplications      map[string]*models.AccessApplication       // appID -> AccessApplication
 	accessPolicies          map[string]map[string]*models.AccessPolicy // appID -> policyID -> AccessPolicy
-	accessGroups            map[string]*models.AccessGroup            // groupID -> AccessGroup
-	accessServiceTokens     map[string]*models.AccessServiceToken     // tokenID -> AccessServiceToken
-	accessIdentityProviders map[string]*models.AccessIdentityProvider // idpID -> AccessIdentityProvider
+	accessGroups            map[string]*models.AccessGroup             // groupID -> AccessGroup
+	accessServiceTokens     map[string]*models.AccessServiceToken      // tokenID -> AccessServiceToken
+	accessIdentityProviders map[string]*models.AccessIdentityProvider  // idpID -> AccessIdentityProvider
 
 	// Gateway resources
-	gatewayRules         map[string]*models.GatewayRule         // ruleID -> GatewayRule
-	gatewayLists         map[string]*models.GatewayList         // listID -> GatewayList
+	gatewayRules         map[string]*models.GatewayRule // ruleID -> GatewayRule
+	gatewayLists         map[string]*models.GatewayList // listID -> GatewayList
 	gatewayConfiguration *models.GatewayConfiguration
 
 	// Device resources
-	devicePostureRules     map[string]*models.DevicePostureRule     // ruleID -> DevicePostureRule
-	deviceSettingsPolicies map[string]*models.DeviceSettingsPolicy  // policyID -> DeviceSettingsPolicy
+	devicePostureRules     map[string]*models.DevicePostureRule    // ruleID -> DevicePostureRule
+	deviceSettingsPolicies map[string]*models.DeviceSettingsPolicy // policyID -> DeviceSettingsPolicy
 
 	// R2 resources
-	r2Buckets          map[string]*models.R2Bucket // bucketName -> R2Bucket
-	r2BucketLifecycle  map[string]interface{}      // bucketName -> lifecycle rules
+	r2Buckets         map[string]*models.R2Bucket // bucketName -> R2Bucket
+	r2BucketLifecycle map[string]interface{}      // bucketName -> lifecycle rules
 
 	// Zone Rulesets
 	zoneRulesets map[string]*models.ZoneRuleset // rulesetID -> ZoneRuleset

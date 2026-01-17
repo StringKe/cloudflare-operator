@@ -173,3 +173,160 @@ func getCloudflareClient(apiKey, apiEmail, apiToken string) (*cloudflare.API, er
 	}
 	return cloudflare.New(apiKey, apiEmail)
 }
+
+// CredentialsInfo holds the resolved credentials information needed for SyncState registration.
+// This follows the Unified Sync Architecture where Resource Controllers only need
+// credential metadata (accountID, credRef) but not the actual API client.
+type CredentialsInfo struct {
+	// AccountID is the Cloudflare account ID
+	AccountID string
+	// Domain is the Cloudflare domain
+	Domain string
+	// ZoneID is the Cloudflare zone ID (if available)
+	ZoneID string
+	// CredentialsRef is the reference to use for Sync Controller
+	CredentialsRef networkingv1alpha2.CredentialsReference
+}
+
+// ResolveCredentialsForService resolves credentials information from CloudflareDetails
+// without creating a Cloudflare API client.
+//
+// This function follows the Unified Sync Architecture:
+// - Resource Controllers should use this to get accountID and credentialsRef
+// - The actual API client creation is deferred to Sync Controllers
+//
+// Parameters:
+//   - ctx: context for the operation
+//   - c: Kubernetes client
+//   - log: logger
+//   - details: CloudflareDetails from the resource spec
+//   - namespace: namespace for legacy inline secrets (use OperatorNamespace for cluster-scoped)
+//   - statusAccountID: accountID from status (takes precedence if set)
+func ResolveCredentialsForService(
+	ctx context.Context,
+	c client.Client,
+	log logr.Logger,
+	details networkingv1alpha2.CloudflareDetails,
+	namespace string,
+	statusAccountID string,
+) (*CredentialsInfo, error) {
+	// For cluster-scoped resources (empty namespace), use operator namespace for legacy secrets
+	secretNamespace := namespace
+	if secretNamespace == "" {
+		secretNamespace = OperatorNamespace
+	}
+
+	// Create credentials loader
+	loader := credentials.NewLoader(c, log)
+
+	// Load credentials using the unified loader (no API client creation)
+	creds, err := loader.LoadFromCloudflareDetails(ctx, &details, secretNamespace)
+	if err != nil {
+		log.Error(err, "failed to load credentials")
+		return nil, err
+	}
+
+	// Build credentials info
+	info := &CredentialsInfo{
+		AccountID: creds.AccountID,
+		Domain:    creds.Domain,
+	}
+
+	// Override with spec values if provided
+	if details.AccountId != "" {
+		info.AccountID = details.AccountId
+	}
+	if details.Domain != "" {
+		info.Domain = details.Domain
+	}
+	if details.ZoneId != "" {
+		info.ZoneID = details.ZoneId
+	}
+
+	// Use status accountID if available (already validated)
+	if statusAccountID != "" {
+		info.AccountID = statusAccountID
+	}
+
+	// Build CredentialsRef for SyncState
+	info.CredentialsRef = BuildCredentialsRef(details, secretNamespace)
+
+	return info, nil
+}
+
+// BuildCredentialsRef builds a CredentialsReference from CloudflareDetails.
+// This is used to store the credentials reference in SyncState.
+// Note: CredentialsReference only has Name field, so we store the CloudflareCredentials name.
+// For legacy inline secrets, we need a fallback mechanism in Sync Controller.
+func BuildCredentialsRef(details networkingv1alpha2.CloudflareDetails, _ string) networkingv1alpha2.CredentialsReference {
+	// If using new CloudflareCredentials, reference it
+	if details.CredentialsRef != nil {
+		return networkingv1alpha2.CredentialsReference{
+			Name: details.CredentialsRef.Name,
+		}
+	}
+
+	// For legacy mode (inline secret) or default, use "default" CloudflareCredentials
+	// The Sync Controller should handle fallback to inline secret if needed
+	return networkingv1alpha2.CredentialsReference{
+		Name: "default",
+	}
+}
+
+// ResolveCredentialsFromRef resolves credentials information from a simple CredentialsReference
+// without creating a Cloudflare API client.
+//
+// This function follows the Unified Sync Architecture for resources that use
+// the simplified CredentialsReference (R2Bucket, R2BucketDomain, R2BucketNotification,
+// RedirectRule, TransformRule, ZoneRuleset) instead of the full CloudflareDetails.
+//
+// Parameters:
+//   - ctx: context for the operation
+//   - c: Kubernetes client
+//   - log: logger
+//   - credRef: simple CredentialsReference from the resource spec (may be nil for default)
+//
+// Returns credentials info with AccountID and CredentialsRef for SyncState registration.
+func ResolveCredentialsFromRef(
+	ctx context.Context,
+	c client.Client,
+	log logr.Logger,
+	credRef *networkingv1alpha2.CredentialsReference,
+) (*CredentialsInfo, error) {
+	// Create credentials loader
+	loader := credentials.NewLoader(c, log)
+
+	var creds *credentials.Credentials
+	var err error
+	var credentialsName string
+
+	if credRef != nil && credRef.Name != "" {
+		// Load from specified CloudflareCredentials
+		cfCredRef := &networkingv1alpha2.CloudflareCredentialsRef{Name: credRef.Name}
+		creds, err = loader.LoadFromCredentialsRef(ctx, cfCredRef)
+		if err != nil {
+			log.Error(err, "failed to load credentials from ref", "name", credRef.Name)
+			return nil, err
+		}
+		credentialsName = credRef.Name
+	} else {
+		// Load from default CloudflareCredentials
+		creds, err = loader.LoadDefault(ctx)
+		if err != nil {
+			log.Error(err, "failed to load default credentials")
+			return nil, err
+		}
+		credentialsName = "default"
+	}
+
+	// Build credentials info
+	info := &CredentialsInfo{
+		AccountID: creds.AccountID,
+		Domain:    creds.Domain,
+		CredentialsRef: networkingv1alpha2.CredentialsReference{
+			Name: credentialsName,
+		},
+	}
+
+	return info, nil
+}

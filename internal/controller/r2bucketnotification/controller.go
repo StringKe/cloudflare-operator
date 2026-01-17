@@ -70,8 +70,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// Handle deletion
+	// Following Unified Sync Architecture: only unregister from SyncState
+	// Sync Controller handles actual Cloudflare API deletion
 	if !notification.DeletionTimestamp.IsZero() {
-		return r.handleDeletion(ctx, notification, credRef)
+		return r.handleDeletion(ctx, notification)
 	}
 
 	// Add finalizer if not present
@@ -87,41 +89,34 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 }
 
 // resolveCredentials resolves the credentials reference and account ID.
+// Following Unified Sync Architecture, the Resource Controller only needs
+// credential metadata (accountID, credRef) - it does not create a Cloudflare API client.
 func (r *Reconciler) resolveCredentials(
 	ctx context.Context,
 	notification *networkingv1alpha2.R2BucketNotification,
 ) (credRef networkingv1alpha2.CredentialsReference, accountID string, err error) {
 	logger := log.FromContext(ctx)
 
-	// Get credentials reference
-	if notification.Spec.CredentialsRef != nil {
-		credRef = networkingv1alpha2.CredentialsReference{
-			Name: notification.Spec.CredentialsRef.Name,
-		}
-	}
-
-	// Get account ID from credentials
-	cfCredRef := &networkingv1alpha2.CloudflareCredentialsRef{Name: credRef.Name}
-	apiClient, err := cf.NewAPIClientFromCredentialsRef(ctx, r.Client, cfCredRef)
+	// Resolve credentials using the unified controller helper
+	credInfo, err := controller.ResolveCredentialsFromRef(ctx, r.Client, logger, notification.Spec.CredentialsRef)
 	if err != nil {
-		return credRef, "", fmt.Errorf("failed to create API client: %w", err)
+		return networkingv1alpha2.CredentialsReference{}, "", fmt.Errorf("failed to resolve credentials: %w", err)
 	}
 
-	accountID = apiClient.AccountId
-	if accountID == "" {
+	if credInfo.AccountID == "" {
 		logger.V(1).Info("Account ID not available from credentials, will be resolved during sync")
 	}
 
-	return credRef, accountID, nil
+	return credInfo.CredentialsRef, credInfo.AccountID, nil
 }
 
-// handleDeletion handles the deletion of R2BucketNotification
-//
-//nolint:revive // cognitive complexity is acceptable for deletion handling
+// handleDeletion handles the deletion of R2BucketNotification.
+// Following Unified Sync Architecture:
+// Resource Controller only unregisters from SyncState.
+// R2BucketNotification Sync Controller handles the actual Cloudflare API deletion.
 func (r *Reconciler) handleDeletion(
 	ctx context.Context,
 	notification *networkingv1alpha2.R2BucketNotification,
-	credRef networkingv1alpha2.CredentialsReference,
 ) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
@@ -129,43 +124,25 @@ func (r *Reconciler) handleDeletion(
 		return ctrl.Result{}, nil
 	}
 
-	// Remove the notification from Cloudflare
-	if notification.Status.QueueID != "" {
-		cfCredRef := &networkingv1alpha2.CloudflareCredentialsRef{Name: credRef.Name}
-		cfAPI, err := cf.NewAPIClientFromCredentialsRef(ctx, r.Client, cfCredRef)
-		if err == nil {
-			if err := cfAPI.DeleteR2Notification(
-				ctx,
-				notification.Spec.BucketName,
-				notification.Status.QueueID,
-			); err != nil {
-				if !cf.IsNotFoundError(err) {
-					logger.Error(err, "Failed to delete R2 notification")
-					r.Recorder.Event(notification, corev1.EventTypeWarning, "DeleteFailed",
-						cf.SanitizeErrorMessage(err))
-					return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-				}
-			} else {
-				logger.Info("R2 notification deleted",
-					"bucket", notification.Spec.BucketName,
-					"queue", notification.Spec.QueueName)
-				r.Recorder.Event(notification, corev1.EventTypeNormal, "Deleted",
-					fmt.Sprintf("Notification rules removed from bucket %s",
-						notification.Spec.BucketName))
-			}
-		}
-	}
+	logger.Info("Unregistering R2BucketNotification from SyncState")
 
-	// Unregister from SyncState
+	// Unregister from SyncState - this triggers Sync Controller to delete from Cloudflare
+	// Following: Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
 	source := service.Source{
 		Kind:      "R2BucketNotification",
 		Namespace: notification.Namespace,
 		Name:      notification.Name,
 	}
+
 	if err := r.notificationService.Unregister(ctx, notification.Status.QueueID, source); err != nil {
 		logger.Error(err, "Failed to unregister R2 bucket notification from SyncState")
-		// Non-fatal - continue with finalizer removal
+		r.Recorder.Event(notification, corev1.EventTypeWarning, "UnregisterFailed",
+			fmt.Sprintf("Failed to unregister from SyncState: %s", err.Error()))
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
+
+	r.Recorder.Event(notification, corev1.EventTypeNormal, "Unregistered",
+		"Unregistered from SyncState, Sync Controller will delete from Cloudflare")
 
 	// Remove finalizer
 	if err := controller.UpdateWithConflictRetry(ctx, r.Client, notification, func() {

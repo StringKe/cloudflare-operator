@@ -27,6 +27,12 @@ Cloudflare Operator 提供以下 Kubernetes 原生管理功能：
 
 ## 架构
 
+Operator 采用**统一同步架构**，包含六层：
+
+```
+K8s 资源 → 资源控制器 → 核心服务 → SyncState CRD → 同步控制器 → Cloudflare API
+```
+
 ```mermaid
 flowchart TB
     subgraph Internet["互联网"]
@@ -39,27 +45,28 @@ flowchart TB
     end
 
     subgraph K8s["Kubernetes 集群"]
-        subgraph CRDs["自定义资源"]
-            Tunnel["Tunnel / ClusterTunnel"]
-            TB["TunnelBinding"]
-            VNet["VirtualNetwork"]
-            Route["NetworkRoute"]
-            Access["Access*"]
-            Gateway["Gateway*"]
+        subgraph Layer1["Layer 1: K8s 资源"]
+            CRDs["自定义资源"]
+            K8sNative["Ingress / Gateway API"]
         end
 
-        subgraph K8sNative["Kubernetes 原生"]
-            Ingress["Ingress"]
-            GatewayAPI["Gateway API"]
+        subgraph Layer2["Layer 2: 资源控制器"]
+            RC["资源控制器"]
         end
 
-        subgraph Operator["Cloudflare Operator"]
-            Controller["控制器管理器"]
+        subgraph Layer3["Layer 3: 核心服务"]
+            SVC["核心服务"]
+        end
+
+        subgraph Layer4["Layer 4: SyncState CRD"]
+            SyncState["CloudflareSyncState"]
+        end
+
+        subgraph Layer5["Layer 5: 同步控制器"]
+            SC["同步控制器"]
         end
 
         subgraph Managed["托管资源"]
-            ConfigMap["ConfigMap"]
-            Secret["Secret"]
             Deployment["cloudflared"]
         end
 
@@ -69,15 +76,29 @@ flowchart TB
         end
     end
 
-    CRDs -.->|监听| Controller
-    K8sNative -.->|监听| Controller
-    Controller -->|创建| Managed
-    Controller -->|API 调用| API
+    CRDs -.->|监听| RC
+    K8sNative -.->|监听| RC
+    RC -->|注册配置| SVC
+    SVC -->|更新| SyncState
+    SyncState -.->|监听| SC
+    SC -->|"API 调用 (唯一同步点)"| API
+    SC -->|创建| Managed
     Managed -->|代理| Service
     Service --> Pod
     Users -->|HTTPS/WARP| Edge
     Edge <-->|隧道| Deployment
 ```
+
+### 核心优势
+
+| 特性 | 说明 |
+|------|------|
+| **单一同步点** | 只有同步控制器调用 Cloudflare API |
+| **无竞态条件** | SyncState CRD 使用 K8s 乐观锁 |
+| **防抖** | 500ms 延迟聚合多次变更 |
+| **Hash 检测** | 配置无变化时跳过同步 |
+
+> 详见[统一同步架构](../design/UNIFIED_SYNC_ARCHITECTURE.md)。
 
 ## CRD 摘要 (共 30 个)
 

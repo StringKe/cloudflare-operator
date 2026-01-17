@@ -9,7 +9,7 @@ import (
 )
 
 // SyncResourceType defines the type of Cloudflare resource being synced
-// +kubebuilder:validation:Enum=TunnelConfiguration;DNSRecord;AccessApplication;AccessGroup;AccessServiceToken;AccessIdentityProvider;VirtualNetwork;NetworkRoute;R2Bucket;R2BucketDomain;R2BucketNotification;ZoneRuleset;TransformRule;RedirectRule;GatewayRule;GatewayList;GatewayConfiguration;OriginCACertificate;CloudflareDomain;DomainRegistration;DevicePostureRule;DeviceSettingsPolicy
+// +kubebuilder:validation:Enum=TunnelConfiguration;DNSRecord;AccessApplication;AccessGroup;AccessServiceToken;AccessIdentityProvider;VirtualNetwork;NetworkRoute;PrivateService;R2Bucket;R2BucketDomain;R2BucketNotification;ZoneRuleset;TransformRule;RedirectRule;GatewayRule;GatewayList;GatewayConfiguration;OriginCACertificate;CloudflareDomain;DomainRegistration;DevicePostureRule;DeviceSettingsPolicy
 type SyncResourceType string
 
 const (
@@ -29,6 +29,8 @@ const (
 	SyncResourceVirtualNetwork SyncResourceType = "VirtualNetwork"
 	// SyncResourceNetworkRoute represents a Cloudflare network route
 	SyncResourceNetworkRoute SyncResourceType = "NetworkRoute"
+	// SyncResourcePrivateService represents a Cloudflare tunnel route for a K8s service
+	SyncResourcePrivateService SyncResourceType = "PrivateService"
 	// SyncResourceR2Bucket represents a Cloudflare R2 bucket
 	SyncResourceR2Bucket SyncResourceType = "R2Bucket"
 	// SyncResourceR2BucketDomain represents a Cloudflare R2 bucket custom domain

@@ -186,6 +186,46 @@ kubectl apply -f examples/scenarios/multi-cluster-access/
 | TunnelIngressClassConfig | `networking.cloudflare-operator.io/v1alpha2` | Cluster |
 | TunnelGatewayClassConfig | `networking.cloudflare-operator.io/v1alpha2` | Cluster |
 
+## How It Works / 工作原理
+
+The operator uses a **Unified Sync Architecture** with six layers:
+
+Operator 采用**统一同步架构**，包含六层：
+
+```
+K8s Resources → Resource Controllers → Core Services → SyncState CRD → Sync Controllers → Cloudflare API
+```
+
+| Layer | Description / 描述 |
+|-------|-------------------|
+| **K8s Resources** | Your CRDs (Tunnel, DNSRecord, etc.) / 你的 CRD (Tunnel, DNSRecord 等) |
+| **Resource Controllers** | Lightweight, validate and register config / 轻量级，验证并注册配置 |
+| **Core Services** | Business logic, manage SyncState / 业务逻辑，管理 SyncState |
+| **SyncState CRD** | Shared state with optimistic locking / 共享状态，乐观锁 |
+| **Sync Controllers** | Debounce, aggregate, call API / 防抖、聚合、调用 API |
+| **Cloudflare API** | Single sync point / 唯一同步点 |
+
+This architecture eliminates race conditions when multiple resources (e.g., Tunnel + Ingress + TunnelBinding) update the same Cloudflare configuration.
+
+此架构消除了多个资源（如 Tunnel + Ingress + TunnelBinding）更新同一 Cloudflare 配置时的竞态条件。
+
+## Observability / 可观测性
+
+Check the sync state of your resources:
+
+检查资源的同步状态：
+
+```bash
+# View all sync states / 查看所有同步状态
+kubectl get cloudflaresyncstate
+
+# View specific sync state / 查看特定同步状态
+kubectl describe cloudflaresyncstate tunnel-config-<tunnel-id>
+
+# Watch sync status changes / 观察同步状态变化
+kubectl get cloudflaresyncstate -w
+```
+
 ## Notes / 注意事项
 
 - Replace placeholder values (e.g., `<your-account-id>`, `<your-domain>`) with your actual values
@@ -196,3 +236,6 @@ kubectl apply -f examples/scenarios/multi-cluster-access/
 
 - Check resource status with `kubectl describe <resource> <name>` for troubleshooting
 - 使用 `kubectl describe <resource> <name>` 检查资源状态以进行故障排除
+
+- For detailed architecture, see [Unified Sync Architecture](../docs/design/UNIFIED_SYNC_ARCHITECTURE.md)
+- 详细架构请参阅[统一同步架构](../docs/design/UNIFIED_SYNC_ARCHITECTURE.md)

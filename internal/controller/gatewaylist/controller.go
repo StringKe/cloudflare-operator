@@ -5,11 +5,11 @@ package gatewaylist
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -21,7 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	"sigs.k8s.io/controller-runtime/pkg/log"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
@@ -41,6 +41,11 @@ type GatewayListReconciler struct {
 	Scheme         *runtime.Scheme
 	Recorder       record.EventRecorder
 	gatewayService *gatewaysvc.GatewayListService
+
+	// Runtime state
+	ctx  context.Context
+	log  logr.Logger
+	list *networkingv1alpha2.GatewayList
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=gatewaylists,verbs=get;list;watch;create;update;patch;delete
@@ -48,11 +53,12 @@ type GatewayListReconciler struct {
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=gatewaylists/finalizers,verbs=update
 
 func (r *GatewayListReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
+	r.ctx = ctx
+	r.log = ctrllog.FromContext(ctx)
 
 	// Fetch the GatewayList instance
-	list := &networkingv1alpha2.GatewayList{}
-	if err := r.Get(ctx, req.NamespacedName, list); err != nil {
+	r.list = &networkingv1alpha2.GatewayList{}
+	if err := r.Get(ctx, req.NamespacedName, r.list); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
@@ -60,68 +66,61 @@ func (r *GatewayListReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	// Resolve credentials
-	credRef, accountID, err := r.resolveCredentials(ctx, list)
+	credInfo, err := r.resolveCredentials()
 	if err != nil {
-		logger.Error(err, "Failed to resolve credentials")
-		return r.updateStatusError(ctx, list, err)
+		r.log.Error(err, "Failed to resolve credentials")
+		return r.updateStatusError(err)
 	}
 
 	// Handle deletion
-	if !list.DeletionTimestamp.IsZero() {
-		return r.handleDeletion(ctx, list, credRef)
+	if !r.list.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(credInfo)
 	}
 
 	// Add finalizer if not present
-	if !controllerutil.ContainsFinalizer(list, FinalizerName) {
-		controllerutil.AddFinalizer(list, FinalizerName)
-		if err := r.Update(ctx, list); err != nil {
+	if !controllerutil.ContainsFinalizer(r.list, FinalizerName) {
+		controllerutil.AddFinalizer(r.list, FinalizerName)
+		if err := r.Update(ctx, r.list); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
 
 	// Register Gateway list configuration to SyncState
-	return r.registerGatewayList(ctx, list, accountID, credRef)
+	return r.registerGatewayList(credInfo)
 }
 
-// resolveCredentials resolves the credentials reference and account ID.
-func (r *GatewayListReconciler) resolveCredentials(
-	ctx context.Context,
-	list *networkingv1alpha2.GatewayList,
-) (credRef networkingv1alpha2.CredentialsReference, accountID string, err error) {
-	// Get credentials reference
-	if list.Spec.Cloudflare.CredentialsRef != nil {
-		credRef = networkingv1alpha2.CredentialsReference{
-			Name: list.Spec.Cloudflare.CredentialsRef.Name,
-		}
-
-		// Get account ID from credentials if available
-		creds := &networkingv1alpha2.CloudflareCredentials{}
-		if err := r.Get(ctx, client.ObjectKey{Name: credRef.Name}, creds); err != nil {
-			return credRef, "", fmt.Errorf("get credentials: %w", err)
-		}
-		accountID = creds.Spec.AccountID
+// resolveCredentials resolves the credentials reference and returns the credentials info.
+// Following Unified Sync Architecture, the Resource Controller only needs
+// credential metadata (accountID, credRef) - it does not create a Cloudflare API client.
+func (r *GatewayListReconciler) resolveCredentials() (*controller.CredentialsInfo, error) {
+	// GatewayList is cluster-scoped, use operator namespace for legacy inline secrets
+	info, err := controller.ResolveCredentialsForService(
+		r.ctx,
+		r.Client,
+		r.log,
+		r.list.Spec.Cloudflare,
+		controller.OperatorNamespace,
+		r.list.Status.AccountID,
+	)
+	if err != nil {
+		r.log.Error(err, "failed to resolve credentials")
+		r.Recorder.Event(r.list, corev1.EventTypeWarning, controller.EventReasonAPIError,
+			"Failed to resolve credentials: "+err.Error())
+		return nil, err
 	}
 
-	if credRef.Name == "" {
-		return credRef, "", errors.New("credentials reference is required")
-	}
-
-	return credRef, accountID, nil
+	return info, nil
 }
 
 func (r *GatewayListReconciler) handleDeletion(
-	ctx context.Context,
-	list *networkingv1alpha2.GatewayList,
-	_ networkingv1alpha2.CredentialsReference,
+	credInfo *controller.CredentialsInfo,
 ) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
-
-	if !controllerutil.ContainsFinalizer(list, FinalizerName) {
+	if !controllerutil.ContainsFinalizer(r.list, FinalizerName) {
 		return ctrl.Result{}, nil
 	}
 
 	// Delete from Cloudflare
-	if result, shouldReturn := r.deleteFromCloudflare(ctx, list); shouldReturn {
+	if result, shouldReturn := r.deleteFromCloudflare(credInfo); shouldReturn {
 		return result, nil
 	}
 
@@ -129,21 +128,21 @@ func (r *GatewayListReconciler) handleDeletion(
 	source := service.Source{
 		Kind:      "GatewayList",
 		Namespace: "",
-		Name:      list.Name,
+		Name:      r.list.Name,
 	}
-	if err := r.gatewayService.Unregister(ctx, list.Status.ListID, source); err != nil {
-		logger.Error(err, "Failed to unregister Gateway list from SyncState")
+	if err := r.gatewayService.Unregister(r.ctx, r.list.Status.ListID, source); err != nil {
+		r.log.Error(err, "Failed to unregister Gateway list from SyncState")
 		// Non-fatal - continue with finalizer removal
 	}
 
 	// Remove finalizer with retry logic
-	if err := controller.UpdateWithConflictRetry(ctx, r.Client, list, func() {
-		controllerutil.RemoveFinalizer(list, FinalizerName)
+	if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.list, func() {
+		controllerutil.RemoveFinalizer(r.list, FinalizerName)
 	}); err != nil {
-		logger.Error(err, "failed to remove finalizer")
+		r.log.Error(err, "failed to remove finalizer")
 		return ctrl.Result{}, err
 	}
-	r.Recorder.Event(list, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
+	r.Recorder.Event(r.list, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
 
 	return ctrl.Result{}, nil
 }
@@ -151,63 +150,61 @@ func (r *GatewayListReconciler) handleDeletion(
 // deleteFromCloudflare deletes the gateway list from Cloudflare.
 // Returns (result, shouldReturn) where shouldReturn indicates if caller should return.
 func (r *GatewayListReconciler) deleteFromCloudflare(
-	ctx context.Context,
-	list *networkingv1alpha2.GatewayList,
+	credInfo *controller.CredentialsInfo,
 ) (ctrl.Result, bool) {
-	if list.Status.ListID == "" {
+	if r.list.Status.ListID == "" {
 		return ctrl.Result{}, false
 	}
 
-	logger := log.FromContext(ctx)
-	apiClient, err := cf.NewAPIClientFromDetails(ctx, r.Client, controller.OperatorNamespace, list.Spec.Cloudflare)
+	apiClient, err := cf.NewAPIClientFromDetails(r.ctx, r.Client, controller.OperatorNamespace, r.list.Spec.Cloudflare)
 	if err != nil {
-		logger.Error(err, "Failed to create API client for deletion")
+		r.log.Error(err, "Failed to create API client for deletion")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, true
 	}
 
-	logger.Info("Deleting Gateway List from Cloudflare", "listId", list.Status.ListID)
+	r.log.Info("Deleting Gateway List from Cloudflare", "listId", r.list.Status.ListID)
 
-	err = apiClient.DeleteGatewayList(list.Status.ListID)
+	err = apiClient.DeleteGatewayList(r.list.Status.ListID)
 	if err == nil {
-		r.Recorder.Event(list, corev1.EventTypeNormal, controller.EventReasonDeleted, "Deleted from Cloudflare")
+		r.Recorder.Event(r.list, corev1.EventTypeNormal, controller.EventReasonDeleted, "Deleted from Cloudflare")
 		return ctrl.Result{}, false
 	}
 
 	if cf.IsNotFoundError(err) {
-		logger.Info("Gateway List already deleted from Cloudflare")
-		r.Recorder.Event(list, corev1.EventTypeNormal, "AlreadyDeleted",
+		r.log.Info("Gateway List already deleted from Cloudflare")
+		r.Recorder.Event(r.list, corev1.EventTypeNormal, "AlreadyDeleted",
 			"Gateway List was already deleted from Cloudflare")
 		return ctrl.Result{}, false
 	}
 
-	logger.Error(err, "Failed to delete Gateway List from Cloudflare")
-	r.Recorder.Event(list, corev1.EventTypeWarning, controller.EventReasonDeleteFailed,
+	r.log.Error(err, "Failed to delete Gateway List from Cloudflare")
+	r.Recorder.Event(r.list, corev1.EventTypeWarning, controller.EventReasonDeleteFailed,
 		fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
+
+	// Note: credInfo is passed but currently unused as deleteFromCloudflare still uses
+	// cf.NewAPIClientFromDetails directly for deletion. This parameter is included
+	// to maintain consistency with the interface pattern when we migrate to SyncState deletion.
+	_ = credInfo
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, true
 }
 
 // registerGatewayList registers the Gateway list configuration to SyncState.
 func (r *GatewayListReconciler) registerGatewayList(
-	ctx context.Context,
-	list *networkingv1alpha2.GatewayList,
-	accountID string,
-	credRef networkingv1alpha2.CredentialsReference,
+	credInfo *controller.CredentialsInfo,
 ) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
-
 	// Collect items from spec and ConfigMap
-	items, err := r.collectItems(ctx, list)
+	items, err := r.collectItems()
 	if err != nil {
-		r.Recorder.Event(list, corev1.EventTypeWarning, "CollectItemsFailed",
+		r.Recorder.Event(r.list, corev1.EventTypeWarning, "CollectItemsFailed",
 			fmt.Sprintf("Failed to collect items: %v", err))
-		return r.updateStatusError(ctx, list, err)
+		return r.updateStatusError(err)
 	}
 
 	// Build Gateway list configuration
 	config := gatewaysvc.GatewayListConfig{
-		Name:        list.GetGatewayListName(),
-		Description: list.Spec.Description,
-		Type:        list.Spec.Type,
+		Name:        r.list.GetGatewayListName(),
+		Description: r.list.Spec.Description,
+		Type:        r.list.Spec.Type,
 		Items:       items,
 	}
 
@@ -215,43 +212,43 @@ func (r *GatewayListReconciler) registerGatewayList(
 	source := service.Source{
 		Kind:      "GatewayList",
 		Namespace: "",
-		Name:      list.Name,
+		Name:      r.list.Name,
 	}
 
 	// Register to SyncState
 	opts := gatewaysvc.GatewayListRegisterOptions{
-		AccountID:      accountID,
-		ListID:         list.Status.ListID,
+		AccountID:      credInfo.AccountID,
+		ListID:         r.list.Status.ListID,
 		Source:         source,
 		Config:         config,
-		CredentialsRef: credRef,
+		CredentialsRef: credInfo.CredentialsRef,
 	}
 
-	if err := r.gatewayService.Register(ctx, opts); err != nil {
-		logger.Error(err, "Failed to register Gateway list configuration")
-		r.Recorder.Event(list, corev1.EventTypeWarning, "RegisterFailed",
+	if err := r.gatewayService.Register(r.ctx, opts); err != nil {
+		r.log.Error(err, "Failed to register Gateway list configuration")
+		r.Recorder.Event(r.list, corev1.EventTypeWarning, "RegisterFailed",
 			fmt.Sprintf("Failed to register Gateway list: %s", err.Error()))
-		return r.updateStatusError(ctx, list, err)
+		return r.updateStatusError(err)
 	}
 
-	r.Recorder.Event(list, corev1.EventTypeNormal, "Registered",
+	r.Recorder.Event(r.list, corev1.EventTypeNormal, "Registered",
 		fmt.Sprintf("Registered Gateway List '%s' configuration to SyncState", config.Name))
 
 	// Update status to Pending - actual sync happens via GatewaySyncController
-	return r.updateStatusPending(ctx, list, accountID, len(items))
+	return r.updateStatusPending(credInfo.AccountID, len(items))
 }
 
-func (r *GatewayListReconciler) collectItems(ctx context.Context, list *networkingv1alpha2.GatewayList) ([]string, error) {
+func (r *GatewayListReconciler) collectItems() ([]string, error) {
 	items := make([]string, 0)
 
 	// Add items from spec
-	for _, item := range list.Spec.Items {
+	for _, item := range r.list.Spec.Items {
 		items = append(items, item.Value)
 	}
 
 	// Add items from ConfigMap
-	if list.Spec.ItemsFromConfigMap != nil {
-		configMapItems, err := r.getItemsFromConfigMap(ctx, list)
+	if r.list.Spec.ItemsFromConfigMap != nil {
+		configMapItems, err := r.getItemsFromConfigMap()
 		if err != nil {
 			return nil, err
 		}
@@ -261,8 +258,8 @@ func (r *GatewayListReconciler) collectItems(ctx context.Context, list *networki
 	return items, nil
 }
 
-func (r *GatewayListReconciler) getItemsFromConfigMap(ctx context.Context, list *networkingv1alpha2.GatewayList) ([]string, error) {
-	ref := list.Spec.ItemsFromConfigMap
+func (r *GatewayListReconciler) getItemsFromConfigMap() ([]string, error) {
+	ref := r.list.Spec.ItemsFromConfigMap
 
 	namespace := ref.Namespace
 	if namespace == "" {
@@ -270,7 +267,7 @@ func (r *GatewayListReconciler) getItemsFromConfigMap(ctx context.Context, list 
 	}
 
 	configMap := &corev1.ConfigMap{}
-	if err := r.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: namespace}, configMap); err != nil {
+	if err := r.Get(r.ctx, types.NamespacedName{Name: ref.Name, Namespace: namespace}, configMap); err != nil {
 		return nil, fmt.Errorf("failed to get ConfigMap %s/%s: %w", namespace, ref.Name, err)
 	}
 
@@ -292,18 +289,18 @@ func (r *GatewayListReconciler) getItemsFromConfigMap(ctx context.Context, list 
 	return items, nil
 }
 
-func (r *GatewayListReconciler) updateStatusError(ctx context.Context, list *networkingv1alpha2.GatewayList, err error) (ctrl.Result, error) {
-	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, list, func() {
-		list.Status.State = "Error"
-		meta.SetStatusCondition(&list.Status.Conditions, metav1.Condition{
+func (r *GatewayListReconciler) updateStatusError(err error) (ctrl.Result, error) {
+	updateErr := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.list, func() {
+		r.list.Status.State = "Error"
+		meta.SetStatusCondition(&r.list.Status.Conditions, metav1.Condition{
 			Type:               "Ready",
 			Status:             metav1.ConditionFalse,
-			ObservedGeneration: list.Generation,
+			ObservedGeneration: r.list.Generation,
 			Reason:             "ReconcileError",
 			Message:            cf.SanitizeErrorMessage(err),
 			LastTransitionTime: metav1.Now(),
 		})
-		list.Status.ObservedGeneration = list.Generation
+		r.list.Status.ObservedGeneration = r.list.Generation
 	})
 
 	if updateErr != nil {
@@ -314,26 +311,24 @@ func (r *GatewayListReconciler) updateStatusError(ctx context.Context, list *net
 }
 
 func (r *GatewayListReconciler) updateStatusPending(
-	ctx context.Context,
-	list *networkingv1alpha2.GatewayList,
 	accountID string,
 	itemCount int,
 ) (ctrl.Result, error) {
-	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, list, func() {
-		if list.Status.AccountID == "" {
-			list.Status.AccountID = accountID
+	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.list, func() {
+		if r.list.Status.AccountID == "" {
+			r.list.Status.AccountID = accountID
 		}
-		list.Status.ItemCount = itemCount
-		list.Status.State = "Pending"
-		meta.SetStatusCondition(&list.Status.Conditions, metav1.Condition{
+		r.list.Status.ItemCount = itemCount
+		r.list.Status.State = "Pending"
+		meta.SetStatusCondition(&r.list.Status.Conditions, metav1.Condition{
 			Type:               "Ready",
 			Status:             metav1.ConditionFalse,
-			ObservedGeneration: list.Generation,
+			ObservedGeneration: r.list.Generation,
 			Reason:             "Pending",
 			Message:            "Gateway list configuration registered, waiting for sync",
 			LastTransitionTime: metav1.Now(),
 		})
-		list.Status.ObservedGeneration = list.Generation
+		r.list.Status.ObservedGeneration = r.list.Generation
 	})
 
 	if err != nil {
@@ -363,7 +358,7 @@ func (r *GatewayListReconciler) findGatewayListsForConfigMap(ctx context.Context
 	if !ok {
 		return nil
 	}
-	logger := log.FromContext(ctx)
+	logger := ctrllog.FromContext(ctx)
 
 	gatewayLists := &networkingv1alpha2.GatewayListList{}
 	if err := r.List(ctx, gatewayLists); err != nil {

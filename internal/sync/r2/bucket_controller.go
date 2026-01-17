@@ -12,12 +12,18 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	r2svc "github.com/StringKe/cloudflare-operator/internal/service/r2"
 	"github.com/StringKe/cloudflare-operator/internal/sync/common"
+)
+
+const (
+	// BucketFinalizerName is the finalizer for R2Bucket SyncState resources.
+	BucketFinalizerName = "r2bucket.sync.cloudflare-operator.io/finalizer"
 )
 
 // BucketController is the Sync Controller for R2 Bucket Configuration.
@@ -59,18 +65,29 @@ func (r *BucketController) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		"cloudflareId", syncState.Spec.CloudflareID,
 		"sources", len(syncState.Spec.Sources))
 
+	// Handle deletion - this is the SINGLE point for Cloudflare API delete calls
+	if !syncState.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, syncState)
+	}
+
+	// Check if there are any sources - if none, delete from Cloudflare
+	if len(syncState.Spec.Sources) == 0 {
+		logger.Info("No sources in SyncState, deleting from Cloudflare")
+		return r.handleDeletion(ctx, syncState)
+	}
+
+	// Add finalizer if not present
+	if !controllerutil.ContainsFinalizer(syncState, BucketFinalizerName) {
+		controllerutil.AddFinalizer(syncState, BucketFinalizerName)
+		if err := r.Client.Update(ctx, syncState); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{Requeue: true}, nil
+	}
+
 	// Skip if there's a pending debounced request
 	if r.Debouncer.IsPending(req.Name) {
 		logger.V(1).Info("Skipping reconcile - debounced request pending")
-		return ctrl.Result{}, nil
-	}
-
-	// Check if there are any sources
-	if len(syncState.Spec.Sources) == 0 {
-		logger.Info("No sources in SyncState, marking as synced (no-op)")
-		if err := r.SetSyncStatus(ctx, syncState, v1alpha2.SyncStatusSynced); err != nil {
-			return ctrl.Result{}, err
-		}
 		return ctrl.Result{}, nil
 	}
 
@@ -342,6 +359,92 @@ func (r *BucketController) syncLifecycle(
 
 	logger.Info("Lifecycle configuration updated", "bucket", bucketName, "rulesCount", len(rules))
 	return len(rules), nil
+}
+
+// handleDeletion handles the deletion of R2Bucket from Cloudflare.
+// This is the SINGLE point for Cloudflare R2Bucket deletion in the system.
+// Following Unified Sync Architecture:
+// Resource Controller unregisters → SyncState updated → Sync Controller deletes from Cloudflare
+//
+//nolint:revive // cognitive complexity is acceptable for deletion handling
+func (r *BucketController) handleDeletion(
+	ctx context.Context,
+	syncState *v1alpha2.CloudflareSyncState,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	// If no finalizer, nothing to do
+	if !controllerutil.ContainsFinalizer(syncState, BucketFinalizerName) {
+		return ctrl.Result{}, nil
+	}
+
+	// Get the bucket name (CloudflareID)
+	bucketName := syncState.Spec.CloudflareID
+
+	// Skip if pending ID (bucket was never created)
+	if common.IsPendingID(bucketName) {
+		logger.Info("Skipping deletion - R2Bucket was never created",
+			"cloudflareId", bucketName)
+	} else if bucketName != "" {
+		// Check if we should orphan the resource
+		shouldDelete := true
+
+		// Try to extract config to check DeletionPolicy
+		if len(syncState.Spec.Sources) > 0 {
+			config, err := r.extractConfig(syncState)
+			if err == nil && config.Lifecycle != nil && config.Lifecycle.DeletionPolicy == "Orphan" {
+				logger.Info("Deletion policy is Orphan, skipping bucket deletion",
+					"bucketName", bucketName)
+				shouldDelete = false
+			}
+		}
+
+		if shouldDelete {
+			// Create API client
+			apiClient, err := common.CreateAPIClient(ctx, r.Client, syncState)
+			if err != nil {
+				logger.Error(err, "Failed to create API client for deletion")
+				return ctrl.Result{RequeueAfter: common.RequeueAfterError(err)}, nil
+			}
+
+			logger.Info("Deleting R2Bucket from Cloudflare",
+				"bucketName", bucketName)
+
+			if err := apiClient.DeleteR2Bucket(ctx, bucketName); err != nil {
+				if !cf.IsNotFoundError(err) {
+					logger.Error(err, "Failed to delete R2Bucket from Cloudflare")
+					if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
+						logger.Error(statusErr, "Failed to update error status")
+					}
+					return ctrl.Result{RequeueAfter: common.RequeueAfterError(err)}, nil
+				}
+				logger.Info("R2Bucket already deleted from Cloudflare")
+			} else {
+				logger.Info("Successfully deleted R2Bucket from Cloudflare",
+					"bucketName", bucketName)
+			}
+		}
+	}
+
+	// Remove finalizer
+	controllerutil.RemoveFinalizer(syncState, BucketFinalizerName)
+	if err := r.Client.Update(ctx, syncState); err != nil {
+		logger.Error(err, "Failed to remove finalizer")
+		return ctrl.Result{}, err
+	}
+
+	// If sources are empty (not a deletion timestamp trigger), delete the SyncState itself
+	if syncState.DeletionTimestamp.IsZero() && len(syncState.Spec.Sources) == 0 {
+		logger.Info("Deleting orphaned SyncState")
+		if err := r.Client.Delete(ctx, syncState); err != nil {
+			if client.IgnoreNotFound(err) != nil {
+				logger.Error(err, "Failed to delete SyncState")
+				return ctrl.Result{}, err
+			}
+		}
+	}
+
+	return ctrl.Result{}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

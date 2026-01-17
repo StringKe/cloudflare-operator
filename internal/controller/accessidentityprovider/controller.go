@@ -21,7 +21,6 @@ import (
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
-	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
 	"github.com/StringKe/cloudflare-operator/internal/service"
 	accesssvc "github.com/StringKe/cloudflare-operator/internal/service/access"
@@ -41,10 +40,9 @@ type Reconciler struct {
 	idpService *accesssvc.IdentityProviderService
 
 	// Runtime state
-	ctx   context.Context
-	log   logr.Logger
-	idp   *networkingv1alpha2.AccessIdentityProvider
-	cfAPI *cf.API
+	ctx context.Context
+	log logr.Logger
+	idp *networkingv1alpha2.AccessIdentityProvider
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=accessidentityproviders,verbs=get;list;watch;create;update;patch;delete
@@ -70,13 +68,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// Check if AccessIdentityProvider is being deleted
+	// Following Unified Sync Architecture: only unregister from SyncState
+	// Sync Controller handles actual Cloudflare API deletion
 	if r.idp.GetDeletionTimestamp() != nil {
-		// Initialize API client for deletion
-		if err := r.initAPIClient(); err != nil {
-			r.log.Error(err, "failed to initialize API client for deletion")
-			r.setCondition(metav1.ConditionFalse, controller.EventReasonAPIError, err.Error())
-			return ctrl.Result{}, err
-		}
 		return r.handleDeletion()
 	}
 
@@ -99,75 +93,59 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	return ctrl.Result{}, nil
 }
 
-// initAPIClient initializes the Cloudflare API client.
-func (r *Reconciler) initAPIClient() error {
+// resolveCredentials resolves the credentials reference and returns the credentials info.
+// Following Unified Sync Architecture, the Resource Controller only needs
+// credential metadata (accountID, credRef) - it does not create a Cloudflare API client.
+func (r *Reconciler) resolveCredentials() (*controller.CredentialsInfo, error) {
 	// AccessIdentityProvider is cluster-scoped, use operator namespace for legacy inline secrets
-	api, err := cf.NewAPIClientFromDetails(r.ctx, r.Client, controller.OperatorNamespace, r.idp.Spec.Cloudflare)
+	info, err := controller.ResolveCredentialsForService(
+		r.ctx,
+		r.Client,
+		r.log,
+		r.idp.Spec.Cloudflare,
+		controller.OperatorNamespace,
+		r.idp.Status.AccountID,
+	)
 	if err != nil {
-		r.log.Error(err, "failed to initialize API client")
-		r.Recorder.Event(r.idp, corev1.EventTypeWarning, controller.EventReasonAPIError, "Failed to initialize API client: "+err.Error())
-		return err
+		r.log.Error(err, "failed to resolve credentials")
+		r.Recorder.Event(r.idp, corev1.EventTypeWarning, controller.EventReasonAPIError,
+			"Failed to resolve credentials: "+err.Error())
+		return nil, err
 	}
 
-	api.ValidAccountId = r.idp.Status.AccountID
-	r.cfAPI = api
-	return nil
+	return info, nil
 }
 
 // handleDeletion handles the deletion of an AccessIdentityProvider.
-//
-//nolint:revive // cognitive complexity is acceptable for deletion handling
+// Following Unified Sync Architecture:
+// Resource Controller only unregisters from SyncState.
+// AccessIdentityProvider Sync Controller handles the actual Cloudflare API deletion.
 func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(r.idp, FinalizerName) {
 		return ctrl.Result{}, nil
 	}
 
-	r.log.Info("Deleting AccessIdentityProvider")
-	r.Recorder.Event(r.idp, corev1.EventTypeNormal, "Deleting", "Starting AccessIdentityProvider deletion")
+	r.log.Info("Unregistering AccessIdentityProvider from SyncState")
 
-	// Try to get Provider ID from status or by looking up by name
+	// Get Provider ID from status
 	providerID := r.idp.Status.ProviderID
-	if providerID == "" {
-		// Status ID is empty - try to find by name to prevent orphaned resources
-		providerName := r.idp.GetProviderName()
-		r.log.Info("Status.ProviderID is empty, trying to find provider by name", "name", providerName)
-		existing, err := r.cfAPI.ListAccessIdentityProvidersByName(providerName)
-		if err == nil && existing != nil {
-			providerID = existing.ID
-			r.log.Info("Found AccessIdentityProvider by name", "id", providerID)
-		} else {
-			r.log.Info("AccessIdentityProvider not found by name, assuming it was never created or already deleted")
-		}
-	}
 
-	// Delete from Cloudflare if we have an ID
-	if providerID != "" {
-		if err := r.cfAPI.DeleteAccessIdentityProvider(providerID); err != nil {
-			if !cf.IsNotFoundError(err) {
-				r.log.Error(err, "failed to delete AccessIdentityProvider from Cloudflare")
-				r.Recorder.Event(r.idp, corev1.EventTypeWarning,
-					controller.EventReasonDeleteFailed, cf.SanitizeErrorMessage(err))
-				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-			}
-			r.log.Info("AccessIdentityProvider already deleted from Cloudflare", "id", providerID)
-			r.Recorder.Event(r.idp, corev1.EventTypeNormal,
-				"AlreadyDeleted", "AccessIdentityProvider was already deleted from Cloudflare")
-		} else {
-			r.log.Info("AccessIdentityProvider deleted from Cloudflare", "id", providerID)
-			r.Recorder.Event(r.idp, corev1.EventTypeNormal,
-				controller.EventReasonDeleted, "Deleted from Cloudflare")
-		}
-	}
-
-	// Unregister from SyncState
+	// Unregister from SyncState - this triggers Sync Controller to delete from Cloudflare
+	// Following: Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
 	source := service.Source{
 		Kind: "AccessIdentityProvider",
 		Name: r.idp.Name,
 	}
+
 	if err := r.idpService.Unregister(r.ctx, providerID, source); err != nil {
 		r.log.Error(err, "failed to unregister from SyncState")
-		// Non-fatal - continue with finalizer removal
+		r.Recorder.Event(r.idp, corev1.EventTypeWarning, "UnregisterFailed",
+			fmt.Sprintf("Failed to unregister from SyncState: %s", err.Error()))
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
+
+	r.Recorder.Event(r.idp, corev1.EventTypeNormal, "Unregistered",
+		"Unregistered from SyncState, Sync Controller will delete from Cloudflare")
 
 	// Remove finalizer with retry logic to handle conflicts
 	if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.idp, func() {
@@ -182,8 +160,16 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 }
 
 // reconcileIdentityProvider ensures the AccessIdentityProvider configuration is registered with the service layer.
+// Following Unified Sync Architecture:
+// Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
 func (r *Reconciler) reconcileIdentityProvider() error {
 	providerName := r.idp.GetProviderName()
+
+	// Resolve credentials (without creating API client)
+	credInfo, err := r.resolveCredentials()
+	if err != nil {
+		return fmt.Errorf("resolve credentials: %w", err)
+	}
 
 	// Build the configuration
 	config := accesssvc.AccessIdentityProviderConfig{
@@ -199,28 +185,13 @@ func (r *Reconciler) reconcileIdentityProvider() error {
 		Name: r.idp.Name,
 	}
 
-	// Build credentials reference
-	credRef := networkingv1alpha2.CredentialsReference{
-		Name: r.idp.Spec.Cloudflare.CredentialsRef.Name,
-	}
-
-	// Get account ID - need to initialize API client first if not already done
-	accountID := r.idp.Status.AccountID
-	if accountID == "" {
-		// Initialize API client to get account ID
-		if err := r.initAPIClient(); err != nil {
-			return fmt.Errorf("initialize API client for account ID: %w", err)
-		}
-		accountID, _ = r.cfAPI.GetAccountId()
-	}
-
-	// Register with service
+	// Register with service using credentials info
 	opts := accesssvc.AccessIdentityProviderRegisterOptions{
-		AccountID:      accountID,
+		AccountID:      credInfo.AccountID,
 		ProviderID:     r.idp.Status.ProviderID,
 		Source:         source,
 		Config:         config,
-		CredentialsRef: credRef,
+		CredentialsRef: credInfo.CredentialsRef,
 	}
 
 	if err := r.idpService.Register(r.ctx, opts); err != nil {
@@ -231,13 +202,11 @@ func (r *Reconciler) reconcileIdentityProvider() error {
 	}
 
 	// Update status to Pending if not already synced
-	return r.updateStatusPending()
+	return r.updateStatusPending(credInfo.AccountID)
 }
 
 // updateStatusPending updates the AccessIdentityProvider status to Pending state.
-//
-//nolint:revive // cognitive complexity is acceptable for status update logic
-func (r *Reconciler) updateStatusPending() error {
+func (r *Reconciler) updateStatusPending(accountID string) error {
 	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.idp, func() {
 		r.idp.Status.ObservedGeneration = r.idp.Generation
 
@@ -246,14 +215,12 @@ func (r *Reconciler) updateStatusPending() error {
 			r.idp.Status.State = "pending"
 		}
 
-		// Set account ID if we have it
-		if r.cfAPI != nil {
-			if accountID, err := r.cfAPI.GetAccountId(); err == nil {
-				r.idp.Status.AccountID = accountID
-			}
+		// Set account ID
+		if accountID != "" {
+			r.idp.Status.AccountID = accountID
 		}
 
-		r.setCondition(metav1.ConditionTrue, "Pending", "Configuration registered, waiting for sync")
+		r.setCondition(metav1.ConditionFalse, "Pending", "Configuration registered, waiting for sync")
 	})
 
 	if err != nil {
@@ -262,6 +229,8 @@ func (r *Reconciler) updateStatusPending() error {
 	}
 
 	r.log.Info("AccessIdentityProvider configuration registered", "name", r.idp.Name)
+	r.Recorder.Event(r.idp, corev1.EventTypeNormal, "Registered",
+		"Configuration registered to SyncState")
 	return nil
 }
 

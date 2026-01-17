@@ -527,40 +527,9 @@ func TestRedirectRuleStatus(t *testing.T) {
 	assert.Equal(t, metav1.ConditionTrue, status.Conditions[0].Status)
 }
 
-func TestClearRulesFromCloudflare_NoStatusIDs(t *testing.T) {
-	scheme := setupTestScheme(t)
-	ctx := context.Background()
-
-	rule := &networkingv1alpha2.RedirectRule{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-rule",
-			Namespace: "default",
-		},
-		Spec: networkingv1alpha2.RedirectRuleSpec{
-			Zone: "example.com",
-		},
-		Status: networkingv1alpha2.RedirectRuleStatus{
-			// Empty ZoneID and RulesetID
-		},
-	}
-
-	fakeClient := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(rule).
-		Build()
-
-	r := &Reconciler{
-		Client:   fakeClient,
-		Scheme:   scheme,
-		Recorder: record.NewFakeRecorder(10),
-	}
-
-	credRef := networkingv1alpha2.CredentialsReference{Name: "test-creds"}
-	needsRequeue := r.clearRulesFromCloudflare(ctx, rule, credRef)
-
-	// Should return false when no status IDs are set
-	assert.False(t, needsRequeue)
-}
+// Note: TestClearRulesFromCloudflare_NoStatusIDs removed
+// clearRulesFromCloudflare method removed following Unified Sync Architecture
+// Deletion is now handled by SyncController, not ResourceController
 
 func TestHandleDeletion_NoFinalizer(t *testing.T) {
 	scheme := setupTestScheme(t)

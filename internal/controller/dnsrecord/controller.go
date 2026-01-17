@@ -166,14 +166,14 @@ func (r *DNSRecordReconciler) resolveZoneAndCredentials(
 }
 
 // handleDeletion handles the deletion of a DNSRecord.
-// It deletes the record from Cloudflare and unregisters from SyncState.
-//
-//nolint:revive // cognitive complexity is acceptable for deletion handling
+// Following Unified Sync Architecture:
+// Resource Controller only unregisters from SyncState.
+// DNS Sync Controller handles the actual Cloudflare API deletion.
 func (r *DNSRecordReconciler) handleDeletion(
 	ctx context.Context,
 	dnsRecord *networkingv1alpha2.DNSRecord,
-	zoneID string,
-	credRef networkingv1alpha2.CredentialsReference,
+	_ string, // zoneID - not used, Sync Controller handles deletion
+	_ networkingv1alpha2.CredentialsReference, // credRef - not used
 ) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
@@ -181,50 +181,27 @@ func (r *DNSRecordReconciler) handleDeletion(
 		return ctrl.Result{}, nil
 	}
 
-	// Delete from Cloudflare if record exists
-	effectiveZoneID := dnsRecord.Status.ZoneID
-	if effectiveZoneID == "" {
-		effectiveZoneID = zoneID
-	}
-
-	if dnsRecord.Status.RecordID != "" && effectiveZoneID != "" {
-		// Create API client for deletion
-		cfCredRef := &networkingv1alpha2.CloudflareCredentialsRef{Name: credRef.Name}
-		apiClient, err := cf.NewAPIClientFromCredentialsRef(ctx, r.Client, cfCredRef)
-		if err != nil {
-			logger.Error(err, "Failed to create API client for deletion")
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-		}
-
-		logger.Info("Deleting DNS Record from Cloudflare",
-			"recordId", dnsRecord.Status.RecordID,
-			"zoneId", effectiveZoneID)
-
-		if err := apiClient.DeleteDNSRecordInZone(effectiveZoneID, dnsRecord.Status.RecordID); err != nil {
-			if !cf.IsNotFoundError(err) {
-				logger.Error(err, "Failed to delete DNS Record from Cloudflare")
-				r.Recorder.Event(dnsRecord, corev1.EventTypeWarning, "DeleteFailed",
-					fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
-				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-			}
-			logger.Info("DNS Record already deleted from Cloudflare")
-			r.Recorder.Event(dnsRecord, corev1.EventTypeNormal, "AlreadyDeleted",
-				"DNS Record was already deleted from Cloudflare")
-		} else {
-			r.Recorder.Event(dnsRecord, corev1.EventTypeNormal, "Deleted", "Deleted from Cloudflare")
-		}
-	}
-
-	// Unregister from SyncState
+	// Unregister from SyncState - this triggers Sync Controller to delete from Cloudflare
+	// Following: Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
 	source := service.Source{
 		Kind:      "DNSRecord",
 		Namespace: dnsRecord.Namespace,
 		Name:      dnsRecord.Name,
 	}
+
+	logger.Info("Unregistering DNS record from SyncState",
+		"recordId", dnsRecord.Status.RecordID,
+		"source", fmt.Sprintf("%s/%s", dnsRecord.Namespace, dnsRecord.Name))
+
 	if err := r.dnsService.Unregister(ctx, dnsRecord.Status.RecordID, source); err != nil {
 		logger.Error(err, "Failed to unregister DNS record from SyncState")
-		// Non-fatal - continue with finalizer removal
+		r.Recorder.Event(dnsRecord, corev1.EventTypeWarning, "UnregisterFailed",
+			fmt.Sprintf("Failed to unregister from SyncState: %s", err.Error()))
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
+
+	r.Recorder.Event(dnsRecord, corev1.EventTypeNormal, "Unregistered",
+		"Unregistered from SyncState, Sync Controller will delete from Cloudflare")
 
 	// Remove finalizer with retry logic
 	if err := controller.UpdateWithConflictRetry(ctx, r.Client, dnsRecord, func() {

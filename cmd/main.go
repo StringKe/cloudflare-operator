@@ -42,6 +42,7 @@ import (
 	dnssync "github.com/StringKe/cloudflare-operator/internal/sync/dns"
 	gatewaysync "github.com/StringKe/cloudflare-operator/internal/sync/gateway"
 	networkroutesync "github.com/StringKe/cloudflare-operator/internal/sync/networkroute"
+	privateservicesync "github.com/StringKe/cloudflare-operator/internal/sync/privateservice"
 	r2sync "github.com/StringKe/cloudflare-operator/internal/sync/r2"
 	rulesetsync "github.com/StringKe/cloudflare-operator/internal/sync/ruleset"
 	tunnelconfigsync "github.com/StringKe/cloudflare-operator/internal/sync/tunnel"
@@ -515,6 +516,12 @@ func main() {
 	// NetworkRouteSyncController syncs NetworkRoute configuration to Cloudflare API
 	if err = networkroutesync.NewController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NetworkRouteSync")
+		os.Exit(1)
+	}
+
+	// PrivateServiceSyncController syncs PrivateService tunnel route configuration to Cloudflare API
+	if err = privateservicesync.NewController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "PrivateServiceSync")
 		os.Exit(1)
 	}
 

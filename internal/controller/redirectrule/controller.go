@@ -97,47 +97,44 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 }
 
 // resolveCredentials resolves the credentials reference, account ID and zone ID.
+// Following Unified Sync Architecture, the Resource Controller only needs
+// credential metadata (accountID, credRef) - it does not create a Cloudflare API client.
+// Zone ID resolution is deferred to the Sync Controller.
 func (r *Reconciler) resolveCredentials(
 	ctx context.Context,
 	rule *networkingv1alpha2.RedirectRule,
 ) (controller.CredentialsResult, error) {
 	logger := log.FromContext(ctx)
 
-	var result controller.CredentialsResult
-
-	// Get credentials reference
-	if rule.Spec.CredentialsRef != nil {
-		result.CredentialsName = rule.Spec.CredentialsRef.Name
-	}
-
-	// Get account ID and zone ID from credentials
-	cfCredRef := &networkingv1alpha2.CloudflareCredentialsRef{Name: result.CredentialsName}
-	apiClient, err := cf.NewAPIClientFromCredentialsRef(ctx, r.Client, cfCredRef)
+	// Resolve credentials using the unified controller helper
+	credInfo, err := controller.ResolveCredentialsFromRef(ctx, r.Client, logger, rule.Spec.CredentialsRef)
 	if err != nil {
-		return result, fmt.Errorf("failed to create API client: %w", err)
+		return controller.CredentialsResult{}, fmt.Errorf("failed to resolve credentials: %w", err)
 	}
 
-	result.AccountID = apiClient.AccountId
-	if result.AccountID == "" {
+	if credInfo.AccountID == "" {
 		logger.V(1).Info("Account ID not available from credentials, will be resolved during sync")
 	}
 
-	// Get zone ID
-	apiClient.Domain = rule.Spec.Zone
-	zoneID, err := apiClient.GetZoneId()
-	if err != nil {
-		return result, fmt.Errorf("failed to get zone ID for %s: %w", rule.Spec.Zone, err)
+	// Build result - Zone ID resolution is deferred to Sync Controller
+	// The zone name is stored in the config, Sync Controller will resolve it
+	result := controller.CredentialsResult{
+		CredentialsName: credInfo.CredentialsRef.Name,
+		AccountID:       credInfo.AccountID,
+		// ZoneID is left empty - Sync Controller will resolve it from zone name
 	}
-	result.ZoneID = zoneID
 
 	return result, nil
 }
 
-// handleDeletion handles the deletion of RedirectRule
+// handleDeletion handles the deletion of RedirectRule.
+// Following Unified Sync Architecture:
+// Resource Controller only unregisters from SyncState.
+// RedirectRule Sync Controller handles the actual Cloudflare API deletion.
 func (r *Reconciler) handleDeletion(
 	ctx context.Context,
 	rule *networkingv1alpha2.RedirectRule,
-	credRef networkingv1alpha2.CredentialsReference,
+	_ networkingv1alpha2.CredentialsReference,
 ) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
@@ -145,23 +142,27 @@ func (r *Reconciler) handleDeletion(
 		return ctrl.Result{}, nil
 	}
 
-	// Clear rules from Cloudflare
-	if r.clearRulesFromCloudflare(ctx, rule, credRef) {
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-	}
+	logger.Info("Unregistering RedirectRule from SyncState")
 
-	// Unregister from SyncState
+	// Unregister from SyncState - this triggers Sync Controller to delete from Cloudflare
+	// Following: Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
 	source := service.Source{
 		Kind:      "RedirectRule",
 		Namespace: rule.Namespace,
 		Name:      rule.Name,
 	}
+
 	if err := r.redirectRuleService.Unregister(ctx, rule.Status.RulesetID, source); err != nil {
 		logger.Error(err, "Failed to unregister RedirectRule from SyncState")
-		// Non-fatal - continue with finalizer removal
+		r.Recorder.Event(rule, corev1.EventTypeWarning, "UnregisterFailed",
+			fmt.Sprintf("Failed to unregister from SyncState: %s", err.Error()))
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 
-	// Remove finalizer
+	r.Recorder.Event(rule, corev1.EventTypeNormal, "Unregistered",
+		"Unregistered from SyncState, Sync Controller will delete from Cloudflare")
+
+	// Remove finalizer with retry logic to handle conflicts
 	if err := controller.UpdateWithConflictRetry(ctx, r.Client, rule, func() {
 		controllerutil.RemoveFinalizer(rule, finalizerName)
 	}); err != nil {
@@ -170,40 +171,6 @@ func (r *Reconciler) handleDeletion(
 
 	r.Recorder.Event(rule, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
 	return ctrl.Result{}, nil
-}
-
-// clearRulesFromCloudflare clears the redirect rules from Cloudflare.
-// Returns true if reconciliation should be requeued.
-func (r *Reconciler) clearRulesFromCloudflare(
-	ctx context.Context,
-	rule *networkingv1alpha2.RedirectRule,
-	credRef networkingv1alpha2.CredentialsReference,
-) bool {
-	if rule.Status.ZoneID == "" || rule.Status.RulesetID == "" {
-		return false
-	}
-
-	logger := log.FromContext(ctx)
-	cfCredRef := &networkingv1alpha2.CloudflareCredentialsRef{Name: credRef.Name}
-	cfAPI, err := cf.NewAPIClientFromCredentialsRef(ctx, r.Client, cfCredRef)
-	if err != nil {
-		return false // Skip if can't create client
-	}
-
-	_, err = cfAPI.UpdateEntrypointRuleset(ctx, rule.Status.ZoneID, redirectPhase, "", nil)
-	if err == nil {
-		logger.Info("Redirect rules cleared")
-		r.Recorder.Event(rule, corev1.EventTypeNormal, "Deleted", "Redirect rules cleared")
-		return false
-	}
-
-	if cf.IsNotFoundError(err) {
-		return false
-	}
-
-	logger.Error(err, "Failed to clear redirect rules")
-	r.Recorder.Event(rule, corev1.EventTypeWarning, "DeleteFailed", cf.SanitizeErrorMessage(err))
-	return true
 }
 
 // registerRule registers the RedirectRule configuration to SyncState.

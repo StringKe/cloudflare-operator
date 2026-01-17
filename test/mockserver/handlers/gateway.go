@@ -139,9 +139,9 @@ func (h *Handlers) DeleteGatewayRule(w http.ResponseWriter, r *http.Request) {
 
 // GatewayListCreateRequest represents a gateway list creation request.
 type GatewayListCreateRequest struct {
-	Name        string                  `json:"name"`
-	Description string                  `json:"description"`
-	Type        string                  `json:"type"`
+	Name        string                   `json:"name"`
+	Description string                   `json:"description"`
+	Type        string                   `json:"type"`
 	Items       []models.GatewayListItem `json:"items"`
 }
 
@@ -263,13 +263,13 @@ func (h *Handlers) UpdateGatewayConfiguration(w http.ResponseWriter, r *http.Req
 
 // DevicePostureRuleCreateRequest represents a device posture rule creation request.
 type DevicePostureRuleCreateRequest struct {
-	Name        string                   `json:"name"`
-	Description string                   `json:"description"`
-	Type        string                   `json:"type"`
-	Schedule    string                   `json:"schedule"`
-	Expiration  string                   `json:"expiration"`
+	Name        string                      `json:"name"`
+	Description string                      `json:"description"`
+	Type        string                      `json:"type"`
+	Schedule    string                      `json:"schedule"`
+	Expiration  string                      `json:"expiration"`
 	Match       []models.DevicePostureMatch `json:"match"`
-	Input       map[string]interface{}   `json:"input"`
+	Input       map[string]interface{}      `json:"input"`
 }
 
 // CreateDevicePostureRule handles POST /accounts/{accountId}/devices/posture.

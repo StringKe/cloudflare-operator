@@ -12,20 +12,20 @@ import (
 
 // RulesetCreateRequest represents a ruleset creation request.
 type RulesetCreateRequest struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	Kind        string         `json:"kind"`
-	Phase       string         `json:"phase"`
-	Rules       []RulesetRule  `json:"rules"`
+	Name        string        `json:"name"`
+	Description string        `json:"description"`
+	Kind        string        `json:"kind"`
+	Phase       string        `json:"phase"`
+	Rules       []RulesetRule `json:"rules"`
 }
 
 // RulesetRule represents a single rule in a ruleset.
 type RulesetRule struct {
-	ID          string                 `json:"id,omitempty"`
-	Action      string                 `json:"action"`
-	Expression  string                 `json:"expression"`
-	Description string                 `json:"description,omitempty"`
-	Enabled     *bool                  `json:"enabled,omitempty"`
+	ID               string                 `json:"id,omitempty"`
+	Action           string                 `json:"action"`
+	Expression       string                 `json:"expression"`
+	Description      string                 `json:"description,omitempty"`
+	Enabled          *bool                  `json:"enabled,omitempty"`
 	ActionParameters map[string]interface{} `json:"action_parameters,omitempty"`
 }
 

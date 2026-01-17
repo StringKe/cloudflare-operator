@@ -71,8 +71,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	credRef := networkingv1alpha2.CredentialsReference{Name: creds.CredentialsName}
 
 	// Handle deletion
+	// Following Unified Sync Architecture: only unregister from SyncState
+	// Sync Controller handles actual Cloudflare API deletion
 	if !domain.DeletionTimestamp.IsZero() {
-		return r.handleDeletion(ctx, domain, credRef)
+		return r.handleDeletion(ctx, domain)
 	}
 
 	// Add finalizer if not present
@@ -88,44 +90,41 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 }
 
 // resolveCredentials resolves the credentials reference, account ID and zone ID.
+// Following Unified Sync Architecture, the Resource Controller only needs
+// credential metadata (accountID, credRef) - it does not create a Cloudflare API client.
 func (r *Reconciler) resolveCredentials(
 	ctx context.Context,
 	domain *networkingv1alpha2.R2BucketDomain,
 ) (controller.CredentialsResult, error) {
 	logger := log.FromContext(ctx)
 
-	var result controller.CredentialsResult
-
-	// Get credentials reference
-	if domain.Spec.CredentialsRef != nil {
-		result.CredentialsName = domain.Spec.CredentialsRef.Name
-	}
-
-	// Get zone ID from spec
-	result.ZoneID = domain.Spec.ZoneID
-
-	// Get account ID from credentials
-	cfCredRef := &networkingv1alpha2.CloudflareCredentialsRef{Name: result.CredentialsName}
-	apiClient, err := cf.NewAPIClientFromCredentialsRef(ctx, r.Client, cfCredRef)
+	// Resolve credentials using the unified controller helper
+	credInfo, err := controller.ResolveCredentialsFromRef(ctx, r.Client, logger, domain.Spec.CredentialsRef)
 	if err != nil {
-		return result, fmt.Errorf("failed to create API client: %w", err)
+		return controller.CredentialsResult{}, fmt.Errorf("failed to resolve credentials: %w", err)
 	}
 
-	result.AccountID = apiClient.AccountId
-	if result.AccountID == "" {
+	if credInfo.AccountID == "" {
 		logger.V(1).Info("Account ID not available from credentials, will be resolved during sync")
+	}
+
+	// Build result with zone ID from spec
+	result := controller.CredentialsResult{
+		CredentialsName: credInfo.CredentialsRef.Name,
+		AccountID:       credInfo.AccountID,
+		ZoneID:          domain.Spec.ZoneID,
 	}
 
 	return result, nil
 }
 
-// handleDeletion handles the deletion of R2BucketDomain
-//
-//nolint:revive // cognitive complexity is acceptable for deletion handling
+// handleDeletion handles the deletion of R2BucketDomain.
+// Following Unified Sync Architecture:
+// Resource Controller only unregisters from SyncState.
+// R2BucketDomain Sync Controller handles the actual Cloudflare API deletion.
 func (r *Reconciler) handleDeletion(
 	ctx context.Context,
 	domain *networkingv1alpha2.R2BucketDomain,
-	credRef networkingv1alpha2.CredentialsReference,
 ) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
@@ -133,38 +132,25 @@ func (r *Reconciler) handleDeletion(
 		return ctrl.Result{}, nil
 	}
 
-	// Remove the custom domain from Cloudflare
-	if domain.Status.DomainID != "" || domain.Spec.Domain != "" {
-		cfCredRef := &networkingv1alpha2.CloudflareCredentialsRef{Name: credRef.Name}
-		cfAPI, err := cf.NewAPIClientFromCredentialsRef(ctx, r.Client, cfCredRef)
-		if err == nil {
-			domainName := domain.Spec.Domain
-			if err := cfAPI.DeleteR2CustomDomain(ctx, domain.Spec.BucketName, domainName); err != nil {
-				if !cf.IsNotFoundError(err) {
-					logger.Error(err, "Failed to delete R2 custom domain")
-					r.Recorder.Event(domain, corev1.EventTypeWarning, "DeleteFailed",
-						cf.SanitizeErrorMessage(err))
-					return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-				}
-			} else {
-				logger.Info("R2 custom domain deleted", "domain", domainName)
-				r.Recorder.Event(domain, corev1.EventTypeNormal, "Deleted",
-					fmt.Sprintf("Custom domain %s removed from bucket %s",
-						domainName, domain.Spec.BucketName))
-			}
-		}
-	}
+	logger.Info("Unregistering R2BucketDomain from SyncState")
 
-	// Unregister from SyncState
+	// Unregister from SyncState - this triggers Sync Controller to delete from Cloudflare
+	// Following: Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
 	source := service.Source{
 		Kind:      "R2BucketDomain",
 		Namespace: domain.Namespace,
 		Name:      domain.Name,
 	}
+
 	if err := r.domainService.Unregister(ctx, domain.Status.DomainID, source); err != nil {
 		logger.Error(err, "Failed to unregister R2 bucket domain from SyncState")
-		// Non-fatal - continue with finalizer removal
+		r.Recorder.Event(domain, corev1.EventTypeWarning, "UnregisterFailed",
+			fmt.Sprintf("Failed to unregister from SyncState: %s", err.Error()))
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
+
+	r.Recorder.Event(domain, corev1.EventTypeNormal, "Unregistered",
+		"Unregistered from SyncState, Sync Controller will delete from Cloudflare")
 
 	// Remove finalizer
 	if err := controller.UpdateWithConflictRetry(ctx, r.Client, domain, func() {

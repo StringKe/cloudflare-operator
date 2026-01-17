@@ -21,12 +21,12 @@ import (
 
 // Server is the mock Cloudflare API server.
 type Server struct {
-	httpServer     *http.Server
-	store          *store.Store
-	errorInjector  *injection.ErrorInjector
-	requestLog     []RequestLogEntry
-	requestLogMu   sync.RWMutex
-	port           int
+	httpServer    *http.Server
+	store         *store.Store
+	errorInjector *injection.ErrorInjector
+	requestLog    []RequestLogEntry
+	requestLogMu  sync.RWMutex
+	port          int
 }
 
 // RequestLogEntry records an API request.
@@ -250,8 +250,8 @@ func generateToken(length int) string {
 // writeSuccess writes a successful response.
 func writeSuccess[T any](w http.ResponseWriter, result T) {
 	resp := struct {
-		Success bool   `json:"success"`
-		Result  T      `json:"result"`
+		Success bool `json:"success"`
+		Result  T    `json:"result"`
 	}{
 		Success: true,
 		Result:  result,

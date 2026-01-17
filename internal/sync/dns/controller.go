@@ -4,6 +4,12 @@
 // Package dns provides the DNS Sync Controller for managing Cloudflare DNS records.
 // Unlike TunnelConfigSyncController which aggregates multiple sources,
 // DNSSyncController handles individual DNS records with a 1:1 mapping.
+//
+// Unified Sync Architecture Flow:
+// K8s Resources → Resource Controllers → Core Services → SyncState CRD → Sync Controllers → Cloudflare API
+//
+// This Sync Controller is the SINGLE point that calls Cloudflare API for DNS records.
+// It handles create, update, and delete operations based on SyncState changes.
 package dns
 
 import (
@@ -12,6 +18,7 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/StringKe/cloudflare-operator/api/v1alpha2"
@@ -20,9 +27,16 @@ import (
 	"github.com/StringKe/cloudflare-operator/internal/sync/common"
 )
 
+const (
+	// FinalizerName is the finalizer for DNS SyncState resources.
+	// This ensures we delete the DNS record from Cloudflare before removing SyncState.
+	FinalizerName = "dns.sync.cloudflare-operator.io/finalizer"
+)
+
 // Controller is the Sync Controller for DNS Record Configuration.
 // It watches CloudflareSyncState resources of type DNSRecord,
 // extracts the configuration, and syncs to Cloudflare API.
+// This is the SINGLE point that calls Cloudflare DNS API.
 type Controller struct {
 	*common.BaseSyncController
 }
@@ -35,13 +49,18 @@ func NewController(c client.Client) *Controller {
 }
 
 // Reconcile processes a CloudflareSyncState resource for DNS record.
+// Following Unified Sync Architecture:
+// K8s Resources → Resource Controllers → Core Services → SyncState CRD → Sync Controllers → Cloudflare API
+//
 // The reconciliation flow:
 // 1. Get the SyncState resource
-// 2. Check for debounce
-// 3. Extract DNS record configuration
-// 4. Compute hash for change detection
-// 5. If changed, sync to Cloudflare API
-// 6. Update SyncState status
+// 2. Handle deletion (if being deleted or no sources)
+// 3. Add finalizer for cleanup
+// 4. Check for debounce
+// 5. Extract DNS record configuration
+// 6. Compute hash for change detection
+// 7. If changed, sync to Cloudflare API
+// 8. Update SyncState status
 //
 //nolint:revive // cognitive complexity is acceptable for this central reconciliation loop
 func (r *Controller) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -66,18 +85,29 @@ func (r *Controller) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		"cloudflareId", syncState.Spec.CloudflareID,
 		"sources", len(syncState.Spec.Sources))
 
+	// Handle deletion - this is the SINGLE point for Cloudflare API delete calls
+	if !syncState.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, syncState)
+	}
+
+	// Check if there are any sources - if none, delete from Cloudflare
+	if len(syncState.Spec.Sources) == 0 {
+		logger.Info("No sources in SyncState, deleting from Cloudflare")
+		return r.handleDeletion(ctx, syncState)
+	}
+
+	// Add finalizer if not present
+	if !controllerutil.ContainsFinalizer(syncState, FinalizerName) {
+		controllerutil.AddFinalizer(syncState, FinalizerName)
+		if err := r.Client.Update(ctx, syncState); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{Requeue: true}, nil
+	}
+
 	// Skip if there's a pending debounced request
 	if r.Debouncer.IsPending(req.Name) {
 		logger.V(1).Info("Skipping reconcile - debounced request pending")
-		return ctrl.Result{}, nil
-	}
-
-	// Check if there are any sources
-	if len(syncState.Spec.Sources) == 0 {
-		logger.Info("No sources in SyncState, marking as synced (no-op)")
-		if err := r.SetSyncStatus(ctx, syncState, v1alpha2.SyncStatusSynced); err != nil {
-			return ctrl.Result{}, err
-		}
 		return ctrl.Result{}, nil
 	}
 
@@ -288,6 +318,82 @@ func convertRecordData(data *dnssvc.DNSRecordData) *cf.DNSRecordDataParams {
 		// URI record data
 		ContentURI: data.ContentURI,
 	}
+}
+
+// handleDeletion handles the deletion of DNS record from Cloudflare.
+// This is the SINGLE point for Cloudflare DNS record deletion in the system.
+// Following Unified Sync Architecture:
+// Resource Controller unregisters → SyncState updated → Sync Controller deletes from Cloudflare
+func (r *Controller) handleDeletion(
+	ctx context.Context,
+	syncState *v1alpha2.CloudflareSyncState,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	// If no finalizer, nothing to do
+	if !controllerutil.ContainsFinalizer(syncState, FinalizerName) {
+		return ctrl.Result{}, nil
+	}
+
+	// Get the Cloudflare record ID
+	cloudflareID := syncState.Spec.CloudflareID
+
+	// Skip if pending ID (record was never created)
+	if common.IsPendingID(cloudflareID) {
+		logger.Info("Skipping deletion - DNS record was never created",
+			"cloudflareId", cloudflareID)
+	} else if cloudflareID != "" {
+		// Delete from Cloudflare
+		zoneID, err := common.RequireZoneID(syncState)
+		if err != nil {
+			logger.Error(err, "Cannot delete - no zone ID")
+		} else {
+			// Create API client
+			apiClient, err := common.CreateAPIClient(ctx, r.Client, syncState)
+			if err != nil {
+				logger.Error(err, "Failed to create API client for deletion")
+				return ctrl.Result{RequeueAfter: common.RequeueAfterError(err)}, nil
+			}
+
+			logger.Info("Deleting DNS record from Cloudflare",
+				"recordId", cloudflareID,
+				"zoneId", zoneID)
+
+			if err := apiClient.DeleteDNSRecordInZone(zoneID, cloudflareID); err != nil {
+				if !cf.IsNotFoundError(err) {
+					logger.Error(err, "Failed to delete DNS record from Cloudflare")
+					if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
+						logger.Error(statusErr, "Failed to update error status")
+					}
+					return ctrl.Result{RequeueAfter: common.RequeueAfterError(err)}, nil
+				}
+				logger.Info("DNS record already deleted from Cloudflare")
+			} else {
+				logger.Info("Successfully deleted DNS record from Cloudflare",
+					"recordId", cloudflareID)
+			}
+		}
+	}
+
+	// Remove finalizer
+	controllerutil.RemoveFinalizer(syncState, FinalizerName)
+	if err := r.Client.Update(ctx, syncState); err != nil {
+		logger.Error(err, "Failed to remove finalizer")
+		return ctrl.Result{}, err
+	}
+
+	// If sources are empty (not a deletion timestamp trigger), delete the SyncState itself
+	if syncState.DeletionTimestamp.IsZero() && len(syncState.Spec.Sources) == 0 {
+		logger.Info("Deleting orphaned SyncState")
+		if err := r.Client.Delete(ctx, syncState); err != nil {
+			if client.IgnoreNotFound(err) != nil {
+				logger.Error(err, "Failed to delete SyncState")
+				return ctrl.Result{}, err
+			}
+		}
+	}
+
+	return ctrl.Result{}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

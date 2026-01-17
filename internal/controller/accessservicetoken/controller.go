@@ -22,7 +22,6 @@ import (
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
-	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
 	"github.com/StringKe/cloudflare-operator/internal/service"
 	accesssvc "github.com/StringKe/cloudflare-operator/internal/service/access"
@@ -45,7 +44,6 @@ type Reconciler struct {
 	ctx   context.Context
 	log   logr.Logger
 	token *networkingv1alpha2.AccessServiceToken
-	cfAPI *cf.API
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=accessservicetokens,verbs=get;list;watch;create;update;patch;delete
@@ -71,13 +69,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// Check if AccessServiceToken is being deleted
+	// Following Unified Sync Architecture: only unregister from SyncState
+	// Sync Controller handles actual Cloudflare API deletion
 	if r.token.GetDeletionTimestamp() != nil {
-		// Initialize API client for deletion
-		if err := r.initAPIClient(); err != nil {
-			r.log.Error(err, "failed to initialize API client for deletion")
-			r.setCondition(metav1.ConditionFalse, controller.EventReasonAPIError, err.Error())
-			return ctrl.Result{}, err
-		}
 		return r.handleDeletion()
 	}
 
@@ -100,65 +94,42 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	return ctrl.Result{}, nil
 }
 
-// initAPIClient initializes the Cloudflare API client.
-func (r *Reconciler) initAPIClient() error {
+// resolveCredentials resolves the credentials reference and returns the credentials info.
+// Following Unified Sync Architecture, the Resource Controller only needs
+// credential metadata (accountID, credRef) - it does not create a Cloudflare API client.
+func (r *Reconciler) resolveCredentials() (*controller.CredentialsInfo, error) {
 	// AccessServiceToken is cluster-scoped, use operator namespace for legacy inline secrets
-	api, err := cf.NewAPIClientFromDetails(r.ctx, r.Client, controller.OperatorNamespace, r.token.Spec.Cloudflare)
+	info, err := controller.ResolveCredentialsForService(
+		r.ctx,
+		r.Client,
+		r.log,
+		r.token.Spec.Cloudflare,
+		controller.OperatorNamespace,
+		r.token.Status.AccountID,
+	)
 	if err != nil {
-		r.log.Error(err, "failed to initialize API client")
-		r.Recorder.Event(r.token, corev1.EventTypeWarning, controller.EventReasonAPIError, "Failed to initialize API client: "+err.Error())
-		return err
+		r.log.Error(err, "failed to resolve credentials")
+		r.Recorder.Event(r.token, corev1.EventTypeWarning, controller.EventReasonAPIError,
+			"Failed to resolve credentials: "+err.Error())
+		return nil, err
 	}
 
-	api.ValidAccountId = r.token.Status.AccountID
-	r.cfAPI = api
-	return nil
+	return info, nil
 }
 
 // handleDeletion handles the deletion of an AccessServiceToken.
-//
-//nolint:revive // cognitive complexity is acceptable for deletion handling
+// Following Unified Sync Architecture:
+// Resource Controller only unregisters from SyncState.
+// AccessServiceToken Sync Controller handles the actual Cloudflare API deletion.
 func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(r.token, FinalizerName) {
 		return ctrl.Result{}, nil
 	}
 
-	r.log.Info("Deleting AccessServiceToken")
-	r.Recorder.Event(r.token, corev1.EventTypeNormal, "Deleting", "Starting AccessServiceToken deletion")
+	r.log.Info("Unregistering AccessServiceToken from SyncState")
 
-	// Try to get Token ID from status or by looking up by name
+	// Get Token ID from status
 	tokenID := r.token.Status.TokenID
-	if tokenID == "" {
-		// Status ID is empty - try to find by name to prevent orphaned resources
-		tokenName := r.token.GetTokenName()
-		r.log.Info("Status.TokenID is empty, trying to find token by name", "name", tokenName)
-		existing, err := r.cfAPI.GetAccessServiceTokenByName(tokenName)
-		if err == nil && existing != nil {
-			tokenID = existing.TokenID
-			r.log.Info("Found AccessServiceToken by name", "id", tokenID)
-		} else {
-			r.log.Info("AccessServiceToken not found by name, assuming it was never created or already deleted")
-		}
-	}
-
-	// Delete from Cloudflare if we have an ID
-	if tokenID != "" {
-		if err := r.cfAPI.DeleteAccessServiceToken(tokenID); err != nil {
-			if !cf.IsNotFoundError(err) {
-				r.log.Error(err, "failed to delete AccessServiceToken from Cloudflare")
-				r.Recorder.Event(r.token, corev1.EventTypeWarning,
-					controller.EventReasonDeleteFailed, cf.SanitizeErrorMessage(err))
-				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-			}
-			r.log.Info("AccessServiceToken already deleted from Cloudflare", "id", tokenID)
-			r.Recorder.Event(r.token, corev1.EventTypeNormal,
-				"AlreadyDeleted", "AccessServiceToken was already deleted from Cloudflare")
-		} else {
-			r.log.Info("AccessServiceToken deleted from Cloudflare", "id", tokenID)
-			r.Recorder.Event(r.token, corev1.EventTypeNormal,
-				controller.EventReasonDeleted, "Deleted from Cloudflare")
-		}
-	}
 
 	// Remove secret finalizer before removing token finalizer
 	if err := r.removeSecretFinalizer(); err != nil {
@@ -166,15 +137,22 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 		// Don't block on this - the secret might have been deleted already
 	}
 
-	// Unregister from SyncState
+	// Unregister from SyncState - this triggers Sync Controller to delete from Cloudflare
+	// Following: Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
 	source := service.Source{
 		Kind: "AccessServiceToken",
 		Name: r.token.Name,
 	}
+
 	if err := r.tokenService.Unregister(r.ctx, tokenID, source); err != nil {
 		r.log.Error(err, "failed to unregister from SyncState")
-		// Non-fatal - continue with finalizer removal
+		r.Recorder.Event(r.token, corev1.EventTypeWarning, "UnregisterFailed",
+			fmt.Sprintf("Failed to unregister from SyncState: %s", err.Error()))
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
+
+	r.Recorder.Event(r.token, corev1.EventTypeNormal, "Unregistered",
+		"Unregistered from SyncState, Sync Controller will delete from Cloudflare")
 
 	// Remove finalizer with retry logic to handle conflicts
 	if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.token, func() {
@@ -189,10 +167,18 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 }
 
 // reconcileServiceToken ensures the AccessServiceToken configuration is registered with the service layer.
+// Following Unified Sync Architecture:
+// Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
 //
 //nolint:revive // cognitive complexity is acceptable for reconciliation logic
 func (r *Reconciler) reconcileServiceToken() error {
 	tokenName := r.token.GetTokenName()
+
+	// Resolve credentials (without creating API client)
+	credInfo, err := r.resolveCredentials()
+	if err != nil {
+		return fmt.Errorf("resolve credentials: %w", err)
+	}
 
 	// Build the configuration
 	config := accesssvc.AccessServiceTokenConfig{
@@ -214,28 +200,13 @@ func (r *Reconciler) reconcileServiceToken() error {
 		Name: r.token.Name,
 	}
 
-	// Build credentials reference
-	credRef := networkingv1alpha2.CredentialsReference{
-		Name: r.token.Spec.Cloudflare.CredentialsRef.Name,
-	}
-
-	// Get account ID - need to initialize API client first if not already done
-	accountID := r.token.Status.AccountID
-	if accountID == "" {
-		// Initialize API client to get account ID
-		if err := r.initAPIClient(); err != nil {
-			return fmt.Errorf("initialize API client for account ID: %w", err)
-		}
-		accountID, _ = r.cfAPI.GetAccountId()
-	}
-
-	// Register with service
+	// Register with service using credentials info
 	opts := accesssvc.AccessServiceTokenRegisterOptions{
-		AccountID:      accountID,
+		AccountID:      credInfo.AccountID,
 		TokenID:        r.token.Status.TokenID,
 		Source:         source,
 		Config:         config,
-		CredentialsRef: credRef,
+		CredentialsRef: credInfo.CredentialsRef,
 	}
 
 	if err := r.tokenService.Register(r.ctx, opts); err != nil {
@@ -254,13 +225,11 @@ func (r *Reconciler) reconcileServiceToken() error {
 	}
 
 	// Update status to Pending if not already synced
-	return r.updateStatusPending()
+	return r.updateStatusPending(credInfo.AccountID)
 }
 
 // updateStatusPending updates the AccessServiceToken status to Pending state.
-//
-//nolint:revive // cognitive complexity is acceptable for status update logic
-func (r *Reconciler) updateStatusPending() error {
+func (r *Reconciler) updateStatusPending(accountID string) error {
 	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.token, func() {
 		r.token.Status.ObservedGeneration = r.token.Generation
 
@@ -269,14 +238,12 @@ func (r *Reconciler) updateStatusPending() error {
 			r.token.Status.State = "pending"
 		}
 
-		// Set account ID if we have it
-		if r.cfAPI != nil {
-			if accountID, err := r.cfAPI.GetAccountId(); err == nil {
-				r.token.Status.AccountID = accountID
-			}
+		// Set account ID
+		if accountID != "" {
+			r.token.Status.AccountID = accountID
 		}
 
-		r.setCondition(metav1.ConditionTrue, "Pending", "Configuration registered, waiting for sync")
+		r.setCondition(metav1.ConditionFalse, "Pending", "Configuration registered, waiting for sync")
 	})
 
 	if err != nil {
@@ -285,6 +252,8 @@ func (r *Reconciler) updateStatusPending() error {
 	}
 
 	r.log.Info("AccessServiceToken configuration registered", "name", r.token.Name)
+	r.Recorder.Event(r.token, corev1.EventTypeNormal, "Registered",
+		"Configuration registered to SyncState")
 	return nil
 }
 

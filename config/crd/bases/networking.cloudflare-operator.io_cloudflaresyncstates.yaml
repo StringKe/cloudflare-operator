@@ -102,6 +102,7 @@ spec:
                 - AccessIdentityProvider
                 - VirtualNetwork
                 - NetworkRoute
+                - PrivateService
                 - R2Bucket
                 - R2BucketDomain
                 - R2BucketNotification

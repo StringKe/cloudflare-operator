@@ -4,6 +4,12 @@
 // Package networkroute provides the NetworkRoute Sync Controller for managing Cloudflare Tunnel Routes.
 // Unlike TunnelConfigSyncController which aggregates multiple sources,
 // NetworkRouteSyncController handles individual routes with a 1:1 mapping.
+//
+// Unified Sync Architecture Flow:
+// K8s Resources → Resource Controllers → Core Services → SyncState CRD → Sync Controllers → Cloudflare API
+//
+// This Sync Controller is the SINGLE point that calls Cloudflare API for Network Routes.
+// It handles create, update, and delete operations based on SyncState changes.
 package networkroute
 
 import (
@@ -13,6 +19,7 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -23,9 +30,16 @@ import (
 	"github.com/StringKe/cloudflare-operator/internal/sync/common"
 )
 
+const (
+	// FinalizerName is the finalizer for NetworkRoute SyncState resources.
+	// This ensures we delete the NetworkRoute from Cloudflare before removing SyncState.
+	FinalizerName = "networkroute.sync.cloudflare-operator.io/finalizer"
+)
+
 // Controller is the Sync Controller for NetworkRoute Configuration.
 // It watches CloudflareSyncState resources of type NetworkRoute,
 // extracts the configuration, and syncs to Cloudflare API.
+// This is the SINGLE point that calls Cloudflare NetworkRoute API.
 type Controller struct {
 	*common.BaseSyncController
 }
@@ -38,13 +52,18 @@ func NewController(c client.Client) *Controller {
 }
 
 // Reconcile processes a CloudflareSyncState resource for NetworkRoute.
+// Following Unified Sync Architecture:
+// K8s Resources → Resource Controllers → Core Services → SyncState CRD → Sync Controllers → Cloudflare API
+//
 // The reconciliation flow:
 // 1. Get the SyncState resource
-// 2. Check for debounce
-// 3. Extract NetworkRoute configuration
-// 4. Compute hash for change detection
-// 5. If changed, sync to Cloudflare API
-// 6. Update SyncState status
+// 2. Handle deletion (if being deleted or no sources)
+// 3. Add finalizer for cleanup
+// 4. Check for debounce
+// 5. Extract NetworkRoute configuration
+// 6. Compute hash for change detection
+// 7. If changed, sync to Cloudflare API
+// 8. Update SyncState status
 //
 //nolint:revive // cognitive complexity is acceptable for this central reconciliation loop
 func (r *Controller) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -69,18 +88,29 @@ func (r *Controller) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		"cloudflareId", syncState.Spec.CloudflareID,
 		"sources", len(syncState.Spec.Sources))
 
+	// Handle deletion - this is the SINGLE point for Cloudflare API delete calls
+	if !syncState.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, syncState)
+	}
+
+	// Check if there are any sources - if none, delete from Cloudflare
+	if len(syncState.Spec.Sources) == 0 {
+		logger.Info("No sources in SyncState, deleting from Cloudflare")
+		return r.handleDeletion(ctx, syncState)
+	}
+
+	// Add finalizer if not present
+	if !controllerutil.ContainsFinalizer(syncState, FinalizerName) {
+		controllerutil.AddFinalizer(syncState, FinalizerName)
+		if err := r.Client.Update(ctx, syncState); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{Requeue: true}, nil
+	}
+
 	// Skip if there's a pending debounced request
 	if r.Debouncer.IsPending(req.Name) {
 		logger.V(1).Info("Skipping reconcile - debounced request pending")
-		return ctrl.Result{}, nil
-	}
-
-	// Check if there are any sources
-	if len(syncState.Spec.Sources) == 0 {
-		logger.Info("No sources in SyncState, marking as synced (no-op)")
-		if err := r.SetSyncStatus(ctx, syncState, v1alpha2.SyncStatusSynced); err != nil {
-			return ctrl.Result{}, err
-		}
 		return ctrl.Result{}, nil
 	}
 
@@ -262,6 +292,95 @@ func (r *Controller) syncToCloudflare(
 		TunnelName:       result.TunnelName,
 		VirtualNetworkID: result.VirtualNetworkID,
 	}, nil
+}
+
+// handleDeletion handles the deletion of NetworkRoute from Cloudflare.
+// This is the SINGLE point for Cloudflare NetworkRoute deletion in the system.
+// Following Unified Sync Architecture:
+// Resource Controller unregisters → SyncState updated → Sync Controller deletes from Cloudflare
+func (r *Controller) handleDeletion(
+	ctx context.Context,
+	syncState *v1alpha2.CloudflareSyncState,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	// If no finalizer, nothing to do
+	if !controllerutil.ContainsFinalizer(syncState, FinalizerName) {
+		return ctrl.Result{}, nil
+	}
+
+	// Get the Cloudflare route network (used as ID for routes)
+	cloudflareID := syncState.Spec.CloudflareID
+
+	// Skip if pending ID (route was never created)
+	isPending := len(cloudflareID) > 8 && cloudflareID[:8] == "pending-"
+	if isPending {
+		logger.Info("Skipping deletion - NetworkRoute was never created",
+			"cloudflareId", cloudflareID)
+	} else if cloudflareID != "" {
+		// Create API client
+		credRef := &v1alpha2.CloudflareCredentialsRef{
+			Name: syncState.Spec.CredentialsRef.Name,
+		}
+		apiClient, err := cf.NewAPIClientFromCredentialsRef(ctx, r.Client, credRef)
+		if err != nil {
+			logger.Error(err, "Failed to create API client for deletion")
+			return ctrl.Result{RequeueAfter: common.RequeueAfterError(err)}, nil
+		}
+
+		// Set account ID
+		if syncState.Spec.AccountID != "" {
+			apiClient.ValidAccountId = syncState.Spec.AccountID
+		}
+
+		// Get virtual network ID from the config (if sources exist) or default
+		virtualNetworkID := "default"
+		if len(syncState.Spec.Sources) > 0 {
+			// Try to extract from first source's config
+			config, err := r.extractConfig(syncState)
+			if err == nil && config.VirtualNetworkID != "" {
+				virtualNetworkID = config.VirtualNetworkID
+			}
+		}
+
+		logger.Info("Deleting NetworkRoute from Cloudflare",
+			"network", cloudflareID,
+			"virtualNetworkId", virtualNetworkID)
+
+		if err := apiClient.DeleteTunnelRoute(cloudflareID, virtualNetworkID); err != nil {
+			if !cf.IsNotFoundError(err) {
+				logger.Error(err, "Failed to delete NetworkRoute from Cloudflare")
+				if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
+					logger.Error(statusErr, "Failed to update error status")
+				}
+				return ctrl.Result{RequeueAfter: common.RequeueAfterError(err)}, nil
+			}
+			logger.Info("NetworkRoute already deleted from Cloudflare")
+		} else {
+			logger.Info("Successfully deleted NetworkRoute from Cloudflare",
+				"network", cloudflareID)
+		}
+	}
+
+	// Remove finalizer
+	controllerutil.RemoveFinalizer(syncState, FinalizerName)
+	if err := r.Client.Update(ctx, syncState); err != nil {
+		logger.Error(err, "Failed to remove finalizer")
+		return ctrl.Result{}, err
+	}
+
+	// If sources are empty (not a deletion timestamp trigger), delete the SyncState itself
+	if syncState.DeletionTimestamp.IsZero() && len(syncState.Spec.Sources) == 0 {
+		logger.Info("Deleting orphaned SyncState")
+		if err := r.Client.Delete(ctx, syncState); err != nil {
+			if client.IgnoreNotFound(err) != nil {
+				logger.Error(err, "Failed to delete SyncState")
+				return ctrl.Result{}, err
+			}
+		}
+	}
+
+	return ctrl.Result{}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
