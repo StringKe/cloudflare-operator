@@ -1,0 +1,64 @@
+# MockServer deployment for E2E tests
+# This runs the mock Cloudflare API server inside the cluster
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cloudflare-operator-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudflare-mockserver
+  namespace: cloudflare-operator-system
+  labels:
+    app: cloudflare-mockserver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cloudflare-mockserver
+  template:
+    metadata:
+      labels:
+        app: cloudflare-mockserver
+    spec:
+      containers:
+        - name: mockserver
+          image: ghcr.io/stringke/cloudflare-operator-mockserver:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8787
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8787
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8787
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloudflare-mockserver
+  namespace: cloudflare-operator-system
+spec:
+  selector:
+    app: cloudflare-mockserver
+  ports:
+    - port: 8787
+      targetPort: 8787
+      name: http
+  type: ClusterIP

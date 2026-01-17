@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/test/e2e/framework"
@@ -37,6 +38,10 @@ func TestDNSRecordLifecycle(t *testing.T) {
 	require.NoError(t, f.SetupTestNamespace(testNS))
 	defer f.CleanupTestNamespace(testNS)
 
+	// Ensure operator namespace exists and create credentials
+	require.NoError(t, f.EnsureNamespaceExists(framework.OperatorNamespace))
+	require.NoError(t, f.CreateCloudflareCredentials(testCredentialsName, testAPIToken, testAccountID, true))
+
 	t.Run("CreateARecord", func(t *testing.T) {
 		record := &v1alpha2.DNSRecord{
 			ObjectMeta: metav1.ObjectMeta{
@@ -51,7 +56,7 @@ func TestDNSRecordLifecycle(t *testing.T) {
 				Proxied: true,
 				Cloudflare: v1alpha2.CloudflareDetails{
 					CredentialsRef: &v1alpha2.CloudflareCredentialsRef{
-						Name: "test-credentials",
+						Name: testCredentialsName,
 					},
 				},
 			},
@@ -88,7 +93,7 @@ func TestDNSRecordLifecycle(t *testing.T) {
 				Proxied: false,
 				Cloudflare: v1alpha2.CloudflareDetails{
 					CredentialsRef: &v1alpha2.CloudflareCredentialsRef{
-						Name: "test-credentials",
+						Name: testCredentialsName,
 					},
 				},
 			},
@@ -109,13 +114,20 @@ func TestDNSRecordLifecycle(t *testing.T) {
 		}, &record)
 		require.NoError(t, err)
 
+		originalRecordID := record.Status.RecordID
+
 		// Update content
 		record.Spec.Content = "192.168.1.2"
 		err = f.Client.Update(ctx, &record)
 		require.NoError(t, err)
 
-		// Wait for reconciliation
-		time.Sleep(5 * time.Second)
+		// Wait for reconciliation - check that spec change is reflected
+		err = f.WaitForStatusField(&record, func(obj client.Object) bool {
+			r := obj.(*v1alpha2.DNSRecord)
+			// Record ID should remain the same after update
+			return r.Status.RecordID == originalRecordID && r.Spec.Content == "192.168.1.2"
+		}, 30*time.Second)
+		require.NoError(t, err)
 
 		// Verify update preserved
 		err = f.Client.Get(ctx, types.NamespacedName{
@@ -166,6 +178,9 @@ func TestDNSRecordWithMXPriority(t *testing.T) {
 	require.NoError(t, f.SetupTestNamespace(testNS))
 	defer f.CleanupTestNamespace(testNS)
 
+	require.NoError(t, f.EnsureNamespaceExists(framework.OperatorNamespace))
+	require.NoError(t, f.CreateCloudflareCredentials(testCredentialsName, testAPIToken, testAccountID, true))
+
 	priority := 10
 	record := &v1alpha2.DNSRecord{
 		ObjectMeta: metav1.ObjectMeta{
@@ -180,7 +195,67 @@ func TestDNSRecordWithMXPriority(t *testing.T) {
 			Priority: &priority,
 			Cloudflare: v1alpha2.CloudflareDetails{
 				CredentialsRef: &v1alpha2.CloudflareCredentialsRef{
-					Name: "test-credentials",
+					Name: testCredentialsName,
+				},
+			},
+		},
+	}
+
+	err = f.Client.Create(ctx, record)
+	require.NoError(t, err)
+
+	err = f.WaitForCondition(record, "Ready", metav1.ConditionTrue, 2*time.Minute)
+	assert.NoError(t, err)
+
+	// Verify priority is preserved in status
+	var fetched v1alpha2.DNSRecord
+	err = f.Client.Get(ctx, types.NamespacedName{
+		Name:      record.Name,
+		Namespace: record.Namespace,
+	}, &fetched)
+	require.NoError(t, err)
+	assert.NotNil(t, fetched.Spec.Priority)
+	assert.Equal(t, 10, *fetched.Spec.Priority)
+
+	// Cleanup
+	_ = f.Client.Delete(ctx, record)
+	_ = f.WaitForDeletion(record, time.Minute)
+}
+
+// TestDNSRecordTXTRecord tests TXT record creation
+func TestDNSRecordTXTRecord(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping E2E test in short mode")
+	}
+
+	opts := framework.DefaultOptions()
+	opts.UseExistingCluster = true
+	f, err := framework.New(opts)
+	require.NoError(t, err)
+	defer f.Cleanup()
+
+	ctx := f.Context()
+	testNS := "e2e-dns-txt-test"
+
+	require.NoError(t, f.SetupTestNamespace(testNS))
+	defer f.CleanupTestNamespace(testNS)
+
+	require.NoError(t, f.EnsureNamespaceExists(framework.OperatorNamespace))
+	require.NoError(t, f.CreateCloudflareCredentials(testCredentialsName, testAPIToken, testAccountID, true))
+
+	record := &v1alpha2.DNSRecord{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "e2e-test-txt-record",
+			Namespace: testNS,
+		},
+		Spec: v1alpha2.DNSRecordSpec{
+			Name:    "_dmarc.example.com",
+			Type:    "TXT",
+			Content: "v=DMARC1; p=none; rua=mailto:dmarc@example.com",
+			TTL:     3600,
+			Cloudflare: v1alpha2.CloudflareDetails{
+				CredentialsRef: &v1alpha2.CloudflareCredentialsRef{
+					Name: testCredentialsName,
 				},
 			},
 		},

@@ -14,11 +14,13 @@ import (
 	"strings"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
@@ -305,19 +307,65 @@ func (f *Framework) WaitForDeletion(obj client.Object, timeout time.Duration) er
 // getConditions extracts conditions from a resource status
 func getConditions(obj client.Object) []metav1.Condition {
 	switch typed := obj.(type) {
+	// Network Layer
 	case *v1alpha2.Tunnel:
 		return typed.Status.Conditions
 	case *v1alpha2.ClusterTunnel:
-		return typed.Status.Conditions
-	case *v1alpha2.DNSRecord:
 		return typed.Status.Conditions
 	case *v1alpha2.VirtualNetwork:
 		return typed.Status.Conditions
 	case *v1alpha2.NetworkRoute:
 		return typed.Status.Conditions
+	case *v1alpha2.WARPConnector:
+		return typed.Status.Conditions
+	// Service Layer
+	case *v1alpha2.PrivateService:
+		return typed.Status.Conditions
+	case *v1alpha2.DNSRecord:
+		return typed.Status.Conditions
+	// Access Layer
 	case *v1alpha2.AccessApplication:
 		return typed.Status.Conditions
 	case *v1alpha2.AccessGroup:
+		return typed.Status.Conditions
+	case *v1alpha2.AccessIdentityProvider:
+		return typed.Status.Conditions
+	case *v1alpha2.AccessServiceToken:
+		return typed.Status.Conditions
+	// Device Layer
+	case *v1alpha2.DevicePostureRule:
+		return typed.Status.Conditions
+	case *v1alpha2.DeviceSettingsPolicy:
+		return typed.Status.Conditions
+	// Gateway Layer
+	case *v1alpha2.GatewayRule:
+		return typed.Status.Conditions
+	case *v1alpha2.GatewayList:
+		return typed.Status.Conditions
+	case *v1alpha2.GatewayConfiguration:
+		return typed.Status.Conditions
+	// R2 Storage
+	case *v1alpha2.R2Bucket:
+		return typed.Status.Conditions
+	case *v1alpha2.R2BucketDomain:
+		return typed.Status.Conditions
+	case *v1alpha2.R2BucketNotification:
+		return typed.Status.Conditions
+	// Rules
+	case *v1alpha2.ZoneRuleset:
+		return typed.Status.Conditions
+	case *v1alpha2.TransformRule:
+		return typed.Status.Conditions
+	case *v1alpha2.RedirectRule:
+		return typed.Status.Conditions
+	// SSL/TLS
+	case *v1alpha2.OriginCACertificate:
+		return typed.Status.Conditions
+	// Credentials
+	case *v1alpha2.CloudflareCredentials:
+		return typed.Status.Conditions
+	// Domain
+	case *v1alpha2.CloudflareDomain:
 		return typed.Status.Conditions
 	default:
 		return nil
@@ -342,4 +390,183 @@ func (f *Framework) MockServerURL() string {
 		return f.MockServer.URL()
 	}
 	return ""
+}
+
+// WaitForOperatorReady waits for the operator deployment to be available
+func (f *Framework) WaitForOperatorReady(timeout time.Duration) error {
+	return wait.PollUntilContextTimeout(f.ctx, DefaultInterval, timeout, true, func(ctx context.Context) (bool, error) {
+		var deploy appsv1.Deployment
+		key := types.NamespacedName{
+			Name:      "cloudflare-operator-controller-manager",
+			Namespace: OperatorNamespace,
+		}
+		if err := f.Client.Get(ctx, key, &deploy); err != nil {
+			if apierrors.IsNotFound(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		return deploy.Status.AvailableReplicas > 0, nil
+	})
+}
+
+// CreateCloudflareCredentials creates a CloudflareCredentials resource and its secret
+func (f *Framework) CreateCloudflareCredentials(name string, apiToken string, accountID string, isDefault bool) error {
+	// Create secret first
+	secretNS := OperatorNamespace
+	secretName := name + "-secret"
+
+	if err := f.SetupTestNamespace(secretNS); err != nil {
+		return fmt.Errorf("create operator namespace: %w", err)
+	}
+
+	if err := f.CreateSecret(secretNS, secretName, map[string]string{
+		"apiToken": apiToken,
+	}); err != nil {
+		return fmt.Errorf("create credentials secret: %w", err)
+	}
+
+	// Create CloudflareCredentials
+	creds := &v1alpha2.CloudflareCredentials{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+		Spec: v1alpha2.CloudflareCredentialsSpec{
+			AuthType:  v1alpha2.AuthTypeAPIToken,
+			AccountID: accountID,
+			SecretRef: v1alpha2.SecretReference{
+				Name:      secretName,
+				Namespace: secretNS,
+			},
+			IsDefault: isDefault,
+		},
+	}
+
+	err := f.Client.Create(f.ctx, creds)
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create cloudflare credentials: %w", err)
+	}
+
+	return nil
+}
+
+// WaitForStatusField waits for a specific status field to have an expected value
+func (f *Framework) WaitForStatusField(
+	obj client.Object,
+	fieldChecker func(client.Object) bool,
+	timeout time.Duration,
+) error {
+	key := types.NamespacedName{
+		Name:      obj.GetName(),
+		Namespace: obj.GetNamespace(),
+	}
+
+	return wait.PollUntilContextTimeout(f.ctx, DefaultInterval, timeout, true, func(ctx context.Context) (bool, error) {
+		if err := f.Client.Get(ctx, key, obj); err != nil {
+			if apierrors.IsNotFound(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		return fieldChecker(obj), nil
+	})
+}
+
+// EnsureNamespaceExists creates a namespace if it doesn't exist
+func (f *Framework) EnsureNamespaceExists(name string) error {
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+	}
+
+	err := f.Client.Create(f.ctx, ns)
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create namespace %s: %w", name, err)
+	}
+	return nil
+}
+
+// CreateTestService creates a test deployment and service for TunnelBinding tests
+func (f *Framework) CreateTestService(namespace, name string, port int32) error {
+	// Create Deployment
+	replicas := int32(1)
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": name},
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{"app": name},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "nginx",
+							Image: "nginx:alpine",
+							Ports: []corev1.ContainerPort{
+								{ContainerPort: port},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if err := f.Client.Create(f.ctx, deploy); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create deployment: %w", err)
+	}
+
+	// Create Service
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: map[string]string{"app": name},
+			Ports: []corev1.ServicePort{
+				{
+					Port:       port,
+					TargetPort: intstr.FromInt32(port),
+				},
+			},
+		},
+	}
+
+	if err := f.Client.Create(f.ctx, svc); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create service: %w", err)
+	}
+
+	return nil
+}
+
+// DeleteResource deletes a resource without waiting
+func (f *Framework) DeleteResource(obj client.Object) error {
+	err := f.Client.Delete(f.ctx, obj)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete resource: %w", err)
+	}
+	return nil
+}
+
+// DeleteResourceAndWait deletes a resource and waits for deletion to complete
+func (f *Framework) DeleteResourceAndWait(obj client.Object, timeout time.Duration) error {
+	if err := f.DeleteResource(obj); err != nil {
+		return err
+	}
+	return f.WaitForDeletion(obj, timeout)
+}
+
+// GetResource fetches a resource by name and namespace
+func (f *Framework) GetResource(obj client.Object, name, namespace string) error {
+	key := types.NamespacedName{Name: name, Namespace: namespace}
+	return f.Client.Get(f.ctx, key, obj)
 }

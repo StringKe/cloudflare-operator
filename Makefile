@@ -136,9 +136,21 @@ test-e2e-setup: kind ## Set up Kind cluster for E2E tests
 	else \
 		$(KIND) create cluster --name $(KIND_CLUSTER_NAME) --config $(KIND_CONFIG); \
 	fi
+	@echo "Building operator image..."
+	$(MAKE) docker-build IMG=$(IMAGE_TAG_BASE):e2e
+	@echo "Loading image to Kind cluster..."
+	$(KIND) load docker-image $(IMAGE_TAG_BASE):e2e --name $(KIND_CLUSTER_NAME)
 	@echo "Installing CRDs..."
 	$(MAKE) install
+	@echo "Deploying operator..."
+	$(MAKE) deploy IMG=$(IMAGE_TAG_BASE):e2e
+	@echo "Waiting for operator to be ready..."
+	$(KUBECTL) wait --for=condition=available --timeout=120s deployment/cloudflare-operator-controller-manager -n cloudflare-operator-system
 	@echo "E2E cluster setup complete"
+
+.PHONY: docker-build-mockserver
+docker-build-mockserver: ## Build mockserver docker image for E2E tests
+	$(CONTAINER_TOOL) build -t $(IMAGE_TAG_BASE)-mockserver:e2e -f test/mockserver/Dockerfile .
 
 .PHONY: test-e2e-cleanup
 test-e2e-cleanup: kind ## Clean up Kind cluster after E2E tests
