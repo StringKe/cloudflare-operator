@@ -20,6 +20,8 @@ import (
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 )
 
+const testIngressClassName = "cloudflare-tunnel"
+
 func setupTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()
@@ -57,11 +59,11 @@ func TestIsOurIngressClass(t *testing.T) {
 	}{
 		{
 			name:      "our ingress class",
-			className: "cloudflare-tunnel",
+			className: "testIngressClassName",
 			objects: []client.Object{
 				&networkingv1.IngressClass{
 					ObjectMeta: metav1.ObjectMeta{
-						Name: "cloudflare-tunnel",
+						Name: "testIngressClassName",
 					},
 					Spec: networkingv1.IngressClassSpec{
 						Controller: ControllerName,
@@ -124,7 +126,7 @@ func TestIsDefaultIngressClass(t *testing.T) {
 			objects: []client.Object{
 				&networkingv1.IngressClass{
 					ObjectMeta: metav1.ObjectMeta{
-						Name: "cloudflare-tunnel",
+						Name: "testIngressClassName",
 						Annotations: map[string]string{
 							"ingressclass.kubernetes.io/is-default-class": "true",
 						},
@@ -158,7 +160,7 @@ func TestIsDefaultIngressClass(t *testing.T) {
 			objects: []client.Object{
 				&networkingv1.IngressClass{
 					ObjectMeta: metav1.ObjectMeta{
-						Name: "cloudflare-tunnel",
+						Name: "testIngressClassName",
 					},
 					Spec: networkingv1.IngressClassSpec{
 						Controller: ControllerName,
@@ -195,12 +197,12 @@ func TestIsOurIngress(t *testing.T) {
 	scheme := setupTestScheme(t)
 	ctx := context.Background()
 
-	ingressClassName := "cloudflare-tunnel"
+	ingressClassName := testIngressClassName
 	nginxClassName := "nginx"
 
 	ingressClass := &networkingv1.IngressClass{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "cloudflare-tunnel",
+			Name: testIngressClassName,
 		},
 		Spec: networkingv1.IngressClassSpec{
 			Controller: ControllerName,
@@ -234,7 +236,7 @@ func TestIsOurIngress(t *testing.T) {
 					Name:      "test-ingress",
 					Namespace: "default",
 					Annotations: map[string]string{
-						IngressClassAnnotation: "cloudflare-tunnel",
+						IngressClassAnnotation: testIngressClassName,
 					},
 				},
 			},
@@ -274,7 +276,7 @@ func TestIsOurIngress(t *testing.T) {
 			objects: []client.Object{
 				&networkingv1.IngressClass{
 					ObjectMeta: metav1.ObjectMeta{
-						Name: "cloudflare-tunnel",
+						Name: "testIngressClassName",
 						Annotations: map[string]string{
 							"ingressclass.kubernetes.io/is-default-class": "true",
 						},
@@ -306,7 +308,7 @@ func TestIsOurIngress(t *testing.T) {
 }
 
 func TestFilterIngressesByClass(t *testing.T) {
-	ingressClassName := "cloudflare-tunnel"
+	ingressClassName := "testIngressClassName"
 	otherClassName := "nginx"
 
 	tests := []struct {
@@ -331,7 +333,7 @@ func TestFilterIngressesByClass(t *testing.T) {
 					},
 				},
 			},
-			classNames: []string{"cloudflare-tunnel"},
+			classNames: []string{"testIngressClassName"},
 			wantCount:  1,
 		},
 		{
@@ -341,7 +343,7 @@ func TestFilterIngressesByClass(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "ingress-1",
 						Annotations: map[string]string{
-							IngressClassAnnotation: "cloudflare-tunnel",
+							IngressClassAnnotation: "testIngressClassName",
 						},
 					},
 				},
@@ -354,7 +356,7 @@ func TestFilterIngressesByClass(t *testing.T) {
 					},
 				},
 			},
-			classNames: []string{"cloudflare-tunnel"},
+			classNames: []string{"testIngressClassName"},
 			wantCount:  1,
 		},
 		{
@@ -375,13 +377,13 @@ func TestFilterIngressesByClass(t *testing.T) {
 					},
 				},
 			},
-			classNames: []string{"cloudflare-tunnel", "cloudflare-internal"},
+			classNames: []string{"testIngressClassName", "cloudflare-internal"},
 			wantCount:  2,
 		},
 		{
 			name:       "empty ingresses",
 			ingresses:  []*networkingv1.Ingress{},
-			classNames: []string{"cloudflare-tunnel"},
+			classNames: []string{"testIngressClassName"},
 			wantCount:  0,
 		},
 		{
@@ -394,7 +396,7 @@ func TestFilterIngressesByClass(t *testing.T) {
 					},
 				},
 			},
-			classNames: []string{"cloudflare-tunnel"},
+			classNames: []string{"testIngressClassName"},
 			wantCount:  0,
 		},
 	}
@@ -687,11 +689,11 @@ func TestFindIngressesForService(t *testing.T) {
 	scheme := setupTestScheme(t)
 	ctx := context.Background()
 
-	ingressClassName := "cloudflare-tunnel"
+	ingressClassName := "testIngressClassName"
 
 	ingressClass := &networkingv1.IngressClass{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "cloudflare-tunnel",
+			Name: "testIngressClassName",
 		},
 		Spec: networkingv1.IngressClassSpec{
 			Controller: ControllerName,
@@ -785,7 +787,7 @@ func TestReconcileNotFound(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.False(t, result.Requeue)
+	assert.Zero(t, result.RequeueAfter)
 }
 
 func TestGetCredentialsReferenceFromTunnel(t *testing.T) {
@@ -842,5 +844,5 @@ func TestHandleIngressDeletion(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.False(t, result.Requeue)
+	assert.Zero(t, result.RequeueAfter)
 }

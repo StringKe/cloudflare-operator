@@ -11,12 +11,10 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -117,10 +115,10 @@ func createTestClusterTunnel(name string) *networkingv1alpha2.ClusterTunnel {
 	}
 }
 
-func createTestVirtualNetwork(name string) *networkingv1alpha2.VirtualNetwork {
+func createTestVirtualNetwork() *networkingv1alpha2.VirtualNetwork {
 	return &networkingv1alpha2.VirtualNetwork{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
+			Name: "test-vnet",
 		},
 		Status: networkingv1alpha2.VirtualNetworkStatus{
 			VirtualNetworkId: "vnet-789",
@@ -382,7 +380,7 @@ func TestResolveTunnelRef_NoTunnelID(t *testing.T) {
 }
 
 func TestResolveVirtualNetworkRef(t *testing.T) {
-	vnet := createTestVirtualNetwork("test-vnet")
+	vnet := createTestVirtualNetwork()
 	ps := createTestPrivateService("test-ps", "default")
 	ps.Spec.VirtualNetworkRef = &networkingv1alpha2.VirtualNetworkRef{Name: "test-vnet"}
 
@@ -442,7 +440,7 @@ func TestResolveVirtualNetworkRef_NotFound(t *testing.T) {
 }
 
 func TestResolveVirtualNetworkRef_NoID(t *testing.T) {
-	vnet := createTestVirtualNetwork("test-vnet")
+	vnet := createTestVirtualNetwork()
 	vnet.Status.VirtualNetworkId = "" // No ID yet
 	ps := createTestPrivateService("test-ps", "default")
 	ps.Spec.VirtualNetworkRef = &networkingv1alpha2.VirtualNetworkRef{Name: "test-vnet"}
@@ -466,7 +464,7 @@ func TestResolveVirtualNetworkRef_NoID(t *testing.T) {
 }
 
 func TestFindPrivateServicesForVirtualNetwork(t *testing.T) {
-	vnet := createTestVirtualNetwork("test-vnet")
+	vnet := createTestVirtualNetwork()
 	ps1 := createTestPrivateService("ps1", "default")
 	ps1.Spec.VirtualNetworkRef = &networkingv1alpha2.VirtualNetworkRef{Name: "test-vnet"}
 	ps2 := createTestPrivateService("ps2", "default")
@@ -533,7 +531,7 @@ func TestFindPrivateServicesForClusterTunnel(t *testing.T) {
 
 func TestFindPrivateServicesForClusterTunnel_WrongType(t *testing.T) {
 	// Pass wrong type object
-	vnet := createTestVirtualNetwork("test-vnet")
+	vnet := createTestVirtualNetwork()
 
 	r := &Reconciler{}
 
@@ -572,7 +570,7 @@ func TestFindPrivateServicesForTunnel(t *testing.T) {
 
 func TestFindPrivateServicesForTunnel_WrongType(t *testing.T) {
 	// Pass wrong type object
-	vnet := createTestVirtualNetwork("test-vnet")
+	vnet := createTestVirtualNetwork()
 
 	r := &Reconciler{}
 
@@ -610,7 +608,7 @@ func TestFindPrivateServicesForService(t *testing.T) {
 
 func TestFindPrivateServicesForService_WrongType(t *testing.T) {
 	// Pass wrong type object
-	vnet := createTestVirtualNetwork("test-vnet")
+	vnet := createTestVirtualNetwork()
 
 	r := &Reconciler{}
 
@@ -631,7 +629,7 @@ func TestReconcileRequestsFromMapFunc(t *testing.T) {
 	assert.Equal(t, "default", req.Namespace)
 }
 
-func TestReconcilerImplementsReconciler(t *testing.T) {
+func TestReconcilerImplementsReconciler(_ *testing.T) {
 	// Verify Reconciler implements the reconcile.Reconciler interface
 	var _ reconcile.Reconciler = &Reconciler{}
 }
@@ -733,7 +731,7 @@ func TestGetClientFromReconciler(t *testing.T) {
 	}
 
 	// Verify the embedded client is accessible
-	var c client.Client = r.Client
+	var c = r.Client
 	assert.NotNil(t, c)
 }
 
@@ -786,11 +784,4 @@ func TestFindPrivateServicesForTunnel_NamespaceMatching(t *testing.T) {
 	// Should only return ps1 which has matching namespace
 	require.Len(t, requests, 1)
 	assert.Equal(t, "ps1", requests[0].Name)
-}
-
-func newTestScheme() *runtime.Scheme {
-	s := runtime.NewScheme()
-	_ = networkingv1alpha2.AddToScheme(s)
-	_ = corev1.AddToScheme(s)
-	return s
 }

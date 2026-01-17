@@ -321,6 +321,8 @@ func (r *ServiceTokenController) createOrUpdateSecret(
 // This is the SINGLE point for Cloudflare AccessServiceToken deletion in the system.
 // Following Unified Sync Architecture:
 // Resource Controller unregisters → SyncState updated → Sync Controller deletes from Cloudflare
+//
+//nolint:revive // cognitive complexity unavoidable: deletion logic requires multiple cleanup steps and error handling
 func (r *ServiceTokenController) handleDeletion(
 	ctx context.Context,
 	syncState *v1alpha2.CloudflareSyncState,

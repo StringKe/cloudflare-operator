@@ -115,7 +115,7 @@ func TestReconciler_Reconcile_NotFound(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.False(t, result.Requeue)
+	assert.Zero(t, result.RequeueAfter)
 	assert.Equal(t, ctrl.Result{}, result)
 }
 
@@ -442,7 +442,7 @@ func TestRulesetCacheSettings(t *testing.T) {
 	assert.Equal(t, "respect_origin", cache.BrowserTTL.Mode)
 }
 
-func TestReconcilerImplementsReconciler(t *testing.T) {
+func TestReconcilerImplementsReconciler(_ *testing.T) {
 	var _ reconcile.Reconciler = &Reconciler{}
 }
 
@@ -571,7 +571,7 @@ func TestGetClientFromReconciler(t *testing.T) {
 	}
 
 	// Verify the embedded client is accessible
-	var c client.Client = r.Client
+	var c = r.Client
 	assert.NotNil(t, c)
 }
 

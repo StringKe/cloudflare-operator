@@ -64,7 +64,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// Handle deletion
-	if !r.domain.ObjectMeta.DeletionTimestamp.IsZero() {
+	if !r.domain.DeletionTimestamp.IsZero() {
 		return r.handleDeletion()
 	}
 

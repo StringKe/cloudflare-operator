@@ -67,7 +67,7 @@ func TestReconcileNotFound(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.False(t, result.Requeue)
+	assert.Zero(t, result.RequeueAfter)
 }
 
 func TestReconcileWithDeletingAccessGroup(t *testing.T) {

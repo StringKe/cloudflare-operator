@@ -297,6 +297,8 @@ func (r *Controller) syncToCloudflare(
 // This is the SINGLE point for Cloudflare tunnel route deletion for PrivateService.
 // Following Unified Sync Architecture:
 // Resource Controller unregisters → SyncState updated → Sync Controller deletes from Cloudflare
+//
+//nolint:revive // cognitive complexity unavoidable: deletion logic requires multiple cleanup steps and error handling
 func (r *Controller) handleDeletion(
 	ctx context.Context,
 	syncState *v1alpha2.CloudflareSyncState,

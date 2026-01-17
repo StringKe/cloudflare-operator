@@ -10,12 +10,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -97,10 +95,10 @@ func createTestClusterTunnel(name string) *networkingv1alpha2.ClusterTunnel {
 	}
 }
 
-func createTestVirtualNetwork(name string) *networkingv1alpha2.VirtualNetwork {
+func createTestVirtualNetwork() *networkingv1alpha2.VirtualNetwork {
 	return &networkingv1alpha2.VirtualNetwork{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
+			Name: "test-vnet",
 		},
 		Status: networkingv1alpha2.VirtualNetworkStatus{
 			VirtualNetworkId: "vnet-789",
@@ -286,7 +284,7 @@ func TestNetworkRouteStatus(t *testing.T) {
 }
 
 func TestFindNetworkRoutesForVirtualNetwork(t *testing.T) {
-	vnet := createTestVirtualNetwork("test-vnet")
+	vnet := createTestVirtualNetwork()
 	route1 := createTestNetworkRoute("route1", "10.0.0.0/8")
 	route1.Spec.VirtualNetworkRef = &networkingv1alpha2.VirtualNetworkRef{Name: "test-vnet"}
 	route2 := createTestNetworkRoute("route2", "192.168.0.0/16")
@@ -352,7 +350,7 @@ func TestFindNetworkRoutesForClusterTunnel(t *testing.T) {
 
 func TestFindNetworkRoutesForClusterTunnel_WrongType(t *testing.T) {
 	// Pass wrong type object
-	vnet := createTestVirtualNetwork("test-vnet")
+	vnet := createTestVirtualNetwork()
 
 	r := &Reconciler{}
 
@@ -391,7 +389,7 @@ func TestFindNetworkRoutesForTunnel(t *testing.T) {
 
 func TestFindNetworkRoutesForTunnel_WrongType(t *testing.T) {
 	// Pass wrong type object
-	vnet := createTestVirtualNetwork("test-vnet")
+	vnet := createTestVirtualNetwork()
 
 	r := &Reconciler{}
 
@@ -495,7 +493,7 @@ func TestResolveTunnelRef_NoTunnelID(t *testing.T) {
 }
 
 func TestResolveVirtualNetworkRef(t *testing.T) {
-	vnet := createTestVirtualNetwork("test-vnet")
+	vnet := createTestVirtualNetwork()
 	route := createTestNetworkRoute("test-route", "10.0.0.0/8")
 	route.Spec.VirtualNetworkRef = &networkingv1alpha2.VirtualNetworkRef{Name: "test-vnet"}
 
@@ -555,7 +553,7 @@ func TestResolveVirtualNetworkRef_NotFound(t *testing.T) {
 }
 
 func TestResolveVirtualNetworkRef_NoID(t *testing.T) {
-	vnet := createTestVirtualNetwork("test-vnet")
+	vnet := createTestVirtualNetwork()
 	vnet.Status.VirtualNetworkId = "" // No ID yet
 	route := createTestNetworkRoute("test-route", "10.0.0.0/8")
 	route.Spec.VirtualNetworkRef = &networkingv1alpha2.VirtualNetworkRef{Name: "test-vnet"}
@@ -578,12 +576,6 @@ func TestResolveVirtualNetworkRef_NoID(t *testing.T) {
 	assert.Contains(t, err.Error(), "does not have a virtualNetworkId yet")
 }
 
-func newTestScheme() *runtime.Scheme {
-	s := runtime.NewScheme()
-	_ = networkingv1alpha2.AddToScheme(s)
-	return s
-}
-
 func TestReconcileRequestsFromMapFunc(t *testing.T) {
 	// Test that requests are properly typed
 	req := reconcile.Request{
@@ -594,7 +586,7 @@ func TestReconcileRequestsFromMapFunc(t *testing.T) {
 	assert.Equal(t, "test", req.Name)
 }
 
-func TestReconcilerImplementsReconciler(t *testing.T) {
+func TestReconcilerImplementsReconciler(_ *testing.T) {
 	// Verify Reconciler implements the reconcile.Reconciler interface
 	var _ reconcile.Reconciler = &Reconciler{}
 }
@@ -668,7 +660,7 @@ func TestTunnelReferenceTypes(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tt.name, func(_ *testing.T) {
 			route := createTestNetworkRoute("test", "10.0.0.0/8")
 			route.Spec.TunnelRef.Kind = tt.kind
 			assert.Equal(t, tt.expected, route.Spec.TunnelRef.Kind)
@@ -687,7 +679,7 @@ func TestFindNetworkRoutesForVirtualNetwork_ListError(t *testing.T) {
 		Scheme: scheme.Scheme,
 	}
 
-	vnet := createTestVirtualNetwork("test-vnet")
+	vnet := createTestVirtualNetwork()
 
 	// Should return empty when there are no routes
 	requests := r.findNetworkRoutesForVirtualNetwork(context.Background(), vnet)
@@ -738,6 +730,6 @@ func TestGetClientFromReconciler(t *testing.T) {
 	}
 
 	// Verify the embedded client is accessible
-	var c client.Client = r.Client
+	var c = r.Client
 	assert.NotNil(t, c)
 }

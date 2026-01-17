@@ -140,6 +140,7 @@ func TestDeviceSettingsPolicyConfig(t *testing.T) {
 	assert.Len(t, config.FallbackDomains, 1)
 }
 
+//nolint:revive // cognitive complexity unavoidable: table-driven tests require comprehensive test cases
 func TestSplitTunnelEntry(t *testing.T) {
 	tests := []struct {
 		name       string

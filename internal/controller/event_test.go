@@ -14,22 +14,19 @@ import (
 	"k8s.io/client-go/tools/record"
 )
 
+type fakeEvent struct {
+	Object    runtime.Object
+	EventType string
+	Reason    string
+	Message   string
+}
+
 type fakeEventRecorder struct {
-	Events []struct {
-		Object    runtime.Object
-		EventType string
-		Reason    string
-		Message   string
-	}
+	Events []fakeEvent
 }
 
 func (f *fakeEventRecorder) Event(object runtime.Object, eventtype, reason, message string) {
-	f.Events = append(f.Events, struct {
-		Object    runtime.Object
-		EventType string
-		Reason    string
-		Message   string
-	}{
+	f.Events = append(f.Events, fakeEvent{
 		Object:    object,
 		EventType: eventtype,
 		Reason:    reason,
@@ -37,11 +34,16 @@ func (f *fakeEventRecorder) Event(object runtime.Object, eventtype, reason, mess
 	})
 }
 
-func (f *fakeEventRecorder) Eventf(object runtime.Object, eventtype, reason, messageFmt string, args ...interface{}) {
+func (*fakeEventRecorder) Eventf(_ runtime.Object, _, _, _ string, _ ...interface{}) {
 	// Not used in tests
 }
 
-func (f *fakeEventRecorder) AnnotatedEventf(object runtime.Object, annotations map[string]string, eventtype, reason, messageFmt string, args ...interface{}) {
+func (*fakeEventRecorder) AnnotatedEventf(
+	_ runtime.Object,
+	_ map[string]string,
+	_, _, _ string,
+	_ ...interface{},
+) {
 	// Not used in tests
 }
 

@@ -63,6 +63,7 @@ func TestSecretFinalizerPrefix(t *testing.T) {
 	assert.Equal(t, "cloudflare-operator.io/secret-finalizer-my-tunnel", finalizerName)
 }
 
+//nolint:revive // cognitive complexity unavoidable: table-driven tests require comprehensive test cases
 func TestCreateCloudflareClientFromCreds(t *testing.T) {
 	tests := []struct {
 		name        string

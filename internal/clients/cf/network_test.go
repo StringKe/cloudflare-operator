@@ -43,7 +43,7 @@ func TestVirtualNetworkParams(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tt.name, func(_ *testing.T) {
 			// Verify struct fields can be accessed
 			_ = tt.params.Name
 			_ = tt.params.Comment
@@ -153,6 +153,7 @@ func TestTunnelRouteParams(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Helper()
 			// Verify struct fields can be accessed
 			_ = tt.params.Network
 			_ = tt.params.TunnelID

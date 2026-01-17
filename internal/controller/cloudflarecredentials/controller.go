@@ -60,7 +60,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// Handle deletion
-	if !r.creds.ObjectMeta.DeletionTimestamp.IsZero() {
+	if !r.creds.DeletionTimestamp.IsZero() {
 		return r.handleDeletion()
 	}
 

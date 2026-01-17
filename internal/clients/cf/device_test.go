@@ -43,7 +43,7 @@ func TestSplitTunnelEntry(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tt.name, func(_ *testing.T) {
 			// Verify struct fields can be accessed
 			_ = tt.entry.Address
 			_ = tt.entry.Host
@@ -174,7 +174,7 @@ func TestSplitTunnelEntryValidation(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tt.name, func(_ *testing.T) {
 			// Validation logic would go here
 			// For now, just verify the struct is accessible
 			hasAddress := tt.entry.Address != ""

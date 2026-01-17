@@ -412,6 +412,8 @@ func convertGroupRule(rule v1alpha2.AccessGroupRule) cf.AccessGroupRuleParams {
 // This is the SINGLE point for Cloudflare AccessGroup deletion in the system.
 // Following Unified Sync Architecture:
 // Resource Controller unregisters → SyncState updated → Sync Controller deletes from Cloudflare
+//
+//nolint:revive // cognitive complexity unavoidable: deletion logic requires multiple cleanup steps and error handling
 func (r *GroupController) handleDeletion(
 	ctx context.Context,
 	syncState *v1alpha2.CloudflareSyncState,

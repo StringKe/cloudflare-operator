@@ -11,12 +11,10 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -57,18 +55,6 @@ func createTestCredentials(name string, isDefault bool) *networkingv1alpha2.Clou
 				Namespace: "default",
 			},
 			IsDefault: isDefault,
-		},
-	}
-}
-
-func createTestSecret(name, namespace string) *corev1.Secret {
-	return &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-		},
-		Data: map[string][]byte{
-			"CLOUDFLARE_API_TOKEN": []byte("test-token"),
 		},
 	}
 }
@@ -354,7 +340,7 @@ func TestAuthTypes(t *testing.T) {
 	}
 }
 
-func TestReconcilerImplementsReconciler(t *testing.T) {
+func TestReconcilerImplementsReconciler(_ *testing.T) {
 	// Verify Reconciler implements the reconcile.Reconciler interface
 	var _ reconcile.Reconciler = &Reconciler{}
 }
@@ -446,13 +432,6 @@ func TestGetClientFromReconciler(t *testing.T) {
 	}
 
 	// Verify the embedded client is accessible
-	var c client.Client = r.Client
+	var c = r.Client
 	assert.NotNil(t, c)
-}
-
-func newTestScheme() *runtime.Scheme {
-	s := runtime.NewScheme()
-	_ = networkingv1alpha2.AddToScheme(s)
-	_ = corev1.AddToScheme(s)
-	return s
 }

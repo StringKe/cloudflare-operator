@@ -304,6 +304,8 @@ func (r *Reconciler) buildManagedComment() string {
 }
 
 // updateStatusPending updates the NetworkRoute status to Pending state.
+//
+//nolint:revive // cognitive complexity unavoidable: status update requires conditional checks for multiple fields
 func (r *Reconciler) updateStatusPending(tunnelName, accountID string) error {
 	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.networkRoute, func() {
 		r.networkRoute.Status.ObservedGeneration = r.networkRoute.Generation

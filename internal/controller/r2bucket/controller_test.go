@@ -106,7 +106,7 @@ func TestReconciler_Reconcile_NotFound(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.False(t, result.Requeue)
+	assert.Zero(t, result.RequeueAfter)
 	assert.Equal(t, ctrl.Result{}, result)
 }
 
@@ -418,7 +418,7 @@ func TestR2LifecycleRule(t *testing.T) {
 	assert.Equal(t, 7, rule.AbortIncompleteMultipartUpload.DaysAfterInitiation)
 }
 
-func TestReconcilerImplementsReconciler(t *testing.T) {
+func TestReconcilerImplementsReconciler(_ *testing.T) {
 	var _ reconcile.Reconciler = &Reconciler{}
 }
 
@@ -565,7 +565,7 @@ func TestGetClientFromReconciler(t *testing.T) {
 	}
 
 	// Verify the embedded client is accessible
-	var c client.Client = r.Client
+	var c = r.Client
 	assert.NotNil(t, c)
 }
 

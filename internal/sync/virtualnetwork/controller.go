@@ -296,6 +296,8 @@ func (r *Controller) syncToCloudflare(
 //
 // Note: VirtualNetwork deletion requires deleting associated routes first to avoid
 // "virtual network is used by IP Route(s)" error.
+//
+//nolint:revive // cognitive complexity unavoidable: deletion logic requires multiple cleanup steps and error handling
 func (r *Controller) handleDeletion(
 	ctx context.Context,
 	syncState *v1alpha2.CloudflareSyncState,

@@ -203,6 +203,7 @@ func TestRedirectStatusCodes(t *testing.T) {
 	}
 }
 
+//nolint:revive // cognitive complexity unavoidable: table-driven tests require comprehensive test cases
 func TestRedirectTargetConfig(t *testing.T) {
 	tests := []struct {
 		name   string

@@ -12,6 +12,8 @@ import (
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 )
 
+const testResourceID = "resource-id"
+
 func TestAdoptionAnnotation(t *testing.T) {
 	assert.Equal(t, "cloudflare-operator.io/managed-by", AdoptionAnnotation)
 }
@@ -132,7 +134,7 @@ func TestAdoptionCheckerCheckByName(t *testing.T) {
 			name:      "resource not found",
 			namespace: "default",
 			resName:   "my-resource",
-			lookupFn: func(name string) (string, string, error) {
+			lookupFn: func(_ string) (string, string, error) {
 				return "", "", nil
 			},
 			wantFound:  false,
@@ -145,12 +147,12 @@ func TestAdoptionCheckerCheckByName(t *testing.T) {
 			name:      "resource found with no manager",
 			namespace: "default",
 			resName:   "my-resource",
-			lookupFn: func(name string) (string, string, error) {
-				return "resource-id", "", nil
+			lookupFn: func(_ string) (string, string, error) {
+				return testResourceID, "", nil
 			},
 			wantFound:  true,
 			wantAdopt:  true,
-			wantID:     "resource-id",
+			wantID:     testResourceID,
 			wantMgr:    "",
 			wantErrNil: true,
 		},
@@ -158,12 +160,12 @@ func TestAdoptionCheckerCheckByName(t *testing.T) {
 			name:      "resource found managed by same",
 			namespace: "default",
 			resName:   "my-resource",
-			lookupFn: func(name string) (string, string, error) {
-				return "resource-id", "default/my-resource", nil
+			lookupFn: func(_ string) (string, string, error) {
+				return testResourceID, "default/my-resource", nil
 			},
 			wantFound:  true,
 			wantAdopt:  true,
-			wantID:     "resource-id",
+			wantID:     testResourceID,
 			wantMgr:    "default/my-resource",
 			wantErrNil: true,
 		},
@@ -171,12 +173,12 @@ func TestAdoptionCheckerCheckByName(t *testing.T) {
 			name:      "resource found managed by other",
 			namespace: "default",
 			resName:   "my-resource",
-			lookupFn: func(name string) (string, string, error) {
-				return "resource-id", "other-namespace/other-resource", nil
+			lookupFn: func(_ string) (string, string, error) {
+				return testResourceID, "other-namespace/other-resource", nil
 			},
 			wantFound:  true,
 			wantAdopt:  false,
-			wantID:     "resource-id",
+			wantID:     testResourceID,
 			wantMgr:    "other-namespace/other-resource",
 			wantErrNil: true,
 		},
@@ -184,7 +186,7 @@ func TestAdoptionCheckerCheckByName(t *testing.T) {
 			name:      "not found error",
 			namespace: "default",
 			resName:   "my-resource",
-			lookupFn: func(name string) (string, string, error) {
+			lookupFn: func(_ string) (string, string, error) {
 				return "", "", cf.ErrResourceNotFound
 			},
 			wantFound:  false,
@@ -197,7 +199,7 @@ func TestAdoptionCheckerCheckByName(t *testing.T) {
 			name:      "other error",
 			namespace: "default",
 			resName:   "my-resource",
-			lookupFn: func(name string) (string, string, error) {
+			lookupFn: func(_ string) (string, string, error) {
 				return "", "", errors.New("connection failed")
 			},
 			wantFound:  false,
@@ -291,7 +293,7 @@ func TestClusterScopedAdoption(t *testing.T) {
 	assert.Equal(t, "my-cluster-tunnel", checker.ManagedByValue)
 
 	// Lookup function returns resource managed by same
-	result := checker.CheckByName("my-cluster-tunnel", func(name string) (string, string, error) {
+	result := checker.CheckByName("my-cluster-tunnel", func(_ string) (string, string, error) {
 		return "tunnel-id", "my-cluster-tunnel", nil
 	})
 
@@ -307,7 +309,7 @@ func TestNamespacedAdoption(t *testing.T) {
 	assert.Equal(t, "production/my-tunnel", checker.ManagedByValue)
 
 	// Lookup function returns resource managed by different namespace
-	result := checker.CheckByName("my-tunnel", func(name string) (string, string, error) {
+	result := checker.CheckByName("my-tunnel", func(_ string) (string, string, error) {
 		return "tunnel-id", "staging/my-tunnel", nil
 	})
 

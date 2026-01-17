@@ -374,6 +374,8 @@ func buildScimConfig(config *v1alpha2.IdentityProviderScimConfig) cloudflare.Acc
 // This is the SINGLE point for Cloudflare AccessIdentityProvider deletion in the system.
 // Following Unified Sync Architecture:
 // Resource Controller unregisters → SyncState updated → Sync Controller deletes from Cloudflare
+//
+//nolint:revive // cognitive complexity unavoidable: deletion logic requires multiple cleanup steps and error handling
 func (r *IdentityProviderController) handleDeletion(
 	ctx context.Context,
 	syncState *v1alpha2.CloudflareSyncState,

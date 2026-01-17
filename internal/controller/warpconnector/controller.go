@@ -123,6 +123,7 @@ func (r *WARPConnectorReconciler) resolveCredentials() (*controller.CredentialsI
 	return info, nil
 }
 
+//nolint:revive // cognitive complexity unavoidable: deletion logic requires multiple cleanup steps
 func (r *WARPConnectorReconciler) handleDeletion(apiClient *cf.API) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(r.connector, FinalizerName) {
 		return ctrl.Result{}, nil
@@ -197,6 +198,7 @@ func (r *WARPConnectorReconciler) handleDeletion(apiClient *cf.API) (ctrl.Result
 	return ctrl.Result{}, nil
 }
 
+//nolint:revive // cognitive complexity unavoidable: reconciliation requires multiple sequential operations
 func (r *WARPConnectorReconciler) reconcileWARPConnector(apiClient *cf.API, credInfo *controller.CredentialsInfo) (ctrl.Result, error) {
 	var connectorID, tunnelID, tunnelToken string
 	var err error

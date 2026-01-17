@@ -272,6 +272,8 @@ func (r *DomainController) syncToCloudflare(
 // This is the SINGLE point for Cloudflare R2BucketDomain deletion in the system.
 // Following Unified Sync Architecture:
 // Resource Controller unregisters → SyncState updated → Sync Controller deletes from Cloudflare
+//
+//nolint:revive // cognitive complexity unavoidable: deletion logic requires multiple cleanup steps and error handling
 func (r *DomainController) handleDeletion(
 	ctx context.Context,
 	syncState *v1alpha2.CloudflareSyncState,
