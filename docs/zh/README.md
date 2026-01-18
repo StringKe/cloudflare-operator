@@ -213,12 +213,26 @@ Operator 根据 CRD 作用域使用不同的 Secret 查找规则：
 
 ## 版本信息
 
-- 当前版本：v0.21.x (Alpha)
+- 当前版本：v0.23.x (Alpha)
 - API 版本：`networking.cloudflare-operator.io/v1alpha2`
 - Kubernetes：v1.28+
-- Go：1.24+
+- Go：1.25+
+- controller-runtime：v0.22
+- cloudflare-go SDK：v0.116.0
+- gateway-api：v1.4.1
 
-## 版本变更 (v0.18.0 → v0.21.0)
+## 版本变更
+
+### v0.23.x - 统一同步架构与 E2E 测试
+- **统一同步架构**：六层架构与 CloudflareSyncState CRD
+- **E2E 测试框架**：完整的 Mock 服务器和测试基础设施
+- **竞态条件修复**：单一同步点消除并发 API 冲突
+- **防抖机制**：500ms 聚合减少 API 调用
+
+### v0.22.x - 性能改进
+- Tunnel 配置的读取-合并-写入模式
+- WARP 路由配置同步到 Cloudflare 远程配置
+- 改进错误处理和重试逻辑
 
 ### v0.21.0 - 类型安全改进
 - 将所有 `interface{}`/`any` 类型替换为精确类型结构体

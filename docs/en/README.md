@@ -213,12 +213,26 @@ See [Namespace Restrictions](namespace-restrictions.md) for detailed information
 
 ## Version Information
 
-- Current Version: v0.21.x (Alpha)
+- Current Version: v0.23.x (Alpha)
 - API Version: `networking.cloudflare-operator.io/v1alpha2`
 - Kubernetes: v1.28+
-- Go: 1.24+
+- Go: 1.25+
+- controller-runtime: v0.22
+- cloudflare-go SDK: v0.116.0
+- gateway-api: v1.4.1
 
-## Recent Changes (v0.18.0 → v0.21.0)
+## Recent Changes
+
+### v0.23.x - Unified Sync Architecture & E2E Testing
+- **Unified Sync Architecture**: Six-layer architecture with CloudflareSyncState CRD
+- **E2E Test Framework**: Comprehensive mock server and test infrastructure
+- **Race Condition Fix**: Single sync point eliminates concurrent API conflicts
+- **Debouncing**: 500ms aggregation reduces API calls
+
+### v0.22.x - Performance Improvements
+- Read-merge-write pattern for Tunnel config updates
+- WARP routing configuration sync to Cloudflare Remote Config
+- Improved error handling and retry logic
 
 ### v0.21.0 - Type Safety Improvements
 - Replaced all `interface{}`/`any` types with precise typed structs

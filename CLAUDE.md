@@ -9,10 +9,11 @@
 **Fork 来源**: [adyanth/cloudflare-operator](https://github.com/adyanth/cloudflare-operator)
 
 **技术栈**:
-- Go 1.24
+- Go 1.25
 - Kubebuilder v4
-- controller-runtime v0.20
-- cloudflare-go SDK
+- controller-runtime v0.22
+- cloudflare-go SDK v0.116.0
+- gateway-api v1.4.1
 
 ## 当前实现状态
 
