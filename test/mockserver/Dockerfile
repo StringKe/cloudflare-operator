@@ -1,6 +1,9 @@
 # Build stage
 FROM golang:1.24-alpine AS builder
 
+# Enable Go toolchain auto-download for newer Go versions
+ENV GOTOOLCHAIN=auto
+
 WORKDIR /app
 
 # Copy go mod files

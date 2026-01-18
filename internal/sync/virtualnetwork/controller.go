@@ -391,6 +391,7 @@ func (r *Controller) handleDeletion(
 // SetupWithManager sets up the controller with the Manager.
 func (r *Controller) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
+		Named("virtualnetwork-sync").
 		For(&v1alpha2.CloudflareSyncState{}).
 		WithEventFilter(predicate.Funcs{
 			CreateFunc: func(e event.CreateEvent) bool {

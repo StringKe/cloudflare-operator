@@ -55,6 +55,7 @@ func TestDNSRecordLifecycle(t *testing.T) {
 				TTL:     300,
 				Proxied: true,
 				Cloudflare: v1alpha2.CloudflareDetails{
+					ZoneId: "test-zone-id",
 					CredentialsRef: &v1alpha2.CloudflareCredentialsRef{
 						Name: testCredentialsName,
 					},
@@ -92,6 +93,7 @@ func TestDNSRecordLifecycle(t *testing.T) {
 				TTL:     1, // Automatic TTL
 				Proxied: false,
 				Cloudflare: v1alpha2.CloudflareDetails{
+					ZoneId: "test-zone-id",
 					CredentialsRef: &v1alpha2.CloudflareCredentialsRef{
 						Name: testCredentialsName,
 					},
@@ -194,6 +196,7 @@ func TestDNSRecordWithMXPriority(t *testing.T) {
 			TTL:      300,
 			Priority: &priority,
 			Cloudflare: v1alpha2.CloudflareDetails{
+				ZoneId: "test-zone-id",
 				CredentialsRef: &v1alpha2.CloudflareCredentialsRef{
 					Name: testCredentialsName,
 				},
@@ -254,12 +257,17 @@ func TestDNSRecordTXTRecord(t *testing.T) {
 			Content: "v=DMARC1; p=none; rua=mailto:dmarc@example.com",
 			TTL:     3600,
 			Cloudflare: v1alpha2.CloudflareDetails{
+				ZoneId: "test-zone-id",
 				CredentialsRef: &v1alpha2.CloudflareCredentialsRef{
 					Name: testCredentialsName,
 				},
 			},
 		},
 	}
+
+	// Pre-cleanup: delete if exists from previous run
+	_ = f.Client.Delete(ctx, record, client.PropagationPolicy(metav1.DeletePropagationForeground))
+	_ = f.WaitForDeletion(record, 30*time.Second)
 
 	err = f.Client.Create(ctx, record)
 	require.NoError(t, err)

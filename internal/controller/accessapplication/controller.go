@@ -96,12 +96,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// Reconcile the AccessApplication through service layer
-	if err := r.reconcileApplication(); err != nil {
+	result, err := r.reconcileApplication()
+	if err != nil {
 		r.log.Error(err, "failed to reconcile AccessApplication")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 
-	return ctrl.Result{}, nil
+	return result, nil
 }
 
 // resolveCredentials resolves the credentials reference and returns the credentials info.
@@ -187,13 +188,13 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 // Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
 //
 //nolint:revive // cognitive complexity is acceptable for this reconciliation logic
-func (r *Reconciler) reconcileApplication() error {
+func (r *Reconciler) reconcileApplication() (ctrl.Result, error) {
 	appName := r.app.GetAccessApplicationName()
 
 	// Resolve credentials (without creating API client)
 	credInfo, err := r.resolveCredentials()
 	if err != nil {
-		return fmt.Errorf("resolve credentials: %w", err)
+		return ctrl.Result{}, fmt.Errorf("resolve credentials: %w", err)
 	}
 
 	// Resolve IdP references
@@ -272,11 +273,32 @@ func (r *Reconciler) reconcileApplication() error {
 		r.log.Error(err, "failed to register AccessApplication configuration")
 		r.setCondition(metav1.ConditionFalse, controller.EventReasonCreateFailed, err.Error())
 		r.Recorder.Event(r.app, corev1.EventTypeWarning, controller.EventReasonCreateFailed, err.Error())
-		return err
+		return ctrl.Result{}, err
+	}
+
+	// Check if already synced (SyncState may have been created and synced in a previous reconcile)
+	syncStatus, err := r.appService.GetSyncStatus(r.ctx, source, r.app.Status.ApplicationID)
+	if err != nil {
+		r.log.Error(err, "failed to get sync status")
+		if err := r.updateStatusPending(credInfo.AccountID); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	if syncStatus != nil && syncStatus.IsSynced && syncStatus.ApplicationID != "" {
+		// Already synced, update status to Ready
+		if err := r.updateStatusReady(credInfo.AccountID, syncStatus.ApplicationID); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
 	}
 
 	// Update status to Pending if not already synced
-	return r.updateStatusPending(credInfo.AccountID)
+	if err := r.updateStatusPending(credInfo.AccountID); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 }
 
 // resolvePolicies resolves all policy references and returns the policy configs.
@@ -432,6 +454,27 @@ func (r *Reconciler) updateStatusPending(accountID string) error {
 	r.log.Info("AccessApplication configuration registered", "name", r.app.Name)
 	r.Recorder.Event(r.app, corev1.EventTypeNormal, "Registered",
 		"Configuration registered to SyncState")
+	return nil
+}
+
+// updateStatusReady updates the AccessApplication status to Ready state.
+func (r *Reconciler) updateStatusReady(accountID, applicationID string) error {
+	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.app, func() {
+		r.app.Status.ObservedGeneration = r.app.Generation
+		r.app.Status.State = StateActive
+		r.app.Status.AccountID = accountID
+		r.app.Status.ApplicationID = applicationID
+		r.setCondition(metav1.ConditionTrue, "Synced", "AccessApplication synced to Cloudflare")
+	})
+
+	if err != nil {
+		r.log.Error(err, "failed to update AccessApplication status to Ready")
+		return err
+	}
+
+	r.log.Info("AccessApplication synced successfully", "name", r.app.Name, "applicationId", applicationID)
+	r.Recorder.Event(r.app, corev1.EventTypeNormal, "Synced",
+		fmt.Sprintf("AccessApplication synced to Cloudflare with ID %s", applicationID))
 	return nil
 }
 

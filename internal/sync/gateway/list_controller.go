@@ -211,6 +211,7 @@ func (r *ListController) syncToCloudflare(
 // SetupWithManager sets up the controller with the Manager.
 func (r *ListController) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
+		Named("gateway-list-sync").
 		For(&v1alpha2.CloudflareSyncState{}).
 		WithEventFilter(common.PredicateForResourceType(v1alpha2.SyncResourceGatewayList)).
 		Complete(r)

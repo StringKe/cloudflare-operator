@@ -7,6 +7,7 @@ package virtualnetwork
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -39,6 +40,8 @@ func NewService(c client.Client) *Service {
 // Register registers a VirtualNetwork configuration to SyncState.
 // Each VirtualNetwork K8s resource has its own SyncState, keyed by a generated ID
 // (namespace/name) until the Cloudflare VirtualNetwork ID is known.
+//
+//nolint:revive // cognitive complexity is acceptable for SyncState lookup logic
 func (s *Service) Register(ctx context.Context, opts RegisterOptions) error {
 	logger := log.FromContext(ctx).WithValues(
 		"accountId", opts.AccountID,
@@ -47,24 +50,45 @@ func (s *Service) Register(ctx context.Context, opts RegisterOptions) error {
 	)
 	logger.V(1).Info("Registering VirtualNetwork configuration")
 
-	// Generate SyncState ID:
-	// - If VirtualNetworkID is known (existing network), use it
-	// - Otherwise, use a placeholder based on source (name only since VirtualNetwork is cluster-scoped)
-	syncStateID := opts.VirtualNetworkID
-	if syncStateID == "" {
-		syncStateID = fmt.Sprintf("pending-%s", opts.Source.Name)
+	// Try to find existing SyncState in this order:
+	// 1. By pending-{source.Name} (for resources being created)
+	// 2. By VirtualNetworkID (for resources that were already synced)
+	// This prevents creating duplicate SyncStates when VirtualNetworkID changes
+	var syncState *v1alpha2.CloudflareSyncState
+	var err error
+
+	// First, try to find by pending ID (primary lookup for resources in creation)
+	pendingID := fmt.Sprintf("pending-%s", opts.Source.Name)
+	syncState, err = s.GetSyncState(ctx, ResourceType, pendingID)
+	if err != nil {
+		return fmt.Errorf("lookup syncstate by pending ID: %w", err)
 	}
 
-	syncState, err := s.GetOrCreateSyncState(
-		ctx,
-		ResourceType,
-		syncStateID,
-		opts.AccountID,
-		"", // VirtualNetwork doesn't have a zone ID
-		opts.CredentialsRef,
-	)
-	if err != nil {
-		return fmt.Errorf("get/create syncstate for VirtualNetwork: %w", err)
+	// If not found by pending ID and VirtualNetworkID is known, try by VirtualNetworkID
+	if syncState == nil && opts.VirtualNetworkID != "" {
+		syncState, err = s.GetSyncState(ctx, ResourceType, opts.VirtualNetworkID)
+		if err != nil {
+			return fmt.Errorf("lookup syncstate by vnet ID: %w", err)
+		}
+	}
+
+	// If still not found, create a new SyncState
+	if syncState == nil {
+		syncStateID := pendingID
+		if opts.VirtualNetworkID != "" {
+			syncStateID = opts.VirtualNetworkID
+		}
+		syncState, err = s.GetOrCreateSyncState(
+			ctx,
+			ResourceType,
+			syncStateID,
+			opts.AccountID,
+			"", // VirtualNetwork doesn't have a zone ID
+			opts.CredentialsRef,
+		)
+		if err != nil {
+			return fmt.Errorf("get/create syncstate for VirtualNetwork: %w", err)
+		}
 	}
 
 	if err := s.UpdateSource(ctx, syncState, opts.Source, opts.Config, PriorityVirtualNetwork); err != nil {
@@ -121,6 +145,55 @@ func (s *Service) Unregister(ctx context.Context, vnetID string, source service.
 
 	logger.V(1).Info("No SyncState found to unregister")
 	return nil
+}
+
+// GetSyncStatus returns the sync status for a VirtualNetwork.
+//
+//nolint:revive // cognitive complexity acceptable for status lookup logic
+func (s *Service) GetSyncStatus(ctx context.Context, source service.Source, knownVNetID string) (*SyncStatus, error) {
+	logger := log.FromContext(ctx).WithValues(
+		"source", source.String(),
+		"knownVNetId", knownVNetID,
+	)
+
+	// Try both possible SyncState IDs
+	syncStateIDs := []string{
+		knownVNetID,
+		fmt.Sprintf("pending-%s", source.Name),
+	}
+
+	for _, id := range syncStateIDs {
+		if id == "" {
+			continue
+		}
+
+		syncState, err := s.GetSyncState(ctx, ResourceType, id)
+		if err != nil {
+			logger.V(1).Info("Error getting SyncState", "syncStateId", id, "error", err)
+			continue
+		}
+		if syncState == nil {
+			continue
+		}
+
+		// Check if synced
+		isSynced := syncState.Status.SyncStatus == v1alpha2.SyncStatusSynced
+		vnetID := syncState.Spec.CloudflareID
+
+		// If the CloudflareID starts with "pending-", it's not a real ID
+		if strings.HasPrefix(vnetID, "pending-") {
+			vnetID = ""
+		}
+
+		return &SyncStatus{
+			IsSynced:         isSynced,
+			VirtualNetworkID: vnetID,
+			AccountID:        syncState.Spec.AccountID,
+			SyncStateID:      syncState.Name,
+		}, nil
+	}
+
+	return nil, nil
 }
 
 // UpdateVirtualNetworkID updates the SyncState to use the actual Cloudflare VirtualNetwork ID

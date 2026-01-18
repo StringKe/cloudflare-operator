@@ -86,12 +86,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// Reconcile the AccessServiceToken through service layer
-	if err := r.reconcileServiceToken(); err != nil {
+	result, err := r.reconcileServiceToken()
+	if err != nil {
 		r.log.Error(err, "failed to reconcile AccessServiceToken")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 
-	return ctrl.Result{}, nil
+	return result, nil
 }
 
 // resolveCredentials resolves the credentials reference and returns the credentials info.
@@ -171,13 +172,13 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 // Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
 //
 //nolint:revive // cognitive complexity is acceptable for reconciliation logic
-func (r *Reconciler) reconcileServiceToken() error {
+func (r *Reconciler) reconcileServiceToken() (ctrl.Result, error) {
 	tokenName := r.token.GetTokenName()
 
 	// Resolve credentials (without creating API client)
 	credInfo, err := r.resolveCredentials()
 	if err != nil {
-		return fmt.Errorf("resolve credentials: %w", err)
+		return ctrl.Result{}, fmt.Errorf("resolve credentials: %w", err)
 	}
 
 	// Build the configuration
@@ -213,7 +214,7 @@ func (r *Reconciler) reconcileServiceToken() error {
 		r.log.Error(err, "failed to register AccessServiceToken configuration")
 		r.setCondition(metav1.ConditionFalse, controller.EventReasonCreateFailed, err.Error())
 		r.Recorder.Event(r.token, corev1.EventTypeWarning, controller.EventReasonCreateFailed, err.Error())
-		return err
+		return ctrl.Result{}, err
 	}
 
 	// Ensure secret has finalizer to prevent accidental deletion
@@ -224,8 +225,29 @@ func (r *Reconciler) reconcileServiceToken() error {
 		}
 	}
 
+	// Check if already synced (SyncState may have been created and synced in a previous reconcile)
+	syncStatus, err := r.tokenService.GetSyncStatus(r.ctx, source, r.token.Status.TokenID)
+	if err != nil {
+		r.log.Error(err, "failed to get sync status")
+		if err := r.updateStatusPending(credInfo.AccountID); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	if syncStatus != nil && syncStatus.IsSynced && syncStatus.TokenID != "" {
+		// Already synced, update status to Ready
+		if err := r.updateStatusReady(credInfo.AccountID, syncStatus.TokenID); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
+
 	// Update status to Pending if not already synced
-	return r.updateStatusPending(credInfo.AccountID)
+	if err := r.updateStatusPending(credInfo.AccountID); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 }
 
 // updateStatusPending updates the AccessServiceToken status to Pending state.
@@ -254,6 +276,27 @@ func (r *Reconciler) updateStatusPending(accountID string) error {
 	r.log.Info("AccessServiceToken configuration registered", "name", r.token.Name)
 	r.Recorder.Event(r.token, corev1.EventTypeNormal, "Registered",
 		"Configuration registered to SyncState")
+	return nil
+}
+
+// updateStatusReady updates the AccessServiceToken status to Ready state.
+func (r *Reconciler) updateStatusReady(accountID, tokenID string) error {
+	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.token, func() {
+		r.token.Status.ObservedGeneration = r.token.Generation
+		r.token.Status.State = "Ready"
+		r.token.Status.AccountID = accountID
+		r.token.Status.TokenID = tokenID
+		r.setCondition(metav1.ConditionTrue, "Synced", "AccessServiceToken synced to Cloudflare")
+	})
+
+	if err != nil {
+		r.log.Error(err, "failed to update AccessServiceToken status to Ready")
+		return err
+	}
+
+	r.log.Info("AccessServiceToken synced successfully", "name", r.token.Name, "tokenId", tokenID)
+	r.Recorder.Event(r.token, corev1.EventTypeNormal, "Synced",
+		fmt.Sprintf("AccessServiceToken synced to Cloudflare with ID %s", tokenID))
 	return nil
 }
 

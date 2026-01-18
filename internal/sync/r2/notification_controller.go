@@ -318,6 +318,7 @@ func (r *NotificationController) handleDeletion(
 // SetupWithManager sets up the controller with the Manager.
 func (r *NotificationController) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
+		Named("r2-notification-sync").
 		For(&v1alpha2.CloudflareSyncState{}).
 		WithEventFilter(common.PredicateForResourceType(v1alpha2.SyncResourceR2BucketNotification)).
 		Complete(r)

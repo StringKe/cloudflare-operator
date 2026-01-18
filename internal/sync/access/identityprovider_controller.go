@@ -105,6 +105,14 @@ func (r *IdentityProviderController) Reconcile(ctx context.Context, req ctrl.Req
 	}
 
 	if !r.ShouldSync(syncState, newHash) {
+		// Even if config hasn't changed, ensure status is "Synced" if resource exists in Cloudflare
+		if syncState.Status.SyncStatus != v1alpha2.SyncStatusSynced && syncState.Spec.CloudflareID != "" {
+			syncResult := &common.SyncResult{ConfigHash: newHash}
+			if err := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusSynced, syncResult, nil); err != nil {
+				logger.Error(err, "Failed to update status to Synced")
+				return ctrl.Result{Requeue: true}, nil
+			}
+		}
 		logger.V(1).Info("Configuration unchanged, skipping sync", "hash", newHash)
 		return ctrl.Result{}, nil
 	}
@@ -449,6 +457,7 @@ func (r *IdentityProviderController) handleDeletion(
 // SetupWithManager sets up the controller with the Manager.
 func (r *IdentityProviderController) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
+		Named("access-identityprovider-sync").
 		For(&v1alpha2.CloudflareSyncState{}).
 		WithEventFilter(common.PredicateForResourceType(accesssvc.ResourceTypeAccessIdentityProvider)).
 		Complete(r)

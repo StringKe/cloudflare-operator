@@ -8,10 +8,12 @@ package access
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/service"
 )
 
@@ -28,6 +30,8 @@ func NewApplicationService(c client.Client) *ApplicationService {
 }
 
 // Register registers an AccessApplication configuration to SyncState.
+//
+//nolint:revive // cognitive complexity is acceptable for SyncState lookup logic
 func (s *ApplicationService) Register(ctx context.Context, opts AccessApplicationRegisterOptions) error {
 	logger := log.FromContext(ctx).WithValues(
 		"accountId", opts.AccountID,
@@ -37,24 +41,45 @@ func (s *ApplicationService) Register(ctx context.Context, opts AccessApplicatio
 	)
 	logger.V(1).Info("Registering AccessApplication configuration")
 
-	// Generate SyncState ID:
-	// - If ApplicationID is known (existing app), use it
-	// - Otherwise, use a placeholder based on source
-	syncStateID := opts.ApplicationID
-	if syncStateID == "" {
-		syncStateID = fmt.Sprintf("pending-%s", opts.Source.Name)
+	// Try to find existing SyncState in this order:
+	// 1. By pending-{source.Name} (for resources being created)
+	// 2. By ApplicationID (for resources that were already synced)
+	// This prevents creating duplicate SyncStates when ApplicationID changes
+	var syncState *v1alpha2.CloudflareSyncState
+	var err error
+
+	// First, try to find by pending ID (primary lookup for resources in creation)
+	pendingID := fmt.Sprintf("pending-%s", opts.Source.Name)
+	syncState, err = s.GetSyncState(ctx, ResourceTypeAccessApplication, pendingID)
+	if err != nil {
+		return fmt.Errorf("lookup syncstate by pending ID: %w", err)
 	}
 
-	syncState, err := s.GetOrCreateSyncState(
-		ctx,
-		ResourceTypeAccessApplication,
-		syncStateID,
-		opts.AccountID,
-		"", // AccessApplication doesn't use zone ID
-		opts.CredentialsRef,
-	)
-	if err != nil {
-		return fmt.Errorf("get/create syncstate for AccessApplication: %w", err)
+	// If not found by pending ID and ApplicationID is known, try by ApplicationID
+	if syncState == nil && opts.ApplicationID != "" {
+		syncState, err = s.GetSyncState(ctx, ResourceTypeAccessApplication, opts.ApplicationID)
+		if err != nil {
+			return fmt.Errorf("lookup syncstate by application ID: %w", err)
+		}
+	}
+
+	// If still not found, create a new SyncState
+	if syncState == nil {
+		syncStateID := pendingID
+		if opts.ApplicationID != "" {
+			syncStateID = opts.ApplicationID
+		}
+		syncState, err = s.GetOrCreateSyncState(
+			ctx,
+			ResourceTypeAccessApplication,
+			syncStateID,
+			opts.AccountID,
+			"", // AccessApplication doesn't use zone ID
+			opts.CredentialsRef,
+		)
+		if err != nil {
+			return fmt.Errorf("get/create syncstate for AccessApplication: %w", err)
+		}
 	}
 
 	if err := s.UpdateSource(ctx, syncState, opts.Source, opts.Config, PriorityAccessApplication); err != nil {
@@ -107,6 +132,63 @@ func (s *ApplicationService) Unregister(ctx context.Context, applicationID strin
 
 	logger.V(1).Info("No SyncState found to unregister")
 	return nil
+}
+
+// ApplicationSyncStatus represents the sync status of an AccessApplication.
+type ApplicationSyncStatus struct {
+	IsSynced      bool
+	ApplicationID string
+	AccountID     string
+	SyncStateID   string
+}
+
+// GetSyncStatus returns the sync status for an AccessApplication.
+//
+//nolint:revive // cognitive complexity acceptable for status lookup logic
+func (s *ApplicationService) GetSyncStatus(ctx context.Context, source service.Source, knownApplicationID string) (*ApplicationSyncStatus, error) {
+	logger := log.FromContext(ctx).WithValues(
+		"source", source.String(),
+		"knownApplicationId", knownApplicationID,
+	)
+
+	// Try both possible SyncState IDs
+	syncStateIDs := []string{
+		knownApplicationID,
+		fmt.Sprintf("pending-%s", source.Name),
+	}
+
+	for _, id := range syncStateIDs {
+		if id == "" {
+			continue
+		}
+
+		syncState, err := s.GetSyncState(ctx, ResourceTypeAccessApplication, id)
+		if err != nil {
+			logger.V(1).Info("Error getting SyncState", "syncStateId", id, "error", err)
+			continue
+		}
+		if syncState == nil {
+			continue
+		}
+
+		// Check if synced
+		isSynced := syncState.Status.SyncStatus == v1alpha2.SyncStatusSynced
+		applicationID := syncState.Spec.CloudflareID
+
+		// If the CloudflareID starts with "pending-", it's not a real ID
+		if strings.HasPrefix(applicationID, "pending-") {
+			applicationID = ""
+		}
+
+		return &ApplicationSyncStatus{
+			IsSynced:      isSynced,
+			ApplicationID: applicationID,
+			AccountID:     syncState.Spec.AccountID,
+			SyncStateID:   syncState.Name,
+		}, nil
+	}
+
+	return nil, nil
 }
 
 // UpdateApplicationID updates the SyncState to use the actual application ID

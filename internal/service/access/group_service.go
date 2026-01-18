@@ -8,10 +8,12 @@ package access
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/service"
 )
 
@@ -106,6 +108,63 @@ func (s *GroupService) Unregister(ctx context.Context, groupID string, source se
 
 	logger.V(1).Info("No SyncState found to unregister")
 	return nil
+}
+
+// SyncStatus represents the sync status of an AccessGroup
+type SyncStatus struct {
+	IsSynced    bool
+	GroupID     string
+	AccountID   string
+	SyncStateID string
+}
+
+// GetSyncStatus returns the sync status for an AccessGroup.
+//
+//nolint:revive // cognitive complexity acceptable for status lookup logic
+func (s *GroupService) GetSyncStatus(ctx context.Context, source service.Source, knownGroupID string) (*SyncStatus, error) {
+	logger := log.FromContext(ctx).WithValues(
+		"source", source.String(),
+		"knownGroupId", knownGroupID,
+	)
+
+	// Try both possible SyncState IDs
+	syncStateIDs := []string{
+		knownGroupID,
+		fmt.Sprintf("pending-%s", source.Name),
+	}
+
+	for _, id := range syncStateIDs {
+		if id == "" {
+			continue
+		}
+
+		syncState, err := s.GetSyncState(ctx, ResourceTypeAccessGroup, id)
+		if err != nil {
+			logger.V(1).Info("Error getting SyncState", "syncStateId", id, "error", err)
+			continue
+		}
+		if syncState == nil {
+			continue
+		}
+
+		// Check if synced
+		isSynced := syncState.Status.SyncStatus == v1alpha2.SyncStatusSynced
+		groupID := syncState.Spec.CloudflareID
+
+		// If the CloudflareID starts with "pending-", it's not a real ID
+		if strings.HasPrefix(groupID, "pending-") {
+			groupID = ""
+		}
+
+		return &SyncStatus{
+			IsSynced:    isSynced,
+			GroupID:     groupID,
+			AccountID:   syncState.Spec.AccountID,
+			SyncStateID: syncState.Name,
+		}, nil
+	}
+
+	return nil, nil
 }
 
 // UpdateGroupID updates the SyncState to use the actual group ID

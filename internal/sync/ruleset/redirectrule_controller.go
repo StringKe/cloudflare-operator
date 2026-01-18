@@ -270,6 +270,7 @@ func (*RedirectRuleController) convertRules(config *rulesetsvc.RedirectRuleConfi
 // SetupWithManager sets up the controller with the Manager.
 func (r *RedirectRuleController) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
+		Named("redirect-rule-sync").
 		For(&v1alpha2.CloudflareSyncState{}).
 		WithEventFilter(common.PredicateForResourceType(v1alpha2.SyncResourceRedirectRule)).
 		Complete(r)

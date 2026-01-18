@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
+	cfclient "github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
 )
 
@@ -268,6 +269,12 @@ func (r *Reconciler) createCloudflareClient(creds *networkingv1alpha2.Cloudflare
 	var cfClient *cloudflare.API
 	var err error
 
+	// Build options list - add custom base URL if configured
+	var opts []cloudflare.Option
+	if baseURL := cfclient.GetAPIBaseURL(); baseURL != "" {
+		opts = append(opts, cloudflare.BaseURL(baseURL))
+	}
+
 	switch creds.Spec.AuthType {
 	case networkingv1alpha2.AuthTypeAPIToken:
 		tokenKey := creds.Spec.SecretRef.APITokenKey
@@ -278,7 +285,7 @@ func (r *Reconciler) createCloudflareClient(creds *networkingv1alpha2.Cloudflare
 		if token == "" {
 			return nil, fmt.Errorf("API token not found in secret (key: %s)", tokenKey)
 		}
-		cfClient, err = cloudflare.NewWithAPIToken(token)
+		cfClient, err = cloudflare.NewWithAPIToken(token, opts...)
 
 	case networkingv1alpha2.AuthTypeGlobalAPIKey:
 		keyKey := creds.Spec.SecretRef.APIKeyKey
@@ -299,7 +306,7 @@ func (r *Reconciler) createCloudflareClient(creds *networkingv1alpha2.Cloudflare
 		if email == "" {
 			return nil, fmt.Errorf("email not found in secret (key: %s)", emailKey)
 		}
-		cfClient, err = cloudflare.New(apiKey, email)
+		cfClient, err = cloudflare.New(apiKey, email, opts...)
 
 	default:
 		return nil, fmt.Errorf("unknown auth type: %s", creds.Spec.AuthType)

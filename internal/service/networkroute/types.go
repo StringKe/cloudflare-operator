@@ -53,3 +53,15 @@ type SyncResult struct {
 	// VirtualNetworkID is the Cloudflare Virtual Network ID
 	VirtualNetworkID string
 }
+
+// SyncStatus represents the sync status of a NetworkRoute.
+type SyncStatus struct {
+	// IsSynced indicates whether the NetworkRoute has been synced to Cloudflare
+	IsSynced bool
+	// Network is the CIDR notation for the route
+	Network string
+	// AccountID is the Cloudflare Account ID
+	AccountID string
+	// SyncStateID is the name of the SyncState resource
+	SyncStateID string
+}

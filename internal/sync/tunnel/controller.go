@@ -20,6 +20,10 @@ import (
 	"github.com/StringKe/cloudflare-operator/internal/sync/common"
 )
 
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=cloudflaresyncstates,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=cloudflaresyncstates/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=cloudflaresyncstates/finalizers,verbs=update
+
 // Controller is the Sync Controller for Tunnel Configuration.
 // It watches CloudflareSyncState resources of type TunnelConfiguration,
 // aggregates configuration from multiple sources, and syncs to Cloudflare API.

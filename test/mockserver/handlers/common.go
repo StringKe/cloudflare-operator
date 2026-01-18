@@ -22,6 +22,7 @@ func Response[T any](w http.ResponseWriter, status int, result T, errors []model
 		Messages: []string{},
 		Result:   result,
 	}
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(resp)
 }
@@ -35,6 +36,7 @@ func ResponseWithResultInfo[T any](w http.ResponseWriter, status int, result T, 
 		Result:     result,
 		ResultInfo: resultInfo,
 	}
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(resp)
 }

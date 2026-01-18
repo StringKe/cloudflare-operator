@@ -85,12 +85,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// Reconcile the AccessGroup through service layer
-	if err := r.reconcileAccessGroup(); err != nil {
+	result, err := r.reconcileAccessGroup()
+	if err != nil {
 		r.log.Error(err, "failed to reconcile AccessGroup")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 
-	return ctrl.Result{}, nil
+	return result, nil
 }
 
 // resolveCredentials resolves the credentials reference and returns the credentials info.
@@ -162,13 +163,15 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 // reconcileAccessGroup ensures the AccessGroup configuration is registered with the service layer.
 // Following Unified Sync Architecture:
 // Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
-func (r *Reconciler) reconcileAccessGroup() error {
+//
+//nolint:revive // cognitive complexity acceptable for reconciliation logic
+func (r *Reconciler) reconcileAccessGroup() (ctrl.Result, error) {
 	groupName := r.accessGroup.GetAccessGroupName()
 
 	// Resolve credentials (without creating API client)
 	credInfo, err := r.resolveCredentials()
 	if err != nil {
-		return fmt.Errorf("resolve credentials: %w", err)
+		return ctrl.Result{}, fmt.Errorf("resolve credentials: %w", err)
 	}
 
 	// Build the configuration
@@ -199,11 +202,32 @@ func (r *Reconciler) reconcileAccessGroup() error {
 		r.log.Error(err, "failed to register AccessGroup configuration")
 		r.setCondition(metav1.ConditionFalse, controller.EventReasonCreateFailed, err.Error())
 		r.Recorder.Event(r.accessGroup, corev1.EventTypeWarning, controller.EventReasonCreateFailed, err.Error())
-		return err
+		return ctrl.Result{}, err
+	}
+
+	// Check if already synced (SyncState may have been created and synced in a previous reconcile)
+	syncStatus, err := r.groupService.GetSyncStatus(r.ctx, source, r.accessGroup.Status.GroupID)
+	if err != nil {
+		r.log.Error(err, "failed to get sync status")
+		if err := r.updateStatusPending(credInfo.AccountID); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	if syncStatus != nil && syncStatus.IsSynced && syncStatus.GroupID != "" {
+		// Already synced, update status to Ready
+		if err := r.updateStatusReady(credInfo.AccountID, syncStatus.GroupID); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
 	}
 
 	// Update status to Pending if not already synced
-	return r.updateStatusPending(credInfo.AccountID)
+	if err := r.updateStatusPending(credInfo.AccountID); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 }
 
 // updateStatusPending updates the AccessGroup status to Pending state.
@@ -232,6 +256,27 @@ func (r *Reconciler) updateStatusPending(accountID string) error {
 	r.log.Info("AccessGroup configuration registered", "name", r.accessGroup.Name)
 	r.Recorder.Event(r.accessGroup, corev1.EventTypeNormal, "Registered",
 		"Configuration registered to SyncState")
+	return nil
+}
+
+// updateStatusReady updates the AccessGroup status to Ready state.
+func (r *Reconciler) updateStatusReady(accountID, groupID string) error {
+	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.accessGroup, func() {
+		r.accessGroup.Status.ObservedGeneration = r.accessGroup.Generation
+		r.accessGroup.Status.State = "Ready"
+		r.accessGroup.Status.AccountID = accountID
+		r.accessGroup.Status.GroupID = groupID
+		r.setCondition(metav1.ConditionTrue, "Synced", "AccessGroup synced to Cloudflare")
+	})
+
+	if err != nil {
+		r.log.Error(err, "failed to update AccessGroup status to Ready")
+		return err
+	}
+
+	r.log.Info("AccessGroup synced successfully", "name", r.accessGroup.Name, "groupId", groupID)
+	r.Recorder.Event(r.accessGroup, corev1.EventTypeNormal, "Synced",
+		fmt.Sprintf("AccessGroup synced to Cloudflare with ID %s", groupID))
 	return nil
 }
 

@@ -37,15 +37,22 @@ type ClientConfig struct {
 type DefaultClientFactory struct{}
 
 // NewClient creates a new CloudflareClient using the real Cloudflare API.
+// If CLOUDFLARE_API_BASE_URL environment variable is set, it uses that as the API base URL.
 func (*DefaultClientFactory) NewClient(config ClientConfig) (CloudflareClient, error) {
 	var cfClient *cloudflare.API
 	var err error
 
+	// Build options list - add custom base URL if configured
+	var opts []cloudflare.Option
+	if baseURL := GetAPIBaseURL(); baseURL != "" {
+		opts = append(opts, cloudflare.BaseURL(baseURL))
+	}
+
 	switch {
 	case config.APIToken != "":
-		cfClient, err = cloudflare.NewWithAPIToken(config.APIToken)
+		cfClient, err = cloudflare.NewWithAPIToken(config.APIToken, opts...)
 	case config.APIKey != "" && config.Email != "":
-		cfClient, err = cloudflare.New(config.APIKey, config.Email)
+		cfClient, err = cloudflare.New(config.APIKey, config.Email, opts...)
 	default:
 		return nil, ErrNoCredentials
 	}

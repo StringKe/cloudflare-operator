@@ -58,3 +58,15 @@ type SyncResult struct {
 	// ServiceIP is the ClusterIP of the referenced K8s Service
 	ServiceIP string
 }
+
+// SyncStatus represents the sync status of a PrivateService.
+type SyncStatus struct {
+	// IsSynced indicates whether the PrivateService has been synced to Cloudflare
+	IsSynced bool
+	// Network is the CIDR notation for the route
+	Network string
+	// AccountID is the Cloudflare Account ID
+	AccountID string
+	// SyncStateID is the name of the SyncState resource
+	SyncStateID string
+}

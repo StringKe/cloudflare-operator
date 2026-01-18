@@ -7,6 +7,7 @@ package framework
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -41,6 +42,14 @@ const (
 	OperatorNamespace = "cloudflare-operator-system"
 	// TestNamespace is the default namespace for E2E tests
 	TestNamespace = "e2e-test"
+	// MockServerNamespace is the namespace where the mock server is deployed
+	MockServerNamespace = "cloudflare-mock"
+	// MockServerName is the name of the mock server deployment/service
+	MockServerName = "mockserver"
+	// MockServerImage is the Docker image for the mock server
+	MockServerImage = "cloudflare-mockserver:e2e-test"
+	// MockServerPort is the port the mock server listens on
+	MockServerPort = 8787
 )
 
 // Framework provides utilities for E2E testing
@@ -59,19 +68,25 @@ type Options struct {
 	UseExistingCluster bool
 	// KubeconfigPath is the path to the kubeconfig file
 	KubeconfigPath string
-	// MockServerPort is the port for the mock Cloudflare API server
+	// MockServerPort is the port for the mock Cloudflare API server (deprecated, use in-cluster mock)
 	MockServerPort int
-	// SkipMockServer skips starting the mock server
+	// SkipMockServer skips starting the mock server (deprecated, use UseInClusterMockServer)
 	SkipMockServer bool
+	// UseInClusterMockServer deploys mock server to cluster instead of running locally
+	UseInClusterMockServer bool
+	// SkipMockServerSetup skips all mock server setup (for tests using real API)
+	SkipMockServerSetup bool
 }
 
 // DefaultOptions returns default framework options
 func DefaultOptions() *Options {
 	return &Options{
-		UseExistingCluster: os.Getenv("USE_EXISTING_CLUSTER") == "true",
-		KubeconfigPath:     os.Getenv("KUBECONFIG"),
-		MockServerPort:     8787,
-		SkipMockServer:     false,
+		UseExistingCluster:     os.Getenv("USE_EXISTING_CLUSTER") == "true",
+		KubeconfigPath:         os.Getenv("KUBECONFIG"),
+		MockServerPort:         8787,
+		SkipMockServer:         false,
+		UseInClusterMockServer: true, // Default to in-cluster mock server
+		SkipMockServerSetup:    false,
 	}
 }
 
@@ -85,15 +100,6 @@ func New(opts *Options) (*Framework, error) {
 	f := &Framework{
 		ctx:    ctx,
 		cancel: cancel,
-	}
-
-	// Start mock server
-	if !opts.SkipMockServer {
-		f.MockServer = mockserver.NewServer(mockserver.WithPort(opts.MockServerPort))
-		if err := f.MockServer.StartAsync(); err != nil {
-			cancel()
-			return nil, fmt.Errorf("start mock server: %w", err)
-		}
 	}
 
 	// Create or use existing cluster
@@ -115,6 +121,23 @@ func New(opts *Options) (*Framework, error) {
 	if err := f.createClient(); err != nil {
 		f.Cleanup()
 		return nil, fmt.Errorf("create client: %w", err)
+	}
+
+	// Setup mock server
+	if !opts.SkipMockServerSetup {
+		if opts.UseInClusterMockServer {
+			// Deploy mock server to cluster (for E2E tests)
+			// This is handled separately by SetupMockServerInCluster()
+			// because it requires the cluster to be ready first
+			_, _ = fmt.Fprintln(os.Stdout, "In-cluster mock server mode enabled. Call SetupMockServerInCluster() to deploy.")
+		} else if !opts.SkipMockServer {
+			// Legacy: Start local mock server (for local development only)
+			f.MockServer = mockserver.NewServer(mockserver.WithPort(opts.MockServerPort))
+			if err := f.MockServer.StartAsync(); err != nil {
+				f.Cleanup()
+				return nil, fmt.Errorf("start mock server: %w", err)
+			}
+		}
 	}
 
 	return f, nil
@@ -421,7 +444,7 @@ func (f *Framework) CreateCloudflareCredentials(name string, apiToken string, ac
 	}
 
 	if err := f.CreateSecret(secretNS, secretName, map[string]string{
-		"apiToken": apiToken,
+		"CLOUDFLARE_API_TOKEN": apiToken,
 	}); err != nil {
 		return fmt.Errorf("create credentials secret: %w", err)
 	}
@@ -569,4 +592,224 @@ func (f *Framework) DeleteResourceAndWait(obj client.Object, timeout time.Durati
 func (f *Framework) GetResource(obj client.Object, name, namespace string) error {
 	key := types.NamespacedName{Name: name, Namespace: namespace}
 	return f.Client.Get(f.ctx, key, obj)
+}
+
+// BuildMockServerImage builds the mock server Docker image
+func (*Framework) BuildMockServerImage() error {
+	_, _ = fmt.Fprintln(os.Stdout, "Building mock server Docker image...")
+
+	// Build from project root
+	buildCmd := exec.Command("docker", "build",
+		"-t", MockServerImage,
+		"-f", "test/mockserver/Dockerfile",
+		".")
+	buildCmd.Stdout = os.Stdout
+	buildCmd.Stderr = os.Stderr
+
+	if err := buildCmd.Run(); err != nil {
+		return fmt.Errorf("build mock server image: %w", err)
+	}
+
+	return nil
+}
+
+// LoadMockServerImageToKind loads the mock server image into Kind
+func (*Framework) LoadMockServerImageToKind() error {
+	_, _ = fmt.Fprintln(os.Stdout, "Loading mock server image into Kind cluster...")
+
+	loadCmd := exec.Command("kind", "load", "docker-image",
+		MockServerImage,
+		"--name", KindClusterName)
+	loadCmd.Stdout = os.Stdout
+	loadCmd.Stderr = os.Stderr
+
+	if err := loadCmd.Run(); err != nil {
+		return fmt.Errorf("load image to kind: %w", err)
+	}
+
+	return nil
+}
+
+// DeployMockServerToCluster deploys the mock server as a Kubernetes deployment
+func (f *Framework) DeployMockServerToCluster() error {
+	_, _ = fmt.Fprintln(os.Stdout, "Deploying mock server to cluster...")
+
+	// Create namespace
+	if err := f.EnsureNamespaceExists(MockServerNamespace); err != nil {
+		return fmt.Errorf("create mock server namespace: %w", err)
+	}
+
+	// Create deployment
+	replicas := int32(1)
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      MockServerName,
+			Namespace: MockServerNamespace,
+			Labels:    map[string]string{"app": "cloudflare-mockserver"},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "cloudflare-mockserver"},
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{"app": "cloudflare-mockserver"},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:            "mockserver",
+							Image:           MockServerImage,
+							ImagePullPolicy: corev1.PullIfNotPresent,
+							Ports: []corev1.ContainerPort{
+								{ContainerPort: MockServerPort, Name: "http"},
+							},
+							Args: []string{fmt.Sprintf("-port=%d", MockServerPort)},
+							ReadinessProbe: &corev1.Probe{
+								ProbeHandler: corev1.ProbeHandler{
+									HTTPGet: &corev1.HTTPGetAction{
+										Path: "/health",
+										Port: intstr.FromInt32(MockServerPort),
+									},
+								},
+								InitialDelaySeconds: 2,
+								PeriodSeconds:       5,
+							},
+							LivenessProbe: &corev1.Probe{
+								ProbeHandler: corev1.ProbeHandler{
+									HTTPGet: &corev1.HTTPGetAction{
+										Path: "/health",
+										Port: intstr.FromInt32(MockServerPort),
+									},
+								},
+								InitialDelaySeconds: 5,
+								PeriodSeconds:       10,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if err := f.Client.Create(f.ctx, deploy); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create mock server deployment: %w", err)
+	}
+
+	// Create service
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      MockServerName,
+			Namespace: MockServerNamespace,
+			Labels:    map[string]string{"app": "cloudflare-mockserver"},
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: map[string]string{"app": "cloudflare-mockserver"},
+			Ports: []corev1.ServicePort{
+				{
+					Port:       MockServerPort,
+					TargetPort: intstr.FromInt32(MockServerPort),
+					Name:       "http",
+				},
+			},
+			Type: corev1.ServiceTypeClusterIP,
+		},
+	}
+
+	if err := f.Client.Create(f.ctx, svc); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create mock server service: %w", err)
+	}
+
+	// Wait for deployment to be ready
+	return f.WaitForMockServerReady(DefaultTimeout)
+}
+
+// WaitForMockServerReady waits for the mock server deployment to be available
+func (f *Framework) WaitForMockServerReady(timeout time.Duration) error {
+	_, _ = fmt.Fprintln(os.Stdout, "Waiting for mock server to be ready...")
+
+	return wait.PollUntilContextTimeout(f.ctx, DefaultInterval, timeout, true, func(ctx context.Context) (bool, error) {
+		var deploy appsv1.Deployment
+		key := types.NamespacedName{
+			Name:      MockServerName,
+			Namespace: MockServerNamespace,
+		}
+		if err := f.Client.Get(ctx, key, &deploy); err != nil {
+			if apierrors.IsNotFound(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		return deploy.Status.AvailableReplicas > 0 && deploy.Status.ReadyReplicas > 0, nil
+	})
+}
+
+// InClusterMockServerURL returns the in-cluster URL for the mock server
+func (*Framework) InClusterMockServerURL() string {
+	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d",
+		MockServerName, MockServerNamespace, MockServerPort)
+}
+
+// SetupMockServerInCluster builds, loads, and deploys the mock server to the cluster
+func (f *Framework) SetupMockServerInCluster() error {
+	if err := f.BuildMockServerImage(); err != nil {
+		return err
+	}
+	if err := f.LoadMockServerImageToKind(); err != nil {
+		return err
+	}
+	return f.DeployMockServerToCluster()
+}
+
+// setContainerEnvVar sets or updates an environment variable in a container
+func setContainerEnvVar(container *corev1.Container, name, value string) {
+	for i := range container.Env {
+		if container.Env[i].Name == name {
+			container.Env[i].Value = value
+			return
+		}
+	}
+	container.Env = append(container.Env, corev1.EnvVar{Name: name, Value: value})
+}
+
+// findManagerContainer finds the manager container in a pod spec
+func findManagerContainer(podSpec *corev1.PodSpec) *corev1.Container {
+	for i := range podSpec.Containers {
+		if podSpec.Containers[i].Name == "manager" {
+			return &podSpec.Containers[i]
+		}
+	}
+	return nil
+}
+
+// PatchOperatorWithMockServerURL patches the operator deployment to use the mock server URL
+func (f *Framework) PatchOperatorWithMockServerURL() error {
+	_, _ = fmt.Fprintln(os.Stdout, "Patching operator to use mock server URL...")
+
+	var deploy appsv1.Deployment
+	key := types.NamespacedName{
+		Name:      "cloudflare-operator-controller-manager",
+		Namespace: OperatorNamespace,
+	}
+
+	if err := f.Client.Get(f.ctx, key, &deploy); err != nil {
+		return fmt.Errorf("get operator deployment: %w", err)
+	}
+
+	container := findManagerContainer(&deploy.Spec.Template.Spec)
+	if container == nil {
+		return errors.New("manager container not found in operator deployment")
+	}
+
+	setContainerEnvVar(container, "CLOUDFLARE_API_BASE_URL", f.InClusterMockServerURL())
+
+	if err := f.Client.Update(f.ctx, &deploy); err != nil {
+		return fmt.Errorf("update operator deployment: %w", err)
+	}
+
+	_, _ = fmt.Fprintln(os.Stdout, "Waiting for operator to restart with new configuration...")
+	time.Sleep(5 * time.Second) // Give time for rollout to start
+
+	return f.WaitForOperatorReady(DefaultTimeout)
 }

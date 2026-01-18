@@ -364,8 +364,13 @@ type TunnelRouteCreateRequest struct {
 	Comment          string `json:"comment"`
 }
 
-// CreateTunnelRoute handles POST /accounts/{accountId}/teamnet/routes.
+// CreateTunnelRoute handles POST /accounts/{accountId}/teamnet/routes/network/{network}.
+// Note: cloudflare-go SDK passes network in URL path, not request body.
 func (h *Handlers) CreateTunnelRoute(w http.ResponseWriter, r *http.Request) {
+	// Get network from URL path (URL encoded)
+	network := GetPathParam(r, "network")
+	decodedNetwork, _ := url.PathUnescape(network)
+
 	req, err := ReadJSON[TunnelRouteCreateRequest](r)
 	if err != nil {
 		BadRequest(w, "invalid request body")
@@ -379,7 +384,7 @@ func (h *Handlers) CreateTunnelRoute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	route := &models.TunnelRoute{
-		Network:          req.Network,
+		Network:          decodedNetwork,
 		TunnelID:         req.TunnelID,
 		TunnelName:       tunnelName,
 		VirtualNetworkID: req.VirtualNetworkID,

@@ -277,6 +277,7 @@ func (*PostureRuleController) convertInput(input *devicesvc.DevicePostureInput) 
 // SetupWithManager sets up the controller with the Manager.
 func (r *PostureRuleController) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
+		Named("device-posturerule-sync").
 		For(&v1alpha2.CloudflareSyncState{}).
 		WithEventFilter(common.PredicateForResourceType(v1alpha2.SyncResourceDevicePostureRule)).
 		Complete(r)

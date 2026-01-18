@@ -9,6 +9,7 @@ package dns
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -124,6 +125,64 @@ func (s *Service) Unregister(ctx context.Context, recordID string, source servic
 
 	logger.V(1).Info("No SyncState found to unregister")
 	return nil
+}
+
+// SyncStatus represents the sync status of a DNS record
+type SyncStatus struct {
+	IsSynced    bool
+	RecordID    string
+	ZoneID      string
+	SyncStateID string
+}
+
+// GetSyncStatus returns the sync status for a DNS record.
+// It checks the SyncState to determine if the record has been synced to Cloudflare.
+//
+//nolint:revive // cognitive complexity acceptable for status lookup logic
+func (s *Service) GetSyncStatus(ctx context.Context, source service.Source, knownRecordID string) (*SyncStatus, error) {
+	logger := log.FromContext(ctx).WithValues(
+		"source", source.String(),
+		"knownRecordId", knownRecordID,
+	)
+
+	// Try both possible SyncState IDs
+	syncStateIDs := []string{
+		knownRecordID,
+		fmt.Sprintf("pending-%s-%s", source.Namespace, source.Name),
+	}
+
+	for _, id := range syncStateIDs {
+		if id == "" {
+			continue
+		}
+
+		syncState, err := s.GetSyncState(ctx, ResourceType, id)
+		if err != nil {
+			logger.V(1).Info("Error getting SyncState", "syncStateId", id, "error", err)
+			continue
+		}
+		if syncState == nil {
+			continue
+		}
+
+		// Check if synced
+		isSynced := syncState.Status.SyncStatus == v1alpha2.SyncStatusSynced
+		recordID := syncState.Spec.CloudflareID
+
+		// If the CloudflareID starts with "pending-", it's not a real ID
+		if strings.HasPrefix(recordID, "pending-") {
+			recordID = ""
+		}
+
+		return &SyncStatus{
+			IsSynced:    isSynced,
+			RecordID:    recordID,
+			ZoneID:      syncState.Spec.ZoneID,
+			SyncStateID: syncState.Name,
+		}, nil
+	}
+
+	return nil, nil
 }
 
 // UpdateRecordID updates the SyncState to use the actual Cloudflare record ID

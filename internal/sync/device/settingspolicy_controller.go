@@ -245,6 +245,7 @@ func (r *SettingsPolicyController) syncToCloudflare(
 // SetupWithManager sets up the controller with the Manager.
 func (r *SettingsPolicyController) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
+		Named("device-settingspolicy-sync").
 		For(&v1alpha2.CloudflareSyncState{}).
 		WithEventFilter(common.PredicateForResourceType(v1alpha2.SyncResourceDeviceSettingsPolicy)).
 		Complete(r)

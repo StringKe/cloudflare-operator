@@ -9,4 +9,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: ghcr.io/stringke/cloudflare-operator
-  newTag: test
+  newTag: e2e

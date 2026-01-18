@@ -349,6 +349,7 @@ func (r *DomainController) handleDeletion(
 // SetupWithManager sets up the controller with the Manager.
 func (r *DomainController) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
+		Named("r2-domain-sync").
 		For(&v1alpha2.CloudflareSyncState{}).
 		WithEventFilter(common.PredicateForResourceType(v1alpha2.SyncResourceR2BucketDomain)).
 		Complete(r)

@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2025-2026 The Cloudflare Operator Authors
+#
+# Mock Cloudflare API Server deployment for E2E testing
+# This runs inside the cluster so the Operator can access it
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cloudflare-mock
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mockserver
+  namespace: cloudflare-mock
+  labels:
+    app: cloudflare-mockserver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cloudflare-mockserver
+  template:
+    metadata:
+      labels:
+        app: cloudflare-mockserver
+    spec:
+      containers:
+      - name: mockserver
+        image: cloudflare-mockserver:e2e-test
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8787
+          name: http
+        args:
+        - "-port=8787"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8787
+          initialDelaySeconds: 2
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8787
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mockserver
+  namespace: cloudflare-mock
+  labels:
+    app: cloudflare-mockserver
+spec:
+  selector:
+    app: cloudflare-mockserver
+  ports:
+  - port: 8787
+    targetPort: 8787
+    name: http
+  type: ClusterIP

@@ -338,6 +338,7 @@ func (*ZoneRulesetController) convertRateLimit(rl *v1alpha2.RulesetRuleRateLimit
 // SetupWithManager sets up the controller with the Manager.
 func (r *ZoneRulesetController) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
+		Named("zone-ruleset-sync").
 		For(&v1alpha2.CloudflareSyncState{}).
 		WithEventFilter(common.PredicateForResourceType(v1alpha2.SyncResourceZoneRuleset)).
 		Complete(r)

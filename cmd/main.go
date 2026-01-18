@@ -475,22 +475,45 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "Ingress")
 		os.Exit(1)
 	}
-	if err = (&gateway.GatewayClassReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("gatewayclass-controller"),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "GatewayClass")
+
+	// Check if Gateway API CRDs are installed before registering Gateway API controllers
+	crdChecker, err := controller.NewCRDChecker(ctrl.GetConfigOrDie())
+	if err != nil {
+		setupLog.Error(err, "unable to create CRD checker")
 		os.Exit(1)
 	}
-	if err = (&gateway.GatewayReconciler{
-		Client:            mgr.GetClient(),
-		Scheme:            mgr.GetScheme(),
-		Recorder:          mgr.GetEventRecorderFor("gateway-controller"),
-		OperatorNamespace: clusterResourceNamespace,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Gateway")
-		os.Exit(1)
+
+	gatewayAPIStatus := crdChecker.GetGatewayAPIStatus()
+	if gatewayAPIStatus.CoreAvailable() {
+		setupLog.Info("Gateway API CRDs detected, enabling Gateway API controllers",
+			"gatewayClass", gatewayAPIStatus.GatewayClassAvailable,
+			"gateway", gatewayAPIStatus.GatewayAvailable,
+			"httpRoute", gatewayAPIStatus.HTTPRouteAvailable,
+			"tcpRoute", gatewayAPIStatus.TCPRouteAvailable,
+			"udpRoute", gatewayAPIStatus.UDPRouteAvailable)
+
+		if err = (&gateway.GatewayClassReconciler{
+			Client:   mgr.GetClient(),
+			Scheme:   mgr.GetScheme(),
+			Recorder: mgr.GetEventRecorderFor("gatewayclass-controller"),
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "GatewayClass")
+			os.Exit(1)
+		}
+		if err = (&gateway.GatewayReconciler{
+			Client:            mgr.GetClient(),
+			Scheme:            mgr.GetScheme(),
+			Recorder:          mgr.GetEventRecorderFor("gateway-controller"),
+			OperatorNamespace: clusterResourceNamespace,
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "Gateway")
+			os.Exit(1)
+		}
+	} else {
+		setupLog.Info("Gateway API CRDs not installed, Gateway API controllers disabled. "+
+			"Install Gateway API CRDs (https://gateway-api.sigs.k8s.io/) to enable Gateway support",
+			"gatewayClass", gatewayAPIStatus.GatewayClassAvailable,
+			"gateway", gatewayAPIStatus.GatewayAvailable)
 	}
 
 	// Register Sync Controllers

@@ -91,12 +91,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// Reconcile the NetworkRoute through service layer
-	if err := r.reconcileNetworkRoute(); err != nil {
+	result, err := r.reconcileNetworkRoute()
+	if err != nil {
 		r.log.Error(err, "failed to reconcile NetworkRoute")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 
-	return ctrl.Result{}, nil
+	return result, nil
 }
 
 // resolveCredentials resolves the credentials reference and returns the credentials info.
@@ -185,11 +186,11 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 // Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
 //
 //nolint:revive // cognitive complexity is acceptable for reconciliation with dependency resolution
-func (r *Reconciler) reconcileNetworkRoute() error {
+func (r *Reconciler) reconcileNetworkRoute() (ctrl.Result, error) {
 	// Resolve credentials (without creating API client)
 	credInfo, err := r.resolveCredentials()
 	if err != nil {
-		return fmt.Errorf("resolve credentials: %w", err)
+		return ctrl.Result{}, fmt.Errorf("resolve credentials: %w", err)
 	}
 
 	// Resolve tunnel reference to get tunnel ID
@@ -197,7 +198,7 @@ func (r *Reconciler) reconcileNetworkRoute() error {
 	if err != nil {
 		r.log.Error(err, "failed to resolve tunnel reference")
 		r.setCondition(metav1.ConditionFalse, controller.EventReasonDependencyError, err.Error())
-		return err
+		return ctrl.Result{}, err
 	}
 
 	// Resolve virtual network reference if specified
@@ -207,7 +208,7 @@ func (r *Reconciler) reconcileNetworkRoute() error {
 		if err != nil {
 			r.log.Error(err, "failed to resolve virtual network reference")
 			r.setCondition(metav1.ConditionFalse, controller.EventReasonDependencyError, err.Error())
-			return err
+			return ctrl.Result{}, err
 		}
 	}
 
@@ -242,11 +243,32 @@ func (r *Reconciler) reconcileNetworkRoute() error {
 		r.log.Error(err, "failed to register NetworkRoute configuration")
 		r.setCondition(metav1.ConditionFalse, controller.EventReasonCreateFailed, err.Error())
 		r.Recorder.Event(r.networkRoute, corev1.EventTypeWarning, controller.EventReasonCreateFailed, err.Error())
-		return err
+		return ctrl.Result{}, err
+	}
+
+	// Check if already synced (SyncState may have been created and synced in a previous reconcile)
+	syncStatus, err := r.routeService.GetSyncStatus(r.ctx, source, r.networkRoute.Status.Network, virtualNetworkID)
+	if err != nil {
+		r.log.Error(err, "failed to get sync status")
+		if err := r.updateStatusPending(tunnelName, credInfo.AccountID); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	if syncStatus != nil && syncStatus.IsSynced && syncStatus.Network != "" {
+		// Already synced, update status to Ready
+		if err := r.updateStatusReady(tunnelName, credInfo.AccountID, network, virtualNetworkID); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
 	}
 
 	// Update status to Pending if not already synced
-	return r.updateStatusPending(tunnelName, credInfo.AccountID)
+	if err := r.updateStatusPending(tunnelName, credInfo.AccountID); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 }
 
 // resolveTunnelRef resolves the TunnelRef to get the tunnel ID.
@@ -336,6 +358,31 @@ func (r *Reconciler) updateStatusPending(tunnelName, accountID string) error {
 	r.log.Info("NetworkRoute configuration registered", "name", r.networkRoute.Name)
 	r.Recorder.Event(r.networkRoute, corev1.EventTypeNormal, "Registered",
 		"Configuration registered to SyncState")
+	return nil
+}
+
+// updateStatusReady updates the NetworkRoute status to Ready state.
+func (r *Reconciler) updateStatusReady(tunnelName, accountID, network, virtualNetworkID string) error {
+	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.networkRoute, func() {
+		r.networkRoute.Status.ObservedGeneration = r.networkRoute.Generation
+		r.networkRoute.Status.State = "active"
+		r.networkRoute.Status.AccountID = accountID
+		r.networkRoute.Status.Network = network
+		r.networkRoute.Status.VirtualNetworkID = virtualNetworkID
+		if tunnelName != "" {
+			r.networkRoute.Status.TunnelName = tunnelName
+		}
+		r.setCondition(metav1.ConditionTrue, "Synced", "NetworkRoute synced to Cloudflare")
+	})
+
+	if err != nil {
+		r.log.Error(err, "failed to update NetworkRoute status to Ready")
+		return err
+	}
+
+	r.log.Info("NetworkRoute synced successfully", "name", r.networkRoute.Name, "network", network)
+	r.Recorder.Event(r.networkRoute, corev1.EventTypeNormal, "Synced",
+		fmt.Sprintf("NetworkRoute synced to Cloudflare with network %s", network))
 	return nil
 }
 

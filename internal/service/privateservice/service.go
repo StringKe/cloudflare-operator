@@ -40,6 +40,8 @@ func NewService(c client.Client) *Service {
 // Register registers a PrivateService configuration to SyncState.
 // Each PrivateService K8s resource has its own SyncState, keyed by a generated ID
 // based on the network CIDR and virtual network ID.
+//
+//nolint:revive // cognitive complexity is acceptable for SyncState lookup logic
 func (s *Service) Register(ctx context.Context, opts RegisterOptions) error {
 	logger := log.FromContext(ctx).WithValues(
 		"accountId", opts.AccountID,
@@ -48,31 +50,52 @@ func (s *Service) Register(ctx context.Context, opts RegisterOptions) error {
 	)
 	logger.V(1).Info("Registering PrivateService configuration")
 
-	// Generate SyncState ID:
-	// - If RouteNetwork is known (existing route), use a sanitized version
-	// - Otherwise, use a placeholder based on source
-	syncStateID := opts.RouteNetwork
-	if syncStateID == "" {
-		syncStateID = fmt.Sprintf("pending-%s-%s", opts.Source.Namespace, opts.Source.Name)
-	} else {
-		// Sanitize network CIDR for use as name (replace / with -)
-		syncStateID = sanitizeNetworkForName(syncStateID)
-		// Include virtual network ID if specified to make it unique
+	// Try to find existing SyncState in this order:
+	// 1. By pending-{namespace}-{name} (for resources being created)
+	// 2. By RouteNetwork (for resources that were already synced)
+	// This prevents creating duplicate SyncStates when RouteNetwork changes
+	var syncState *v1alpha2.CloudflareSyncState
+	var err error
+
+	// First, try to find by pending ID (primary lookup for resources in creation)
+	pendingID := fmt.Sprintf("pending-%s-%s", opts.Source.Namespace, opts.Source.Name)
+	syncState, err = s.GetSyncState(ctx, ResourceType, pendingID)
+	if err != nil {
+		return fmt.Errorf("lookup syncstate by pending ID: %w", err)
+	}
+
+	// If not found by pending ID and RouteNetwork is known, try by RouteNetwork-based ID
+	if syncState == nil && opts.RouteNetwork != "" {
+		routeBasedID := sanitizeNetworkForName(opts.RouteNetwork)
 		if opts.VirtualNetworkID != "" && opts.VirtualNetworkID != "default" {
-			syncStateID = fmt.Sprintf("%s-%s", syncStateID, opts.VirtualNetworkID[:min(8, len(opts.VirtualNetworkID))])
+			routeBasedID = fmt.Sprintf("%s-%s", routeBasedID, opts.VirtualNetworkID[:min(8, len(opts.VirtualNetworkID))])
+		}
+		syncState, err = s.GetSyncState(ctx, ResourceType, routeBasedID)
+		if err != nil {
+			return fmt.Errorf("lookup syncstate by route ID: %w", err)
 		}
 	}
 
-	syncState, err := s.GetOrCreateSyncState(
-		ctx,
-		ResourceType,
-		syncStateID,
-		opts.AccountID,
-		"", // PrivateService doesn't have a zone ID
-		opts.CredentialsRef,
-	)
-	if err != nil {
-		return fmt.Errorf("get/create syncstate for PrivateService: %w", err)
+	// If still not found, create a new SyncState
+	if syncState == nil {
+		syncStateID := pendingID
+		if opts.RouteNetwork != "" {
+			syncStateID = sanitizeNetworkForName(opts.RouteNetwork)
+			if opts.VirtualNetworkID != "" && opts.VirtualNetworkID != "default" {
+				syncStateID = fmt.Sprintf("%s-%s", syncStateID, opts.VirtualNetworkID[:min(8, len(opts.VirtualNetworkID))])
+			}
+		}
+		syncState, err = s.GetOrCreateSyncState(
+			ctx,
+			ResourceType,
+			syncStateID,
+			opts.AccountID,
+			"", // PrivateService doesn't have a zone ID
+			opts.CredentialsRef,
+		)
+		if err != nil {
+			return fmt.Errorf("get/create syncstate for PrivateService: %w", err)
+		}
 	}
 
 	if err := s.UpdateSource(ctx, syncState, opts.Source, opts.Config, PriorityPrivateService); err != nil {
@@ -141,6 +164,65 @@ func (s *Service) Unregister(ctx context.Context, network, virtualNetworkID stri
 
 	logger.V(1).Info("No SyncState found to unregister")
 	return nil
+}
+
+// GetSyncStatus returns the sync status for a PrivateService.
+//
+//nolint:revive // cognitive complexity acceptable for status lookup logic
+func (s *Service) GetSyncStatus(ctx context.Context, source service.Source, knownNetwork, virtualNetworkID string) (*SyncStatus, error) {
+	logger := log.FromContext(ctx).WithValues(
+		"source", source.String(),
+		"knownNetwork", knownNetwork,
+	)
+
+	// Build possible SyncState IDs to search
+	var syncStateIDs []string
+
+	// Add pending placeholder first (since PrivateService is namespaced)
+	syncStateIDs = append(syncStateIDs, fmt.Sprintf("pending-%s-%s", source.Namespace, source.Name))
+
+	// Add network-based IDs if network is known
+	if knownNetwork != "" {
+		sanitizedNetwork := sanitizeNetworkForName(knownNetwork)
+		if virtualNetworkID != "" && len(virtualNetworkID) >= 8 {
+			syncStateIDs = append(syncStateIDs,
+				fmt.Sprintf("%s-%s", sanitizedNetwork, virtualNetworkID[:min(8, len(virtualNetworkID))]))
+		}
+		syncStateIDs = append(syncStateIDs, sanitizedNetwork)
+	}
+
+	for _, id := range syncStateIDs {
+		if id == "" {
+			continue
+		}
+
+		syncState, err := s.GetSyncState(ctx, ResourceType, id)
+		if err != nil {
+			logger.V(1).Info("Error getting SyncState", "syncStateId", id, "error", err)
+			continue
+		}
+		if syncState == nil {
+			continue
+		}
+
+		// Check if synced
+		isSynced := syncState.Status.SyncStatus == v1alpha2.SyncStatusSynced
+		network := syncState.Spec.CloudflareID
+
+		// If the CloudflareID starts with "pending-", it's not a real ID
+		if strings.HasPrefix(network, "pending-") {
+			network = ""
+		}
+
+		return &SyncStatus{
+			IsSynced:    isSynced,
+			Network:     network,
+			AccountID:   syncState.Spec.AccountID,
+			SyncStateID: syncState.Name,
+		}, nil
+	}
+
+	return nil, nil
 }
 
 // UpdateRouteID updates the SyncState to use the actual network CIDR as the ID

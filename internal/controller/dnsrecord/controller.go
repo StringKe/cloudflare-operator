@@ -225,6 +225,13 @@ func (r *DNSRecordReconciler) registerDNSRecord(
 ) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
+	// Create source reference (used for both registration and sync status check)
+	source := service.Source{
+		Kind:      "DNSRecord",
+		Namespace: dnsRecord.Namespace,
+		Name:      dnsRecord.Name,
+	}
+
 	// Build DNS record configuration
 	config := dnssvc.DNSRecordConfig{
 		Name:    dnsRecord.Spec.Name,
@@ -243,13 +250,6 @@ func (r *DNSRecordReconciler) registerDNSRecord(
 	// Build data for special record types
 	if dnsRecord.Spec.Data != nil {
 		config.Data = r.buildRecordData(dnsRecord.Spec.Data)
-	}
-
-	// Create source reference
-	source := service.Source{
-		Kind:      "DNSRecord",
-		Namespace: dnsRecord.Namespace,
-		Name:      dnsRecord.Name,
 	}
 
 	// Register to SyncState
@@ -271,6 +271,18 @@ func (r *DNSRecordReconciler) registerDNSRecord(
 
 	r.Recorder.Event(dnsRecord, corev1.EventTypeNormal, "Registered",
 		fmt.Sprintf("Registered DNS Record '%s' configuration to SyncState", dnsRecord.Spec.Name))
+
+	// Check if already synced (SyncState may have been created and synced in a previous reconcile)
+	syncStatus, err := r.dnsService.GetSyncStatus(ctx, source, dnsRecord.Status.RecordID)
+	if err != nil {
+		logger.Error(err, "Failed to get sync status")
+		return r.updateStatusPending(ctx, dnsRecord, zoneID)
+	}
+
+	if syncStatus != nil && syncStatus.IsSynced && syncStatus.RecordID != "" {
+		// Already synced, update status to Ready
+		return r.updateStatusReady(ctx, dnsRecord, zoneID, syncStatus.RecordID)
+	}
 
 	// Update status to Pending - actual sync happens via DNSSyncController
 	return r.updateStatusPending(ctx, dnsRecord, zoneID)
@@ -375,6 +387,34 @@ func (r *DNSRecordReconciler) updateStatusPending(
 
 	// Requeue to check for sync completion
 	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+}
+
+func (r *DNSRecordReconciler) updateStatusReady(
+	ctx context.Context,
+	dnsRecord *networkingv1alpha2.DNSRecord,
+	zoneID, recordID string,
+) (ctrl.Result, error) {
+	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, dnsRecord, func() {
+		dnsRecord.Status.ZoneID = zoneID
+		dnsRecord.Status.RecordID = recordID
+		dnsRecord.Status.FQDN = dnsRecord.Spec.Name
+		dnsRecord.Status.State = "Active"
+		meta.SetStatusCondition(&dnsRecord.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: dnsRecord.Generation,
+			Reason:             "Synced",
+			Message:            "DNS record synced to Cloudflare",
+			LastTransitionTime: metav1.Now(),
+		})
+		dnsRecord.Status.ObservedGeneration = dnsRecord.Generation
+	})
+
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
+	}
+
+	return ctrl.Result{}, nil
 }
 
 // findDNSRecordsForDomain returns DNSRecords that may need reconciliation when a CloudflareDomain changes

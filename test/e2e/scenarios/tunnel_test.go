@@ -19,12 +19,6 @@ import (
 	"github.com/StringKe/cloudflare-operator/test/e2e/framework"
 )
 
-const (
-	testCredentialsName = "e2e-test-credentials"
-	testAccountID       = "test-account-id"
-	testAPIToken        = "test-api-token"
-)
-
 // TestTunnelLifecycle tests the complete lifecycle of a Tunnel resource
 func TestTunnelLifecycle(t *testing.T) {
 	if testing.Short() {
@@ -58,6 +52,9 @@ func TestTunnelLifecycle(t *testing.T) {
 				Namespace: testNS,
 			},
 			Spec: v1alpha2.TunnelSpec{
+				NewTunnel: &v1alpha2.NewTunnel{
+					Name: "e2e-test-tunnel",
+				},
 				Cloudflare: v1alpha2.CloudflareDetails{
 					CredentialsRef: &v1alpha2.CloudflareCredentialsRef{
 						Name: testCredentialsName,
@@ -154,6 +151,9 @@ func TestClusterTunnelLifecycle(t *testing.T) {
 				Name: "e2e-test-cluster-tunnel",
 			},
 			Spec: v1alpha2.TunnelSpec{
+				NewTunnel: &v1alpha2.NewTunnel{
+					Name: "e2e-test-cluster-tunnel",
+				},
 				Cloudflare: v1alpha2.CloudflareDetails{
 					CredentialsRef: &v1alpha2.CloudflareCredentialsRef{
 						Name: testCredentialsName,
@@ -219,6 +219,13 @@ func TestTunnelWithExistingTunnel(t *testing.T) {
 				},
 			},
 		},
+	}
+
+	// Cleanup any leftover resources from previous test runs
+	existingTunnel := &v1alpha2.Tunnel{}
+	if getErr := f.Client.Get(ctx, types.NamespacedName{Name: tunnel.Name, Namespace: tunnel.Namespace}, existingTunnel); getErr == nil {
+		_ = f.Client.Delete(ctx, existingTunnel)
+		_ = f.WaitForDeletion(existingTunnel, time.Minute)
 	}
 
 	err = f.Client.Create(ctx, tunnel)

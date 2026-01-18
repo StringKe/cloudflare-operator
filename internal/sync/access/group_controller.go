@@ -106,6 +106,14 @@ func (r *GroupController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	if !r.ShouldSync(syncState, newHash) {
+		// Even if config hasn't changed, ensure status is "Synced" if resource exists in Cloudflare
+		if syncState.Status.SyncStatus != v1alpha2.SyncStatusSynced && syncState.Spec.CloudflareID != "" {
+			syncResult := &common.SyncResult{ConfigHash: newHash}
+			if err := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusSynced, syncResult, nil); err != nil {
+				logger.Error(err, "Failed to update status to Synced")
+				return ctrl.Result{Requeue: true}, nil
+			}
+		}
 		logger.V(1).Info("Configuration unchanged, skipping sync", "hash", newHash)
 		return ctrl.Result{}, nil
 	}
@@ -487,6 +495,7 @@ func (r *GroupController) handleDeletion(
 // SetupWithManager sets up the controller with the Manager.
 func (r *GroupController) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
+		Named("access-group-sync").
 		For(&v1alpha2.CloudflareSyncState{}).
 		WithEventFilter(common.PredicateForResourceType(accesssvc.ResourceTypeAccessGroup)).
 		Complete(r)

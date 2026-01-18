@@ -387,6 +387,7 @@ func (r *Controller) handleDeletion(
 // SetupWithManager sets up the controller with the Manager.
 func (r *Controller) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
+		Named("privateservice-sync").
 		For(&v1alpha2.CloudflareSyncState{}).
 		WithEventFilter(common.PredicateForResourceType(v1alpha2.SyncResourcePrivateService)).
 		Complete(r)

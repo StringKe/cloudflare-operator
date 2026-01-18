@@ -83,12 +83,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// Reconcile the VirtualNetwork through service layer
-	if err := r.reconcileVirtualNetwork(); err != nil {
+	result, err := r.reconcileVirtualNetwork()
+	if err != nil {
 		r.log.Error(err, "failed to reconcile VirtualNetwork")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 
-	return ctrl.Result{}, nil
+	return result, nil
 }
 
 // resolveCredentials resolves the credentials reference and returns the credentials info.
@@ -160,13 +161,15 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 // reconcileVirtualNetwork ensures the VirtualNetwork configuration is registered with the service layer.
 // Following Unified Sync Architecture:
 // Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
-func (r *Reconciler) reconcileVirtualNetwork() error {
+//
+//nolint:revive // cognitive complexity is acceptable for reconciliation logic
+func (r *Reconciler) reconcileVirtualNetwork() (ctrl.Result, error) {
 	vnetName := r.vnet.GetVirtualNetworkName()
 
 	// Resolve credentials (without creating API client)
 	credInfo, err := r.resolveCredentials()
 	if err != nil {
-		return fmt.Errorf("resolve credentials: %w", err)
+		return ctrl.Result{}, fmt.Errorf("resolve credentials: %w", err)
 	}
 
 	// Build the configuration
@@ -195,11 +198,32 @@ func (r *Reconciler) reconcileVirtualNetwork() error {
 		r.log.Error(err, "failed to register VirtualNetwork configuration")
 		r.setCondition(metav1.ConditionFalse, controller.EventReasonCreateFailed, err.Error())
 		r.Recorder.Event(r.vnet, corev1.EventTypeWarning, controller.EventReasonCreateFailed, err.Error())
-		return err
+		return ctrl.Result{}, err
+	}
+
+	// Check if already synced (SyncState may have been created and synced in a previous reconcile)
+	syncStatus, err := r.vnetService.GetSyncStatus(r.ctx, source, r.vnet.Status.VirtualNetworkId)
+	if err != nil {
+		r.log.Error(err, "failed to get sync status")
+		if err := r.updateStatusPending(credInfo.AccountID); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	if syncStatus != nil && syncStatus.IsSynced && syncStatus.VirtualNetworkID != "" {
+		// Already synced, update status to Ready
+		if err := r.updateStatusReady(credInfo.AccountID, syncStatus.VirtualNetworkID); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
 	}
 
 	// Update status to Pending if not already synced
-	return r.updateStatusPending(credInfo.AccountID)
+	if err := r.updateStatusPending(credInfo.AccountID); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 }
 
 // buildManagedComment builds a comment with management marker.
@@ -234,6 +258,27 @@ func (r *Reconciler) updateStatusPending(accountID string) error {
 	r.log.Info("VirtualNetwork configuration registered", "name", r.vnet.Name)
 	r.Recorder.Event(r.vnet, corev1.EventTypeNormal, "Registered",
 		"Configuration registered to SyncState")
+	return nil
+}
+
+// updateStatusReady updates the VirtualNetwork status to Ready state.
+func (r *Reconciler) updateStatusReady(accountID, vnetID string) error {
+	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.vnet, func() {
+		r.vnet.Status.ObservedGeneration = r.vnet.Generation
+		r.vnet.Status.State = "active"
+		r.vnet.Status.AccountId = accountID
+		r.vnet.Status.VirtualNetworkId = vnetID
+		r.setCondition(metav1.ConditionTrue, "Synced", "VirtualNetwork synced to Cloudflare")
+	})
+
+	if err != nil {
+		r.log.Error(err, "failed to update VirtualNetwork status to Ready")
+		return err
+	}
+
+	r.log.Info("VirtualNetwork synced successfully", "name", r.vnet.Name, "vnetId", vnetID)
+	r.Recorder.Event(r.vnet, corev1.EventTypeNormal, "Synced",
+		fmt.Sprintf("VirtualNetwork synced to Cloudflare with ID %s", vnetID))
 	return nil
 }
 

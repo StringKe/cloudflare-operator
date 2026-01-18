@@ -6,6 +6,7 @@ package cf
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/cloudflare/cloudflare-go"
 	"github.com/go-logr/logr"
@@ -17,6 +18,15 @@ import (
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/credentials"
 )
+
+// CloudflareAPIBaseURLEnv is the environment variable name for custom Cloudflare API base URL.
+// This is primarily used for E2E testing with a mock server.
+const CloudflareAPIBaseURLEnv = "CLOUDFLARE_API_BASE_URL"
+
+// GetAPIBaseURL returns the custom API base URL from environment variable, or empty string for default.
+func GetAPIBaseURL() string {
+	return os.Getenv(CloudflareAPIBaseURLEnv)
+}
 
 // NewAPIClientFromDetails creates a new API client from CloudflareDetails.
 // This function supports both the new CloudflareCredentials reference and legacy inline secrets.
@@ -113,6 +123,7 @@ func NewAPIClientFromDefaultCredentials(ctx context.Context, k8sClient client.Cl
 
 // NewAPIClientFromSecret creates a new API client from a secret reference.
 // This is a legacy function maintained for backwards compatibility.
+// If CLOUDFLARE_API_BASE_URL environment variable is set, it uses that as the API base URL.
 func NewAPIClientFromSecret(ctx context.Context, k8sClient client.Client, secretName, namespace string, log logr.Logger) (*API, error) {
 	secret := &corev1.Secret{}
 	if err := k8sClient.Get(ctx, types.NamespacedName{
@@ -129,10 +140,16 @@ func NewAPIClientFromSecret(ctx context.Context, k8sClient client.Client, secret
 	var cfClient *cloudflare.API
 	var err error
 
+	// Build options list - add custom base URL if configured
+	var opts []cloudflare.Option
+	if baseURL := GetAPIBaseURL(); baseURL != "" {
+		opts = append(opts, cloudflare.BaseURL(baseURL))
+	}
+
 	if apiToken != "" {
-		cfClient, err = cloudflare.NewWithAPIToken(apiToken)
+		cfClient, err = cloudflare.NewWithAPIToken(apiToken, opts...)
 	} else if apiKey != "" && apiEmail != "" {
-		cfClient, err = cloudflare.New(apiKey, apiEmail)
+		cfClient, err = cloudflare.New(apiKey, apiEmail, opts...)
 	} else {
 		return nil, fmt.Errorf("no valid API credentials found in secret")
 	}
@@ -148,21 +165,29 @@ func NewAPIClientFromSecret(ctx context.Context, k8sClient client.Client, secret
 }
 
 // createCloudflareClient creates a Cloudflare API client from loaded credentials.
+// If CLOUDFLARE_API_BASE_URL environment variable is set, it uses that as the API base URL
+// (primarily used for E2E testing with a mock server).
 func createCloudflareClient(creds *credentials.Credentials) (*cloudflare.API, error) {
 	var cfClient *cloudflare.API
 	var err error
 
+	// Build options list - add custom base URL if configured
+	var opts []cloudflare.Option
+	if baseURL := GetAPIBaseURL(); baseURL != "" {
+		opts = append(opts, cloudflare.BaseURL(baseURL))
+	}
+
 	switch creds.AuthType {
 	case networkingv1alpha2.AuthTypeAPIToken:
-		cfClient, err = cloudflare.NewWithAPIToken(creds.APIToken)
+		cfClient, err = cloudflare.NewWithAPIToken(creds.APIToken, opts...)
 	case networkingv1alpha2.AuthTypeGlobalAPIKey:
-		cfClient, err = cloudflare.New(creds.APIKey, creds.Email)
+		cfClient, err = cloudflare.New(creds.APIKey, creds.Email, opts...)
 	default:
 		// Fallback: try API Token first, then Global API Key
 		if creds.APIToken != "" {
-			cfClient, err = cloudflare.NewWithAPIToken(creds.APIToken)
+			cfClient, err = cloudflare.NewWithAPIToken(creds.APIToken, opts...)
 		} else if creds.APIKey != "" && creds.Email != "" {
-			cfClient, err = cloudflare.New(creds.APIKey, creds.Email)
+			cfClient, err = cloudflare.New(creds.APIKey, creds.Email, opts...)
 		} else {
 			return nil, fmt.Errorf("no valid API credentials found")
 		}

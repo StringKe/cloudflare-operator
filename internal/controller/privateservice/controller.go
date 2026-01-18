@@ -99,12 +99,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	// Register PrivateService configuration to SyncState
 	// The actual sync to Cloudflare is handled by PrivateServiceSyncController
-	if err := r.registerPrivateService(credInfo); err != nil {
-		r.log.Error(err, "failed to register PrivateService configuration")
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-	}
-
-	return ctrl.Result{}, nil
+	return r.registerPrivateService(credInfo)
 }
 
 // resolveCredentials resolves the credentials reference and returns the credentials info.
@@ -135,7 +130,7 @@ func (r *Reconciler) resolveCredentials() (*controller.CredentialsInfo, error) {
 // Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
 //
 //nolint:revive // cognitive complexity is acceptable for configuration building
-func (r *Reconciler) registerPrivateService(credInfo *controller.CredentialsInfo) error {
+func (r *Reconciler) registerPrivateService(credInfo *controller.CredentialsInfo) (ctrl.Result, error) {
 	// Get the referenced Service to obtain its ClusterIP
 	svc := &corev1.Service{}
 	if err := r.Get(r.ctx, apitypes.NamespacedName{
@@ -144,14 +139,14 @@ func (r *Reconciler) registerPrivateService(credInfo *controller.CredentialsInfo
 	}, svc); err != nil {
 		r.log.Error(err, "failed to get Service")
 		r.setCondition(metav1.ConditionFalse, controller.EventReasonDependencyError, err.Error())
-		return err
+		return ctrl.Result{}, err
 	}
 
 	if svc.Spec.ClusterIP == "" || svc.Spec.ClusterIP == "None" {
 		err := fmt.Errorf("service %s has no ClusterIP", svc.Name)
 		r.log.Error(err, "Service must have a ClusterIP")
 		r.setCondition(metav1.ConditionFalse, controller.EventReasonInvalidConfig, err.Error())
-		return err
+		return ctrl.Result{}, err
 	}
 
 	// Create /32 network CIDR for the service IP
@@ -162,7 +157,7 @@ func (r *Reconciler) registerPrivateService(credInfo *controller.CredentialsInfo
 	if err != nil {
 		r.log.Error(err, "failed to resolve tunnel reference")
 		r.setCondition(metav1.ConditionFalse, controller.EventReasonDependencyError, err.Error())
-		return err
+		return ctrl.Result{}, err
 	}
 
 	// Resolve virtual network reference if specified
@@ -172,7 +167,7 @@ func (r *Reconciler) registerPrivateService(credInfo *controller.CredentialsInfo
 		if err != nil {
 			r.log.Error(err, "failed to resolve virtual network reference")
 			r.setCondition(metav1.ConditionFalse, controller.EventReasonDependencyError, err.Error())
-			return err
+			return ctrl.Result{}, err
 		}
 	}
 
@@ -222,7 +217,29 @@ func (r *Reconciler) registerPrivateService(credInfo *controller.CredentialsInfo
 		r.Recorder.Event(r.privateService, corev1.EventTypeWarning, "RegisterFailed",
 			fmt.Sprintf("Failed to register configuration: %s", err.Error()))
 		r.setCondition(metav1.ConditionFalse, "RegisterFailed", err.Error())
-		return err
+		return ctrl.Result{}, err
+	}
+
+	// Check sync status - if already synced, update to Ready state
+	// Reuse source from registration
+	syncStatus, getSyncErr := r.privateServiceService.GetSyncStatus(r.ctx, source, r.privateService.Status.Network, virtualNetworkID)
+	if getSyncErr != nil {
+		r.log.V(1).Info("Failed to get sync status, will retry", "error", getSyncErr)
+		// Continue with pending status
+	}
+
+	// If synced, update to Ready state
+	if syncStatus != nil && syncStatus.IsSynced && syncStatus.Network != "" {
+		if err := r.updateStatusReady(credInfo.AccountID, syncStatus.Network, svc.Spec.ClusterIP, tunnelID, tunnelName, virtualNetworkID); err != nil {
+			return ctrl.Result{}, err
+		}
+		r.log.Info("PrivateService synced to Cloudflare",
+			"network", syncStatus.Network,
+			"tunnelId", tunnelID,
+			"virtualNetworkId", virtualNetworkID)
+		r.Recorder.Event(r.privateService, corev1.EventTypeNormal, "Synced",
+			fmt.Sprintf("Route synced for network %s", syncStatus.Network))
+		return ctrl.Result{}, nil
 	}
 
 	// Update status to pending - Sync Controller will update to active after sync
@@ -239,7 +256,7 @@ func (r *Reconciler) registerPrivateService(credInfo *controller.CredentialsInfo
 		r.setCondition(metav1.ConditionFalse, "Pending", "Configuration registered, waiting for sync")
 	}); err != nil {
 		r.log.Error(err, "failed to update PrivateService status")
-		return err
+		return ctrl.Result{}, err
 	}
 
 	r.log.Info("PrivateService configuration registered to SyncState",
@@ -249,6 +266,28 @@ func (r *Reconciler) registerPrivateService(credInfo *controller.CredentialsInfo
 	r.Recorder.Event(r.privateService, corev1.EventTypeNormal, "Registered",
 		fmt.Sprintf("Configuration registered for network %s", network))
 
+	// Requeue to check sync status
+	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+}
+
+// updateStatusReady updates the PrivateService status to Ready state after successful sync.
+func (r *Reconciler) updateStatusReady(accountID, network, serviceIP, tunnelID, tunnelName, virtualNetworkID string) error {
+	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.privateService, func() {
+		r.privateService.Status.ObservedGeneration = r.privateService.Generation
+		r.privateService.Status.State = "active"
+		r.privateService.Status.Network = network
+		r.privateService.Status.ServiceIP = serviceIP
+		r.privateService.Status.TunnelID = tunnelID
+		r.privateService.Status.TunnelName = tunnelName
+		r.privateService.Status.VirtualNetworkID = virtualNetworkID
+		r.privateService.Status.AccountID = accountID
+
+		r.setCondition(metav1.ConditionTrue, "Synced", "PrivateService synced to Cloudflare")
+	})
+	if err != nil {
+		r.log.Error(err, "failed to update PrivateService status to Ready")
+		return err
+	}
 	return nil
 }
 

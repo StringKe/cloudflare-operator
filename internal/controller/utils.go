@@ -145,33 +145,47 @@ func getAPIDetails(
 }
 
 // CreateCloudflareClientFromCreds creates a Cloudflare API client from loaded credentials.
+// If CLOUDFLARE_API_BASE_URL environment variable is set, it uses that as the API base URL.
 func CreateCloudflareClientFromCreds(creds *credentials.Credentials) (*cloudflare.API, error) {
+	// Build options list - add custom base URL if configured
+	var opts []cloudflare.Option
+	if baseURL := cf.GetAPIBaseURL(); baseURL != "" {
+		opts = append(opts, cloudflare.BaseURL(baseURL))
+	}
+
 	switch creds.AuthType {
 	case networkingv1alpha2.AuthTypeAPIToken:
-		return cloudflare.NewWithAPIToken(creds.APIToken)
+		return cloudflare.NewWithAPIToken(creds.APIToken, opts...)
 	case networkingv1alpha2.AuthTypeGlobalAPIKey:
-		return cloudflare.New(creds.APIKey, creds.Email)
+		return cloudflare.New(creds.APIKey, creds.Email, opts...)
 	default:
 		// Fallback: try API Token first, then Global API Key
 		if creds.APIToken != "" {
-			return cloudflare.NewWithAPIToken(creds.APIToken)
+			return cloudflare.NewWithAPIToken(creds.APIToken, opts...)
 		} else if creds.APIKey != "" && creds.Email != "" {
-			return cloudflare.New(creds.APIKey, creds.Email)
+			return cloudflare.New(creds.APIKey, creds.Email, opts...)
 		}
 		return nil, errors.New("no valid API credentials found")
 	}
 }
 
 // getCloudflareClient returns an initialized *cloudflare.API using either an API Key + Email or an API Token.
+// If CLOUDFLARE_API_BASE_URL environment variable is set, it uses that as the API base URL.
 //
 // Deprecated: Use createCloudflareClientFromCreds instead.
 //
 //nolint:unused // kept for backward compatibility
 func getCloudflareClient(apiKey, apiEmail, apiToken string) (*cloudflare.API, error) {
-	if apiToken != "" {
-		return cloudflare.NewWithAPIToken(apiToken)
+	// Build options list - add custom base URL if configured
+	var opts []cloudflare.Option
+	if baseURL := cf.GetAPIBaseURL(); baseURL != "" {
+		opts = append(opts, cloudflare.BaseURL(baseURL))
 	}
-	return cloudflare.New(apiKey, apiEmail)
+
+	if apiToken != "" {
+		return cloudflare.NewWithAPIToken(apiToken, opts...)
+	}
+	return cloudflare.New(apiKey, apiEmail, opts...)
 }
 
 // CredentialsInfo holds the resolved credentials information needed for SyncState registration.

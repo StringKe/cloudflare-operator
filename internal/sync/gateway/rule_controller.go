@@ -320,6 +320,7 @@ func (*RuleController) convertRuleSettings(settings *gatewaysvc.GatewayRuleSetti
 // SetupWithManager sets up the controller with the Manager.
 func (r *RuleController) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
+		Named("gateway-rule-sync").
 		For(&v1alpha2.CloudflareSyncState{}).
 		WithEventFilter(common.PredicateForResourceType(v1alpha2.SyncResourceGatewayRule)).
 		Complete(r)

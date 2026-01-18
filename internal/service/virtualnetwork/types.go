@@ -45,3 +45,15 @@ type SyncResult struct {
 	// IsDefault indicates if this is the default virtual network
 	IsDefault bool
 }
+
+// SyncStatus represents the sync status of a VirtualNetwork.
+type SyncStatus struct {
+	// IsSynced indicates whether the VirtualNetwork has been synced to Cloudflare
+	IsSynced bool
+	// VirtualNetworkID is the Cloudflare VirtualNetwork ID
+	VirtualNetworkID string
+	// AccountID is the Cloudflare Account ID
+	AccountID string
+	// SyncStateID is the name of the SyncState resource
+	SyncStateID string
+}

@@ -8,10 +8,12 @@ package access
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/service"
 )
 
@@ -28,6 +30,8 @@ func NewIdentityProviderService(c client.Client) *IdentityProviderService {
 }
 
 // Register registers an AccessIdentityProvider configuration to SyncState.
+//
+//nolint:revive // cognitive complexity is acceptable for SyncState lookup logic
 func (s *IdentityProviderService) Register(ctx context.Context, opts AccessIdentityProviderRegisterOptions) error {
 	logger := log.FromContext(ctx).WithValues(
 		"accountId", opts.AccountID,
@@ -37,24 +41,45 @@ func (s *IdentityProviderService) Register(ctx context.Context, opts AccessIdent
 	)
 	logger.V(1).Info("Registering AccessIdentityProvider configuration")
 
-	// Generate SyncState ID:
-	// - If ProviderID is known (existing provider), use it
-	// - Otherwise, use a placeholder based on source
-	syncStateID := opts.ProviderID
-	if syncStateID == "" {
-		syncStateID = fmt.Sprintf("pending-%s", opts.Source.Name)
+	// Try to find existing SyncState in this order:
+	// 1. By pending-{source.Name} (for resources being created)
+	// 2. By ProviderID (for resources that were already synced)
+	// This prevents creating duplicate SyncStates when ProviderID changes
+	var syncState *v1alpha2.CloudflareSyncState
+	var err error
+
+	// First, try to find by pending ID (primary lookup for resources in creation)
+	pendingID := fmt.Sprintf("pending-%s", opts.Source.Name)
+	syncState, err = s.GetSyncState(ctx, ResourceTypeAccessIdentityProvider, pendingID)
+	if err != nil {
+		return fmt.Errorf("lookup syncstate by pending ID: %w", err)
 	}
 
-	syncState, err := s.GetOrCreateSyncState(
-		ctx,
-		ResourceTypeAccessIdentityProvider,
-		syncStateID,
-		opts.AccountID,
-		"", // AccessIdentityProvider doesn't use zone ID
-		opts.CredentialsRef,
-	)
-	if err != nil {
-		return fmt.Errorf("get/create syncstate for AccessIdentityProvider: %w", err)
+	// If not found by pending ID and ProviderID is known, try by ProviderID
+	if syncState == nil && opts.ProviderID != "" {
+		syncState, err = s.GetSyncState(ctx, ResourceTypeAccessIdentityProvider, opts.ProviderID)
+		if err != nil {
+			return fmt.Errorf("lookup syncstate by provider ID: %w", err)
+		}
+	}
+
+	// If still not found, create a new SyncState
+	if syncState == nil {
+		syncStateID := pendingID
+		if opts.ProviderID != "" {
+			syncStateID = opts.ProviderID
+		}
+		syncState, err = s.GetOrCreateSyncState(
+			ctx,
+			ResourceTypeAccessIdentityProvider,
+			syncStateID,
+			opts.AccountID,
+			"", // AccessIdentityProvider doesn't use zone ID
+			opts.CredentialsRef,
+		)
+		if err != nil {
+			return fmt.Errorf("get/create syncstate for AccessIdentityProvider: %w", err)
+		}
 	}
 
 	if err := s.UpdateSource(ctx, syncState, opts.Source, opts.Config, PriorityAccessIdentityProvider); err != nil {
@@ -107,6 +132,65 @@ func (s *IdentityProviderService) Unregister(ctx context.Context, providerID str
 
 	logger.V(1).Info("No SyncState found to unregister")
 	return nil
+}
+
+// IdentityProviderSyncStatus represents the sync status of an AccessIdentityProvider.
+type IdentityProviderSyncStatus struct {
+	IsSynced    bool
+	ProviderID  string
+	AccountID   string
+	SyncStateID string
+}
+
+// GetSyncStatus returns the sync status for an AccessIdentityProvider.
+//
+//nolint:revive // cognitive complexity acceptable for status lookup logic
+func (s *IdentityProviderService) GetSyncStatus(
+	ctx context.Context, source service.Source, knownProviderID string,
+) (*IdentityProviderSyncStatus, error) {
+	logger := log.FromContext(ctx).WithValues(
+		"source", source.String(),
+		"knownProviderId", knownProviderID,
+	)
+
+	// Try both possible SyncState IDs
+	syncStateIDs := []string{
+		knownProviderID,
+		fmt.Sprintf("pending-%s", source.Name),
+	}
+
+	for _, id := range syncStateIDs {
+		if id == "" {
+			continue
+		}
+
+		syncState, err := s.GetSyncState(ctx, ResourceTypeAccessIdentityProvider, id)
+		if err != nil {
+			logger.V(1).Info("Error getting SyncState", "syncStateId", id, "error", err)
+			continue
+		}
+		if syncState == nil {
+			continue
+		}
+
+		// Check if synced
+		isSynced := syncState.Status.SyncStatus == v1alpha2.SyncStatusSynced
+		providerID := syncState.Spec.CloudflareID
+
+		// If the CloudflareID starts with "pending-", it's not a real ID
+		if strings.HasPrefix(providerID, "pending-") {
+			providerID = ""
+		}
+
+		return &IdentityProviderSyncStatus{
+			IsSynced:    isSynced,
+			ProviderID:  providerID,
+			AccountID:   syncState.Spec.AccountID,
+			SyncStateID: syncState.Name,
+		}, nil
+	}
+
+	return nil, nil
 }
 
 // UpdateProviderID updates the SyncState to use the actual provider ID

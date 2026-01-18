@@ -85,12 +85,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// Reconcile the AccessIdentityProvider through service layer
-	if err := r.reconcileIdentityProvider(); err != nil {
+	result, err := r.reconcileIdentityProvider()
+	if err != nil {
 		r.log.Error(err, "failed to reconcile AccessIdentityProvider")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 
-	return ctrl.Result{}, nil
+	return result, nil
 }
 
 // resolveCredentials resolves the credentials reference and returns the credentials info.
@@ -162,13 +163,15 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 // reconcileIdentityProvider ensures the AccessIdentityProvider configuration is registered with the service layer.
 // Following Unified Sync Architecture:
 // Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
-func (r *Reconciler) reconcileIdentityProvider() error {
+//
+//nolint:revive // cognitive complexity acceptable for reconciliation logic
+func (r *Reconciler) reconcileIdentityProvider() (ctrl.Result, error) {
 	providerName := r.idp.GetProviderName()
 
 	// Resolve credentials (without creating API client)
 	credInfo, err := r.resolveCredentials()
 	if err != nil {
-		return fmt.Errorf("resolve credentials: %w", err)
+		return ctrl.Result{}, fmt.Errorf("resolve credentials: %w", err)
 	}
 
 	// Build the configuration
@@ -198,11 +201,32 @@ func (r *Reconciler) reconcileIdentityProvider() error {
 		r.log.Error(err, "failed to register AccessIdentityProvider configuration")
 		r.setCondition(metav1.ConditionFalse, controller.EventReasonCreateFailed, err.Error())
 		r.Recorder.Event(r.idp, corev1.EventTypeWarning, controller.EventReasonCreateFailed, err.Error())
-		return err
+		return ctrl.Result{}, err
+	}
+
+	// Check if already synced (SyncState may have been created and synced in a previous reconcile)
+	syncStatus, err := r.idpService.GetSyncStatus(r.ctx, source, r.idp.Status.ProviderID)
+	if err != nil {
+		r.log.Error(err, "failed to get sync status")
+		if err := r.updateStatusPending(credInfo.AccountID); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	if syncStatus != nil && syncStatus.IsSynced && syncStatus.ProviderID != "" {
+		// Already synced, update status to Ready
+		if err := r.updateStatusReady(credInfo.AccountID, syncStatus.ProviderID); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
 	}
 
 	// Update status to Pending if not already synced
-	return r.updateStatusPending(credInfo.AccountID)
+	if err := r.updateStatusPending(credInfo.AccountID); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 }
 
 // updateStatusPending updates the AccessIdentityProvider status to Pending state.
@@ -231,6 +255,27 @@ func (r *Reconciler) updateStatusPending(accountID string) error {
 	r.log.Info("AccessIdentityProvider configuration registered", "name", r.idp.Name)
 	r.Recorder.Event(r.idp, corev1.EventTypeNormal, "Registered",
 		"Configuration registered to SyncState")
+	return nil
+}
+
+// updateStatusReady updates the AccessIdentityProvider status to Ready state.
+func (r *Reconciler) updateStatusReady(accountID, providerID string) error {
+	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.idp, func() {
+		r.idp.Status.ObservedGeneration = r.idp.Generation
+		r.idp.Status.State = "Ready"
+		r.idp.Status.AccountID = accountID
+		r.idp.Status.ProviderID = providerID
+		r.setCondition(metav1.ConditionTrue, "Synced", "AccessIdentityProvider synced to Cloudflare")
+	})
+
+	if err != nil {
+		r.log.Error(err, "failed to update AccessIdentityProvider status to Ready")
+		return err
+	}
+
+	r.log.Info("AccessIdentityProvider synced successfully", "name", r.idp.Name, "providerId", providerID)
+	r.Recorder.Event(r.idp, corev1.EventTypeNormal, "Synced",
+		fmt.Sprintf("AccessIdentityProvider synced to Cloudflare with ID %s", providerID))
 	return nil
 }
 

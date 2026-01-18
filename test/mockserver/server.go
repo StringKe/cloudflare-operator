@@ -107,6 +107,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 
 // logRequest logs an incoming request.
 func (s *Server) logRequest(r *http.Request) {
+	log.Printf("[%s] %s %s", r.Method, r.URL.Path, r.URL.RawQuery)
 	s.requestLogMu.Lock()
 	defer s.requestLogMu.Unlock()
 	s.requestLog = append(s.requestLog, RequestLogEntry{

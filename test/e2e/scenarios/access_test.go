@@ -217,7 +217,6 @@ func TestAccessApplicationLifecycle(t *testing.T) {
 	require.NoError(t, err, "AccessGroup must be ready before creating AccessApplication")
 
 	t.Run("CreateSelfHostedApplication", func(t *testing.T) {
-		sessionDuration := "24h"
 		app := &v1alpha2.AccessApplication{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "e2e-test-app",
@@ -226,7 +225,7 @@ func TestAccessApplicationLifecycle(t *testing.T) {
 				Name:            "E2E Test Application",
 				Domain:          "e2e-test.example.com",
 				Type:            "self_hosted",
-				SessionDuration: &sessionDuration,
+				SessionDuration: "24h",
 				Cloudflare: v1alpha2.CloudflareDetails{
 					CredentialsRef: &v1alpha2.CloudflareCredentialsRef{
 						Name: testCredentialsName,

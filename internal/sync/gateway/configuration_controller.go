@@ -241,6 +241,7 @@ func (r *ConfigurationController) syncToCloudflare(
 // SetupWithManager sets up the controller with the Manager.
 func (r *ConfigurationController) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
+		Named("gateway-configuration-sync").
 		For(&v1alpha2.CloudflareSyncState{}).
 		WithEventFilter(common.PredicateForResourceType(v1alpha2.SyncResourceGatewayConfiguration)).
 		Complete(r)
