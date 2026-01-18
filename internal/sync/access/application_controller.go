@@ -233,10 +233,221 @@ func (r *ApplicationController) syncToCloudflare(
 			"applicationId", result.ID)
 	}
 
+	// Sync policies after application is created/updated
+	if len(config.Policies) > 0 {
+		logger.Info("Syncing Access Policies",
+			"applicationId", result.ID,
+			"policyCount", len(config.Policies))
+
+		if err := r.syncPolicies(ctx, apiClient, result.ID, config.Policies); err != nil {
+			return nil, fmt.Errorf("sync policies: %w", err)
+		}
+	}
+
 	return &accesssvc.SyncResult{
 		ID:        result.ID,
 		AccountID: accountID,
 	}, nil
+}
+
+// resolveGroupReferences resolves all group references in policies.
+// This supports three reference types:
+// - CloudflareGroupID: Direct ID reference (validated via API)
+// - CloudflareGroupName: Name lookup via API
+// - K8sAccessGroupName: Kubernetes AccessGroup resource lookup
+//
+//nolint:revive // cognitive complexity is acceptable for group resolution logic
+func (r *ApplicationController) resolveGroupReferences(
+	ctx context.Context,
+	apiClient *cf.API,
+	policies []accesssvc.AccessPolicyConfig,
+) ([]accesssvc.AccessPolicyConfig, error) {
+	logger := log.FromContext(ctx)
+	resolved := make([]accesssvc.AccessPolicyConfig, 0, len(policies))
+
+	for _, policy := range policies {
+		resolvedPolicy := policy
+
+		// Skip if already resolved
+		if policy.GroupID != "" {
+			resolved = append(resolved, resolvedPolicy)
+			continue
+		}
+
+		// Resolve by reference type (priority: CloudflareGroupID > CloudflareGroupName > K8sAccessGroupName)
+		switch {
+		case policy.CloudflareGroupID != "":
+			// Validate the group ID exists
+			group, err := apiClient.GetAccessGroup(policy.CloudflareGroupID)
+			if err != nil {
+				if cf.IsNotFoundError(err) {
+					logger.Error(err, "Cloudflare Access Group not found",
+						"groupId", policy.CloudflareGroupID, "precedence", policy.Precedence)
+					return nil, fmt.Errorf("cloudflare access group not found: %s", policy.CloudflareGroupID)
+				}
+				return nil, fmt.Errorf("validate cloudflare group %s: %w", policy.CloudflareGroupID, err)
+			}
+			resolvedPolicy.GroupID = policy.CloudflareGroupID
+			resolvedPolicy.GroupName = group.Name
+			logger.V(1).Info("Resolved CloudflareGroupID",
+				"groupId", policy.CloudflareGroupID, "groupName", group.Name)
+
+		case policy.CloudflareGroupName != "":
+			// Look up by name
+			group, err := apiClient.ListAccessGroupsByName(policy.CloudflareGroupName)
+			if err != nil {
+				return nil, fmt.Errorf("lookup cloudflare group by name %s: %w", policy.CloudflareGroupName, err)
+			}
+			if group == nil {
+				logger.Error(nil, "Cloudflare Access Group not found by name",
+					"groupName", policy.CloudflareGroupName, "precedence", policy.Precedence)
+				return nil, fmt.Errorf("cloudflare access group not found by name: %s", policy.CloudflareGroupName)
+			}
+			resolvedPolicy.GroupID = group.ID
+			resolvedPolicy.GroupName = group.Name
+			logger.V(1).Info("Resolved CloudflareGroupName",
+				"groupName", policy.CloudflareGroupName, "groupId", group.ID)
+
+		case policy.K8sAccessGroupName != "":
+			// Look up Kubernetes AccessGroup resource
+			accessGroup := &v1alpha2.AccessGroup{}
+			if err := r.Client.Get(ctx, client.ObjectKey{Name: policy.K8sAccessGroupName}, accessGroup); err != nil {
+				if client.IgnoreNotFound(err) == nil {
+					logger.Error(err, "Kubernetes AccessGroup not found",
+						"name", policy.K8sAccessGroupName, "precedence", policy.Precedence)
+					return nil, fmt.Errorf("kubernetes AccessGroup not found: %s", policy.K8sAccessGroupName)
+				}
+				return nil, fmt.Errorf("get kubernetes AccessGroup %s: %w", policy.K8sAccessGroupName, err)
+			}
+			if accessGroup.Status.GroupID == "" {
+				logger.Info("AccessGroup not yet ready (no GroupID)",
+					"name", policy.K8sAccessGroupName, "precedence", policy.Precedence)
+				return nil, fmt.Errorf("AccessGroup %s not yet ready (no GroupID in status)", policy.K8sAccessGroupName)
+			}
+			resolvedPolicy.GroupID = accessGroup.Status.GroupID
+			resolvedPolicy.GroupName = accessGroup.GetAccessGroupName()
+			logger.V(1).Info("Resolved K8sAccessGroupName",
+				"k8sName", policy.K8sAccessGroupName,
+				"groupId", accessGroup.Status.GroupID,
+				"groupName", resolvedPolicy.GroupName)
+
+		default:
+			// No reference specified
+			logger.Error(nil, "No group reference specified in policy",
+				"precedence", policy.Precedence)
+			return nil, fmt.Errorf("no group reference specified in policy at precedence %d", policy.Precedence)
+		}
+
+		resolved = append(resolved, resolvedPolicy)
+	}
+
+	return resolved, nil
+}
+
+// syncPolicies synchronizes Access Policies for an application.
+// It compares existing policies with desired policies and creates/updates/deletes as needed.
+//
+//nolint:revive // cognitive complexity is acceptable for policy sync logic
+func (r *ApplicationController) syncPolicies(
+	ctx context.Context,
+	apiClient *cf.API,
+	appID string,
+	desiredPolicies []accesssvc.AccessPolicyConfig,
+) error {
+	logger := log.FromContext(ctx)
+
+	// Resolve group references first
+	resolvedPolicies, err := r.resolveGroupReferences(ctx, apiClient, desiredPolicies)
+	if err != nil {
+		return fmt.Errorf("resolve group references: %w", err)
+	}
+
+	// List existing policies
+	existingPolicies, err := apiClient.ListAccessPolicies(appID)
+	if err != nil {
+		return fmt.Errorf("list existing policies: %w", err)
+	}
+
+	// Build maps for comparison
+	// Key by precedence for matching
+	existingByPrecedence := make(map[int]cf.AccessPolicyResult)
+	for _, p := range existingPolicies {
+		existingByPrecedence[p.Precedence] = p
+	}
+
+	desiredByPrecedence := make(map[int]accesssvc.AccessPolicyConfig)
+	for _, p := range resolvedPolicies {
+		desiredByPrecedence[p.Precedence] = p
+	}
+
+	// Create or update policies
+	for _, desired := range resolvedPolicies {
+		policyName := r.getPolicyName(desired)
+		params := cf.AccessPolicyParams{
+			ApplicationID:   appID,
+			Name:            policyName,
+			Decision:        desired.Decision,
+			Precedence:      desired.Precedence,
+			Include:         []cf.AccessGroupRuleParams{cf.BuildGroupIncludeRule(desired.GroupID)},
+			SessionDuration: nilIfEmpty(desired.SessionDuration),
+		}
+
+		if existing, ok := existingByPrecedence[desired.Precedence]; ok {
+			// Update existing policy
+			logger.V(1).Info("Updating Access Policy",
+				"policyId", existing.ID,
+				"precedence", desired.Precedence,
+				"groupId", desired.GroupID)
+
+			if _, err := apiClient.UpdateAccessPolicy(existing.ID, params); err != nil {
+				return fmt.Errorf("update policy at precedence %d: %w", desired.Precedence, err)
+			}
+		} else {
+			// Create new policy
+			logger.V(1).Info("Creating Access Policy",
+				"precedence", desired.Precedence,
+				"decision", desired.Decision,
+				"groupId", desired.GroupID)
+
+			if _, err := apiClient.CreateAccessPolicy(params); err != nil {
+				return fmt.Errorf("create policy at precedence %d: %w", desired.Precedence, err)
+			}
+		}
+	}
+
+	// Delete policies that are no longer needed
+	for precedence, existing := range existingByPrecedence {
+		if _, ok := desiredByPrecedence[precedence]; !ok {
+			logger.V(1).Info("Deleting Access Policy",
+				"policyId", existing.ID,
+				"precedence", precedence)
+
+			if err := apiClient.DeleteAccessPolicy(appID, existing.ID); err != nil {
+				return fmt.Errorf("delete policy at precedence %d: %w", precedence, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// getPolicyName generates a policy name from the config.
+func (*ApplicationController) getPolicyName(policy accesssvc.AccessPolicyConfig) string {
+	if policy.PolicyName != "" {
+		return policy.PolicyName
+	}
+	if policy.GroupName != "" {
+		return fmt.Sprintf("%s - %s", policy.GroupName, policy.Decision)
+	}
+	return fmt.Sprintf("Policy %d - %s", policy.Precedence, policy.Decision)
+}
+
+// nilIfEmpty returns nil if the string is empty, otherwise returns a pointer to the string.
+func nilIfEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 // buildParams builds AccessApplicationParams from config.

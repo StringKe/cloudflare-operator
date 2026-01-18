@@ -594,3 +594,156 @@ func (c *API) InsertOrUpdateTXT(fqdn, txtId, dnsId string) error {
 		return nil
 	}
 }
+
+// TunnelCreateResult contains the result of a tunnel creation.
+type TunnelCreateResult struct {
+	ID          string
+	Name        string
+	Credentials *TunnelCredentialsFile
+}
+
+// CreateTunnelWithParams creates a Cloudflare Tunnel with explicit parameters.
+// This method is used by the TunnelLifecycle Sync Controller.
+// Returns tunnel ID, credentials, and error.
+func (c *API) CreateTunnelWithParams(tunnelName, configSrc string) (*TunnelCreateResult, error) {
+	if _, err := c.GetAccountId(); err != nil {
+		c.Log.Error(err, "error getting account ID for tunnel creation")
+		return nil, err
+	}
+
+	// Generate 32 byte random string for tunnel secret
+	randSecret := make([]byte, 32)
+	if _, err := rand.Read(randSecret); err != nil {
+		return nil, fmt.Errorf("generate tunnel secret: %w", err)
+	}
+	tunnelSecret := base64.StdEncoding.EncodeToString(randSecret)
+
+	// Default to cloudflare (remotely-managed) config source
+	if configSrc == "" {
+		configSrc = "cloudflare"
+	}
+
+	params := cloudflare.TunnelCreateParams{
+		Name:      tunnelName,
+		Secret:    tunnelSecret,
+		ConfigSrc: configSrc,
+	}
+
+	ctx := context.Background()
+	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
+	tunnel, err := c.CloudflareClient.CreateTunnel(ctx, rc, params)
+	if err != nil {
+		c.Log.Error(err, "error creating tunnel", "name", tunnelName)
+		return nil, err
+	}
+
+	c.Log.Info("Tunnel created successfully", "tunnelId", tunnel.ID, "tunnelName", tunnel.Name)
+
+	return &TunnelCreateResult{
+		ID:   tunnel.ID,
+		Name: tunnel.Name,
+		Credentials: &TunnelCredentialsFile{
+			AccountTag:   c.ValidAccountId,
+			TunnelID:     tunnel.ID,
+			TunnelName:   tunnel.Name,
+			TunnelSecret: tunnelSecret,
+		},
+	}, nil
+}
+
+// DeleteTunnelByID deletes a Cloudflare Tunnel by its ID.
+// This method is used by the TunnelLifecycle Sync Controller.
+// It is idempotent - returns nil if the tunnel is already deleted.
+func (c *API) DeleteTunnelByID(tunnelID string) error {
+	if _, err := c.GetAccountId(); err != nil {
+		c.Log.Error(err, "error validating account ID for tunnel deletion")
+		return err
+	}
+
+	ctx := context.Background()
+	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
+
+	// Clean up tunnel connections first
+	err := c.CloudflareClient.CleanupTunnelConnections(ctx, rc, tunnelID)
+	if err != nil {
+		if !IsNotFoundError(err) {
+			c.Log.Error(err, "error cleaning tunnel connections", "tunnelId", tunnelID)
+			return err
+		}
+		c.Log.Info("Tunnel already deleted (not found during connection cleanup)", "tunnelId", tunnelID)
+		return nil
+	}
+
+	// Delete the tunnel
+	err = c.CloudflareClient.DeleteTunnel(ctx, rc, tunnelID)
+	if err != nil {
+		if IsNotFoundError(err) {
+			c.Log.Info("Tunnel already deleted (not found)", "tunnelId", tunnelID)
+			return nil
+		}
+		c.Log.Error(err, "error deleting tunnel", "tunnelId", tunnelID)
+		return err
+	}
+
+	c.Log.Info("Tunnel deleted successfully", "tunnelId", tunnelID)
+	return nil
+}
+
+// GetTunnelIDByName looks up a tunnel ID by its name.
+// This method is used by the TunnelLifecycle Sync Controller.
+func (c *API) GetTunnelIDByName(tunnelName string) (string, error) {
+	if _, err := c.GetAccountId(); err != nil {
+		c.Log.Error(err, "error getting account ID for tunnel lookup")
+		return "", err
+	}
+
+	ctx := context.Background()
+	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
+
+	params := cloudflare.TunnelListParams{
+		Name: tunnelName,
+	}
+
+	tunnels, _, err := c.CloudflareClient.ListTunnels(ctx, rc, params)
+	if err != nil {
+		c.Log.Error(err, "error listing tunnels by name", "name", tunnelName)
+		return "", err
+	}
+
+	for _, tunnel := range tunnels {
+		if tunnel.Name == tunnelName && tunnel.DeletedAt.IsZero() {
+			c.Log.V(1).Info("Found tunnel by name", "name", tunnelName, "tunnelId", tunnel.ID)
+			return tunnel.ID, nil
+		}
+	}
+
+	return "", fmt.Errorf("tunnel not found: %s", tunnelName)
+}
+
+// GetTunnelCredsByID retrieves tunnel credentials by tunnel ID.
+// This method is used by the TunnelLifecycle Sync Controller.
+// Note: This method cannot retrieve the original secret, only a new token.
+// For existing tunnels, use GetTunnelToken instead.
+func (c *API) GetTunnelCredsByID(tunnelID string) (*TunnelCredentialsFile, error) {
+	if _, err := c.GetAccountId(); err != nil {
+		c.Log.Error(err, "error getting account ID for tunnel credentials")
+		return nil, err
+	}
+
+	ctx := context.Background()
+	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
+
+	// Get tunnel details to retrieve name
+	tunnel, err := c.CloudflareClient.GetTunnel(ctx, rc, tunnelID)
+	if err != nil {
+		c.Log.Error(err, "error getting tunnel details", "tunnelId", tunnelID)
+		return nil, err
+	}
+
+	return &TunnelCredentialsFile{
+		AccountTag: c.ValidAccountId,
+		TunnelID:   tunnel.ID,
+		TunnelName: tunnel.Name,
+		// Note: TunnelSecret is not available for existing tunnels
+	}, nil
+}

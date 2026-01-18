@@ -110,19 +110,16 @@ func (r *GatewayRuleReconciler) resolveCredentials() (*controller.CredentialsInf
 }
 
 // handleDeletion handles the deletion of a GatewayRule.
+// Following Unified Sync Architecture: Resource Controller only unregisters from SyncState,
+// the L5 Sync Controller handles actual Cloudflare API deletion.
 func (r *GatewayRuleReconciler) handleDeletion(
-	credInfo *controller.CredentialsInfo,
+	_ *controller.CredentialsInfo,
 ) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(r.rule, FinalizerName) {
 		return ctrl.Result{}, nil
 	}
 
-	// Delete from Cloudflare
-	if result, shouldReturn := r.deleteFromCloudflare(credInfo); shouldReturn {
-		return result, nil
-	}
-
-	// Unregister from SyncState
+	// Unregister from SyncState - L5 Sync Controller will handle Cloudflare deletion
 	source := service.Source{
 		Kind:      "GatewayRule",
 		Namespace: "",
@@ -130,8 +127,13 @@ func (r *GatewayRuleReconciler) handleDeletion(
 	}
 	if err := r.gatewayService.Unregister(r.ctx, r.rule.Status.RuleID, source); err != nil {
 		r.log.Error(err, "Failed to unregister Gateway rule from SyncState")
-		// Non-fatal - continue with finalizer removal
+		r.Recorder.Event(r.rule, corev1.EventTypeWarning, "UnregisterFailed",
+			fmt.Sprintf("Failed to unregister from SyncState: %s", err.Error()))
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
+
+	r.log.Info("Unregistered Gateway rule from SyncState, L5 Sync Controller will handle Cloudflare deletion")
+	r.Recorder.Event(r.rule, corev1.EventTypeNormal, "Unregistered", "Unregistered from SyncState")
 
 	// Remove finalizer with retry logic
 	if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.rule, func() {
@@ -143,47 +145,6 @@ func (r *GatewayRuleReconciler) handleDeletion(
 	r.Recorder.Event(r.rule, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
 
 	return ctrl.Result{}, nil
-}
-
-// deleteFromCloudflare deletes the gateway rule from Cloudflare.
-// Returns (result, shouldReturn) where shouldReturn indicates if caller should return.
-func (r *GatewayRuleReconciler) deleteFromCloudflare(
-	credInfo *controller.CredentialsInfo,
-) (ctrl.Result, bool) {
-	if r.rule.Status.RuleID == "" {
-		return ctrl.Result{}, false
-	}
-
-	apiClient, err := cf.NewAPIClientFromDetails(r.ctx, r.Client, controller.OperatorNamespace, r.rule.Spec.Cloudflare)
-	if err != nil {
-		r.log.Error(err, "Failed to create API client for deletion")
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, true
-	}
-
-	r.log.Info("Deleting Gateway Rule from Cloudflare", "ruleId", r.rule.Status.RuleID)
-
-	err = apiClient.DeleteGatewayRule(r.rule.Status.RuleID)
-	if err == nil {
-		r.Recorder.Event(r.rule, corev1.EventTypeNormal, controller.EventReasonDeleted, "Deleted from Cloudflare")
-		return ctrl.Result{}, false
-	}
-
-	if cf.IsNotFoundError(err) {
-		r.log.Info("Gateway Rule already deleted from Cloudflare")
-		r.Recorder.Event(r.rule, corev1.EventTypeNormal, "AlreadyDeleted",
-			"Gateway Rule was already deleted from Cloudflare")
-		return ctrl.Result{}, false
-	}
-
-	r.log.Error(err, "Failed to delete Gateway Rule from Cloudflare")
-	r.Recorder.Event(r.rule, corev1.EventTypeWarning, controller.EventReasonDeleteFailed,
-		fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
-
-	// Note: credInfo is passed but currently unused as deleteFromCloudflare still uses
-	// cf.NewAPIClientFromDetails directly for deletion. This parameter is included
-	// to maintain consistency with the interface pattern when we migrate to SyncState deletion.
-	_ = credInfo
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, true
 }
 
 // registerGatewayRule registers the Gateway rule configuration to SyncState.

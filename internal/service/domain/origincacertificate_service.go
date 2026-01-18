@@ -172,3 +172,234 @@ func (s *OriginCACertificateService) UpdateStatus(
 
 	return s.Client.Status().Update(ctx, cert)
 }
+
+// RequestCreate requests creation of a new Origin CA certificate.
+// The actual creation is performed by the OriginCACertificateSyncController.
+// Returns the SyncState name that can be watched for completion.
+func (s *OriginCACertificateService) RequestCreate(ctx context.Context, opts OriginCACertificateCreateOptions) (string, error) {
+	logger := log.FromContext(ctx).WithValues(
+		"hostnames", opts.Hostnames,
+		"source", opts.Source.String(),
+	)
+	logger.Info("Requesting Origin CA certificate creation")
+
+	// Build lifecycle config
+	config := OriginCACertificateLifecycleConfig{
+		Action:       OriginCACertificateActionCreate,
+		Hostnames:    opts.Hostnames,
+		RequestType:  opts.RequestType,
+		ValidityDays: opts.ValidityDays,
+		CSR:          opts.CSR,
+	}
+
+	// Use source name as the SyncState ID placeholder (will be updated after creation)
+	syncStateName := fmt.Sprintf("originca-%s-%s", opts.Source.Namespace, opts.Source.Name)
+
+	syncState, err := s.GetOrCreateSyncState(
+		ctx,
+		ResourceTypeOriginCACertificate,
+		syncStateName,
+		opts.AccountID,
+		opts.ZoneID,
+		opts.CredentialsRef,
+	)
+	if err != nil {
+		return "", fmt.Errorf("get/create syncstate for certificate: %w", err)
+	}
+
+	if err := s.UpdateSource(ctx, syncState, opts.Source, config, PriorityOriginCACertificate); err != nil {
+		return "", fmt.Errorf("update source in syncstate: %w", err)
+	}
+
+	logger.Info("Certificate creation request registered", "syncStateName", syncState.Name)
+	return syncState.Name, nil
+}
+
+// RequestRevoke requests revocation of an existing Origin CA certificate.
+// The actual revocation is performed by the OriginCACertificateSyncController.
+// Returns the SyncState name that can be watched for completion.
+func (s *OriginCACertificateService) RequestRevoke(ctx context.Context, opts OriginCACertificateRevokeOptions) (string, error) {
+	logger := log.FromContext(ctx).WithValues(
+		"certificateId", opts.CertificateID,
+		"source", opts.Source.String(),
+	)
+	logger.Info("Requesting Origin CA certificate revocation")
+
+	// Build lifecycle config
+	config := OriginCACertificateLifecycleConfig{
+		Action:        OriginCACertificateActionRevoke,
+		CertificateID: opts.CertificateID,
+	}
+
+	syncStateName := fmt.Sprintf("originca-%s-%s", opts.Source.Namespace, opts.Source.Name)
+
+	syncState, err := s.GetSyncState(ctx, ResourceTypeOriginCACertificate, syncStateName)
+	if err != nil {
+		return "", fmt.Errorf("get syncstate for certificate: %w", err)
+	}
+
+	if syncState == nil {
+		// Create new SyncState for revocation
+		syncState, err = s.GetOrCreateSyncState(
+			ctx,
+			ResourceTypeOriginCACertificate,
+			syncStateName,
+			opts.AccountID,
+			opts.ZoneID,
+			opts.CredentialsRef,
+		)
+		if err != nil {
+			return "", fmt.Errorf("create syncstate for certificate revocation: %w", err)
+		}
+	}
+
+	// Reset sync status to pending for new operation
+	syncState.Status.SyncStatus = v1alpha2.SyncStatusPending
+	if err := s.Client.Status().Update(ctx, syncState); err != nil {
+		logger.Error(err, "Failed to reset sync status")
+	}
+
+	// Update the source with revoke action
+	if err := s.UpdateSource(ctx, syncState, opts.Source, config, PriorityOriginCACertificate); err != nil {
+		return "", fmt.Errorf("update source with revoke action: %w", err)
+	}
+
+	logger.Info("Certificate revocation request registered", "syncStateName", syncState.Name)
+	return syncState.Name, nil
+}
+
+// RequestRenew requests renewal of an existing Origin CA certificate.
+// The actual renewal is performed by the OriginCACertificateSyncController.
+// Returns the SyncState name that can be watched for completion.
+func (s *OriginCACertificateService) RequestRenew(ctx context.Context, opts OriginCACertificateRenewOptions) (string, error) {
+	logger := log.FromContext(ctx).WithValues(
+		"certificateId", opts.CertificateID,
+		"hostnames", opts.Hostnames,
+		"source", opts.Source.String(),
+	)
+	logger.Info("Requesting Origin CA certificate renewal")
+
+	// Build lifecycle config
+	config := OriginCACertificateLifecycleConfig{
+		Action:        OriginCACertificateActionRenew,
+		CertificateID: opts.CertificateID,
+		Hostnames:     opts.Hostnames,
+		RequestType:   opts.RequestType,
+		ValidityDays:  opts.ValidityDays,
+		CSR:           opts.CSR,
+	}
+
+	syncStateName := fmt.Sprintf("originca-%s-%s", opts.Source.Namespace, opts.Source.Name)
+
+	syncState, err := s.GetSyncState(ctx, ResourceTypeOriginCACertificate, syncStateName)
+	if err != nil {
+		return "", fmt.Errorf("get syncstate for certificate: %w", err)
+	}
+
+	if syncState == nil {
+		syncState, err = s.GetOrCreateSyncState(
+			ctx,
+			ResourceTypeOriginCACertificate,
+			syncStateName,
+			opts.AccountID,
+			opts.ZoneID,
+			opts.CredentialsRef,
+		)
+		if err != nil {
+			return "", fmt.Errorf("create syncstate for certificate renewal: %w", err)
+		}
+	}
+
+	// Reset sync status to pending for new operation
+	syncState.Status.SyncStatus = v1alpha2.SyncStatusPending
+	if err := s.Client.Status().Update(ctx, syncState); err != nil {
+		logger.Error(err, "Failed to reset sync status")
+	}
+
+	if err := s.UpdateSource(ctx, syncState, opts.Source, config, PriorityOriginCACertificate); err != nil {
+		return "", fmt.Errorf("update source in syncstate: %w", err)
+	}
+
+	logger.Info("Certificate renewal request registered", "syncStateName", syncState.Name)
+	return syncState.Name, nil
+}
+
+// GetLifecycleResult retrieves the result of a lifecycle operation from SyncState.
+// Returns nil if the operation hasn't completed yet.
+func (s *OriginCACertificateService) GetLifecycleResult(ctx context.Context, namespace, name string) (*OriginCACertificateSyncResult, error) {
+	syncStateName := fmt.Sprintf("originca-%s-%s", namespace, name)
+	syncState, err := s.GetSyncState(ctx, ResourceTypeOriginCACertificate, syncStateName)
+	if err != nil {
+		return nil, fmt.Errorf("get syncstate: %w", err)
+	}
+
+	if syncState == nil {
+		return nil, nil
+	}
+
+	// Check if operation completed
+	if syncState.Status.SyncStatus != v1alpha2.SyncStatusSynced {
+		return nil, nil
+	}
+
+	// Extract result from ResultData
+	if syncState.Status.ResultData == nil {
+		return nil, nil
+	}
+
+	result := &OriginCACertificateSyncResult{
+		CertificateID: syncState.Status.ResultData[ResultKeyOriginCACertificateID],
+		Certificate:   syncState.Status.ResultData[ResultKeyOriginCACertificate],
+	}
+
+	return result, nil
+}
+
+// IsLifecycleCompleted checks if the lifecycle operation has completed.
+func (s *OriginCACertificateService) IsLifecycleCompleted(ctx context.Context, namespace, name string) (bool, error) {
+	syncStateName := fmt.Sprintf("originca-%s-%s", namespace, name)
+	syncState, err := s.GetSyncState(ctx, ResourceTypeOriginCACertificate, syncStateName)
+	if err != nil {
+		return false, err
+	}
+
+	if syncState == nil {
+		return false, nil
+	}
+
+	return syncState.Status.SyncStatus == v1alpha2.SyncStatusSynced, nil
+}
+
+// GetLifecycleError returns the error message if the lifecycle operation failed.
+func (s *OriginCACertificateService) GetLifecycleError(ctx context.Context, namespace, name string) (string, error) {
+	syncStateName := fmt.Sprintf("originca-%s-%s", namespace, name)
+	syncState, err := s.GetSyncState(ctx, ResourceTypeOriginCACertificate, syncStateName)
+	if err != nil {
+		return "", err
+	}
+
+	if syncState == nil {
+		return "", nil
+	}
+
+	if syncState.Status.SyncStatus == v1alpha2.SyncStatusError {
+		return syncState.Status.Error, nil
+	}
+
+	return "", nil
+}
+
+// CleanupSyncState removes the SyncState for a certificate after successful deletion.
+func (s *OriginCACertificateService) CleanupSyncState(ctx context.Context, namespace, name string) error {
+	syncStateName := fmt.Sprintf("originca-%s-%s", namespace, name)
+	syncState, err := s.GetSyncState(ctx, ResourceTypeOriginCACertificate, syncStateName)
+	if err != nil {
+		return err
+	}
+
+	if syncState == nil {
+		return nil
+	}
+
+	return s.Client.Delete(ctx, syncState)
+}

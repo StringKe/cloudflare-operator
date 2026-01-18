@@ -5,7 +5,6 @@ package accessapplication
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -27,7 +26,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
-	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
 	"github.com/StringKe/cloudflare-operator/internal/service"
 	accesssvc "github.com/StringKe/cloudflare-operator/internal/service/access"
@@ -126,18 +124,6 @@ func (r *Reconciler) resolveCredentials() (*controller.CredentialsInfo, error) {
 	}
 
 	return info, nil
-}
-
-// createTemporaryAPIClient creates a temporary API client for group validation.
-// Note: This is a transitional pattern. Ideally, group validation should be moved
-// to the Sync Controller to fully comply with Unified Sync Architecture.
-func (r *Reconciler) createTemporaryAPIClient() (*cf.API, error) {
-	api, err := cf.NewAPIClientFromDetails(r.ctx, r.Client, controller.OperatorNamespace, r.app.Spec.Cloudflare)
-	if err != nil {
-		return nil, err
-	}
-	api.ValidAccountId = r.app.Status.AccountID
-	return api, nil
 }
 
 // handleDeletion handles the deletion of an AccessApplication.
@@ -301,16 +287,15 @@ func (r *Reconciler) reconcileApplication() (ctrl.Result, error) {
 	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 }
 
-// resolvePolicies resolves all policy references and returns the policy configs.
-//
-//nolint:revive // cognitive complexity is acceptable for policy resolution logic
+// resolvePolicies converts policy references to AccessPolicyConfig.
+// Following Unified Sync Architecture: L2 Controller passes reference info to L3 Service,
+// and L5 Sync Controller resolves actual Group IDs via Cloudflare API.
 func (r *Reconciler) resolvePolicies() ([]accesssvc.AccessPolicyConfig, error) {
 	if len(r.app.Spec.Policies) == 0 {
 		return nil, nil
 	}
 
 	policies := make([]accesssvc.AccessPolicyConfig, 0, len(r.app.Spec.Policies))
-	var errs []error
 
 	for i, policyRef := range r.app.Spec.Policies {
 		precedence := policyRef.Precedence
@@ -318,114 +303,61 @@ func (r *Reconciler) resolvePolicies() ([]accesssvc.AccessPolicyConfig, error) {
 			precedence = i + 1 // Auto-assign precedence based on order
 		}
 
-		groupID, groupName, err := r.resolveAccessGroupID(policyRef)
-		if err != nil {
-			r.log.Error(err, "failed to resolve access group",
-				"policyIndex", i, "precedence", precedence)
-			r.Recorder.Event(r.app, corev1.EventTypeWarning, "PolicyResolutionFailed",
-				fmt.Sprintf("Failed to resolve policy at precedence %d: %s", precedence, cf.SanitizeErrorMessage(err)))
-			errs = append(errs, err)
-			continue
-		}
-
 		decision := policyRef.Decision
 		if decision == "" {
 			decision = "allow"
 		}
 
-		policies = append(policies, accesssvc.AccessPolicyConfig{
-			GroupID:         groupID,
-			GroupName:       groupName,
+		policyConfig := accesssvc.AccessPolicyConfig{
 			Decision:        decision,
 			Precedence:      precedence,
 			PolicyName:      policyRef.PolicyName,
 			SessionDuration: policyRef.SessionDuration,
-		})
+		}
+
+		// Set reference fields - L5 Sync Controller will resolve these to actual GroupID
+		switch {
+		case policyRef.GroupID != "":
+			// Direct Cloudflare group ID reference - will be validated in L5
+			policyConfig.CloudflareGroupID = policyRef.GroupID
+		case policyRef.CloudflareGroupName != "":
+			// Cloudflare group name reference - will be looked up in L5
+			policyConfig.CloudflareGroupName = policyRef.CloudflareGroupName
+		case policyRef.Name != "":
+			// K8s AccessGroup reference - resolve now to get K8s resource status
+			accessGroup := &networkingv1alpha2.AccessGroup{}
+			if err := r.Get(r.ctx, apitypes.NamespacedName{Name: policyRef.Name}, accessGroup); err != nil {
+				if apierrors.IsNotFound(err) {
+					r.log.Error(err, "Kubernetes AccessGroup resource not found",
+						"policyIndex", i, "accessGroupName", policyRef.Name)
+					r.Recorder.Event(r.app, corev1.EventTypeWarning, "PolicyResolutionFailed",
+						fmt.Sprintf("AccessGroup %s not found for policy at precedence %d", policyRef.Name, precedence))
+					continue
+				}
+				r.log.Error(err, "Failed to get AccessGroup resource",
+					"policyIndex", i, "accessGroupName", policyRef.Name)
+				continue
+			}
+			if accessGroup.Status.GroupID != "" {
+				// AccessGroup already synced - use its GroupID directly
+				policyConfig.GroupID = accessGroup.Status.GroupID
+				policyConfig.GroupName = accessGroup.GetAccessGroupName()
+			} else {
+				// AccessGroup not yet synced - pass reference name for L5 to resolve
+				policyConfig.K8sAccessGroupName = policyRef.Name
+			}
+		default:
+			r.log.Info("No group reference specified in policy, skipping",
+				"policyIndex", i, "precedence", precedence)
+			r.Recorder.Event(r.app, corev1.EventTypeWarning, "PolicyResolutionFailed",
+				fmt.Sprintf("No group reference specified for policy at precedence %d", precedence))
+			continue
+		}
+
+		policies = append(policies, policyConfig)
 	}
 
-	if len(errs) > 0 {
-		return policies, errors.Join(errs...)
-	}
 	return policies, nil
-}
-
-// ErrNoGroupReference is returned when no group reference is specified in a policy.
-var ErrNoGroupReference = errors.New("no group reference specified in policy (must specify one of: name, groupId, cloudflareGroupName)")
-
-// resolveAccessGroupID resolves the group ID from various reference types.
-// Priority: groupId > cloudflareGroupName > name
-//
-//nolint:revive // cognitive complexity is acceptable for this decision tree
-func (r *Reconciler) resolveAccessGroupID(ref networkingv1alpha2.AccessPolicyRef) (string, string, error) {
-	switch {
-	case ref.GroupID != "":
-		return r.resolveByGroupID(ref.GroupID)
-	case ref.CloudflareGroupName != "":
-		return r.resolveByCloudflareGroupName(ref.CloudflareGroupName)
-	case ref.Name != "":
-		return r.resolveByK8sAccessGroup(ref.Name)
-	default:
-		return "", "", ErrNoGroupReference
-	}
-}
-
-// resolveByGroupID validates and resolves a direct Cloudflare group ID.
-// Note: This creates a temporary API client for validation. This is a transitional pattern;
-// ideally group validation should be moved to the Sync Controller.
-//
-//nolint:revive // confusing-results: naming not needed for simple ID, name returns
-func (r *Reconciler) resolveByGroupID(groupID string) (string, string, error) {
-	cfAPI, err := r.createTemporaryAPIClient()
-	if err != nil {
-		return "", "", err
-	}
-
-	group, err := cfAPI.GetAccessGroup(groupID)
-	if err != nil {
-		if cf.IsNotFoundError(err) {
-			return "", "", fmt.Errorf("cloudflare access group not found: %s", groupID)
-		}
-		return "", "", fmt.Errorf("failed to validate cloudflare group: %w", err)
-	}
-	return groupID, group.Name, nil
-}
-
-// resolveByCloudflareGroupName looks up a Cloudflare group by its display name.
-// Note: This creates a temporary API client for lookup. This is a transitional pattern;
-// ideally group lookup should be moved to the Sync Controller.
-//
-//nolint:revive // confusing-results: naming not needed for simple ID, name returns
-func (r *Reconciler) resolveByCloudflareGroupName(groupName string) (string, string, error) {
-	cfAPI, err := r.createTemporaryAPIClient()
-	if err != nil {
-		return "", "", err
-	}
-
-	group, err := cfAPI.ListAccessGroupsByName(groupName)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to lookup cloudflare group by name: %w", err)
-	}
-	if group == nil {
-		return "", "", fmt.Errorf("cloudflare access group not found by name: %s", groupName)
-	}
-	return group.ID, group.Name, nil
-}
-
-// resolveByK8sAccessGroup looks up a Kubernetes AccessGroup resource.
-//
-//nolint:revive // confusing-results: naming not needed for simple ID, name returns
-func (r *Reconciler) resolveByK8sAccessGroup(name string) (string, string, error) {
-	accessGroup := &networkingv1alpha2.AccessGroup{}
-	if err := r.Get(r.ctx, apitypes.NamespacedName{Name: name}, accessGroup); err != nil {
-		if apierrors.IsNotFound(err) {
-			return "", "", fmt.Errorf("kubernetes AccessGroup resource not found: %s", name)
-		}
-		return "", "", fmt.Errorf("failed to get AccessGroup resource: %w", err)
-	}
-	if accessGroup.Status.GroupID == "" {
-		return "", "", fmt.Errorf("AccessGroup %s not yet ready (no GroupID in status)", name)
-	}
-	return accessGroup.Status.GroupID, accessGroup.GetAccessGroupName(), nil
 }
 
 // updateStatusPending updates the AccessApplication status to Pending state.

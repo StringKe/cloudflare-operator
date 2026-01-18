@@ -10,6 +10,7 @@ import (
 	"github.com/cloudflare/cloudflare-go"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -18,6 +19,11 @@ import (
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	tunnelsvc "github.com/StringKe/cloudflare-operator/internal/service/tunnel"
 	"github.com/StringKe/cloudflare-operator/internal/sync/common"
+)
+
+const (
+	// FinalizerName is the finalizer for Tunnel Configuration SyncState resources.
+	FinalizerName = "tunnelconfig.sync.cloudflare-operator.io/finalizer"
 )
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=cloudflaresyncstates,verbs=get;list;watch;create;update;patch;delete
@@ -41,11 +47,13 @@ func NewController(c client.Client) *Controller {
 // Reconcile processes a CloudflareSyncState resource for tunnel configuration.
 // The reconciliation flow:
 // 1. Get the SyncState resource
-// 2. Debounce rapid changes
-// 3. Aggregate configuration from all sources
-// 4. Compute hash for change detection
-// 5. If changed, sync to Cloudflare API
-// 6. Update SyncState status
+// 2. Handle deletion (clear config on Cloudflare)
+// 3. Handle empty sources (clear ingress rules)
+// 4. Debounce rapid changes
+// 5. Aggregate configuration from all sources
+// 6. Compute hash for change detection
+// 7. If changed, sync to Cloudflare API
+// 8. Update SyncState status
 //
 //nolint:revive // cognitive complexity is acceptable for this central reconciliation loop
 func (r *Controller) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -66,6 +74,30 @@ func (r *Controller) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		logger.V(1).Info("Skipping non-tunnel SyncState",
 			"resourceType", syncState.Spec.ResourceType)
 		return ctrl.Result{}, nil
+	}
+
+	logger.V(1).Info("Processing TunnelConfiguration SyncState",
+		"cloudflareId", syncState.Spec.CloudflareID,
+		"sources", len(syncState.Spec.Sources))
+
+	// Handle deletion - this clears the tunnel config on Cloudflare
+	if !syncState.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, syncState)
+	}
+
+	// Check if there are any sources - if none, clear config on Cloudflare
+	if len(syncState.Spec.Sources) == 0 {
+		logger.Info("No sources in SyncState, clearing tunnel configuration")
+		return r.handleEmptySources(ctx, syncState)
+	}
+
+	// Add finalizer if not present
+	if !controllerutil.ContainsFinalizer(syncState, FinalizerName) {
+		controllerutil.AddFinalizer(syncState, FinalizerName)
+		if err := r.Client.Update(ctx, syncState); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	// Skip if there's a pending debounced request (will be reconciled later)
@@ -283,6 +315,161 @@ func (*Controller) convertOriginRequest(config *tunnelsvc.OriginRequestConfig) *
 type SyncToCloudflareResult struct {
 	// Version is the configuration version returned by Cloudflare
 	Version int
+}
+
+// handleDeletion handles the deletion of TunnelConfiguration SyncState.
+// When the SyncState is deleted (due to Tunnel/ClusterTunnel deletion), we clear the config.
+// The tunnel itself is deleted by the TunnelController/ClusterTunnelController.
+//
+//nolint:revive // cognitive complexity unavoidable: deletion logic requires multiple cleanup steps
+func (r *Controller) handleDeletion(
+	ctx context.Context,
+	syncState *v1alpha2.CloudflareSyncState,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	// If no finalizer, nothing to do
+	if !controllerutil.ContainsFinalizer(syncState, FinalizerName) {
+		return ctrl.Result{}, nil
+	}
+
+	tunnelID := syncState.Spec.CloudflareID
+
+	// Skip if pending ID (tunnel was never configured)
+	if common.IsPendingID(tunnelID) {
+		logger.Info("Skipping deletion - Tunnel was never configured",
+			"cloudflareId", tunnelID)
+	} else if tunnelID != "" {
+		// Clear tunnel configuration on Cloudflare
+		cfAPI, err := r.createAPIClient(ctx, syncState)
+		if err != nil {
+			logger.Error(err, "Failed to create API client for deletion")
+			return ctrl.Result{RequeueAfter: common.RequeueAfterError(err)}, nil
+		}
+
+		logger.Info("Clearing tunnel configuration on Cloudflare",
+			"tunnelId", tunnelID)
+
+		// Update with empty config (only catch-all rule)
+		emptyConfig := r.buildEmptyConfig()
+		_, err = cfAPI.UpdateTunnelConfiguration(tunnelID, emptyConfig)
+		if err != nil {
+			if !cf.IsNotFoundError(err) {
+				logger.Error(err, "Failed to clear tunnel configuration")
+				if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
+					logger.Error(statusErr, "Failed to update error status")
+				}
+				return ctrl.Result{RequeueAfter: common.RequeueAfterError(err)}, nil
+			}
+			logger.Info("Tunnel already deleted from Cloudflare")
+		} else {
+			logger.Info("Successfully cleared tunnel configuration",
+				"tunnelId", tunnelID)
+		}
+	}
+
+	// Remove finalizer
+	controllerutil.RemoveFinalizer(syncState, FinalizerName)
+	if err := r.Client.Update(ctx, syncState); err != nil {
+		logger.Error(err, "Failed to remove finalizer")
+		return ctrl.Result{}, err
+	}
+
+	return ctrl.Result{}, nil
+}
+
+// handleEmptySources handles the case when all sources are removed from the SyncState.
+// This clears all ingress rules but keeps the catch-all rule.
+//
+//nolint:revive // cognitive complexity acceptable for cleanup logic
+func (r *Controller) handleEmptySources(
+	ctx context.Context,
+	syncState *v1alpha2.CloudflareSyncState,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	tunnelID := syncState.Spec.CloudflareID
+
+	// Skip if pending ID
+	if common.IsPendingID(tunnelID) {
+		logger.Info("Skipping empty sources handling - Tunnel was never configured")
+		// Remove finalizer and delete SyncState
+		controllerutil.RemoveFinalizer(syncState, FinalizerName)
+		if err := r.Client.Update(ctx, syncState); err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := r.Client.Delete(ctx, syncState); err != nil {
+			if client.IgnoreNotFound(err) != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// Create API client
+	cfAPI, err := r.createAPIClient(ctx, syncState)
+	if err != nil {
+		logger.Error(err, "Failed to create API client")
+		if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
+			logger.Error(statusErr, "Failed to update error status")
+		}
+		return ctrl.Result{RequeueAfter: common.RequeueAfterError(err)}, nil
+	}
+
+	// Update with empty config (only catch-all rule)
+	logger.Info("Clearing tunnel configuration (no sources)",
+		"tunnelId", tunnelID)
+
+	emptyConfig := r.buildEmptyConfig()
+	_, err = cfAPI.UpdateTunnelConfiguration(tunnelID, emptyConfig)
+	if err != nil {
+		if cf.IsNotFoundError(err) {
+			logger.Info("Tunnel already deleted from Cloudflare")
+		} else {
+			logger.Error(err, "Failed to clear tunnel configuration")
+			if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
+				logger.Error(statusErr, "Failed to update error status")
+			}
+			return ctrl.Result{RequeueAfter: common.RequeueAfterError(err)}, nil
+		}
+	}
+
+	// Update status to synced with empty hash
+	syncResult := &common.SyncResult{
+		ConfigHash: "empty",
+	}
+	if err := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusSynced, syncResult, nil); err != nil {
+		logger.Error(err, "Failed to update status")
+		return ctrl.Result{}, err
+	}
+
+	// Remove finalizer and delete SyncState since it has no sources
+	controllerutil.RemoveFinalizer(syncState, FinalizerName)
+	if err := r.Client.Update(ctx, syncState); err != nil {
+		logger.Error(err, "Failed to remove finalizer")
+		return ctrl.Result{}, err
+	}
+
+	logger.Info("Deleting orphaned SyncState")
+	if err := r.Client.Delete(ctx, syncState); err != nil {
+		if client.IgnoreNotFound(err) != nil {
+			logger.Error(err, "Failed to delete SyncState")
+			return ctrl.Result{}, err
+		}
+	}
+
+	return ctrl.Result{}, nil
+}
+
+// buildEmptyConfig builds an empty tunnel configuration with only the catch-all rule.
+func (*Controller) buildEmptyConfig() cloudflare.TunnelConfiguration {
+	return cloudflare.TunnelConfiguration{
+		Ingress: []cloudflare.UnvalidatedIngressRule{
+			{
+				Service: "http_status:404",
+			},
+		},
+	}
 }
 
 // isTunnelConfigSyncState checks if the object is a TunnelConfiguration SyncState

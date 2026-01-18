@@ -27,6 +27,8 @@ import (
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	cfclient "github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
+	"github.com/StringKe/cloudflare-operator/internal/service"
+	domainsvc "github.com/StringKe/cloudflare-operator/internal/service/domain"
 )
 
 const (
@@ -38,6 +40,7 @@ type Reconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
+	Service  *domainsvc.CloudflareDomainService
 
 	// Internal state
 	ctx    context.Context
@@ -113,23 +116,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 	}
 
-	// Sync zone settings if configured
+	// Register zone settings via Service (following six-layer architecture)
+	// L2 Controller registers configuration, L5 Sync Controller performs actual API sync
 	if r.domain.Spec.SSL != nil || r.domain.Spec.Cache != nil ||
 		r.domain.Spec.Security != nil || r.domain.Spec.Performance != nil {
-		cfClient, err := r.createCloudflareClient(creds)
-		if err != nil {
-			r.updateState(networkingv1alpha2.CloudflareDomainStateError, fmt.Sprintf("Failed to create Cloudflare client: %v", err))
-			r.Recorder.Event(r.domain, corev1.EventTypeWarning, controller.EventReasonAPIError, err.Error())
-			return ctrl.Result{RequeueAfter: time.Minute}, nil
-		}
-
-		if err := r.syncZoneSettings(cfClient); err != nil {
-			r.log.Error(err, "Failed to sync zone settings")
-			r.Recorder.Event(r.domain, corev1.EventTypeWarning, "SettingsSyncFailed", err.Error())
+		if err := r.registerZoneSettings(creds); err != nil {
+			r.log.Error(err, "Failed to register zone settings")
+			r.Recorder.Event(r.domain, corev1.EventTypeWarning, "SettingsRegisterFailed", err.Error())
 			// Don't fail the entire reconciliation, just log the error
-			// Settings sync is best-effort
+			// Settings sync will be retried by Sync Controller
 		} else {
-			r.Recorder.Event(r.domain, corev1.EventTypeNormal, "SettingsSynced", "Zone settings synchronized successfully")
+			r.Recorder.Event(r.domain, corev1.EventTypeNormal, "SettingsRegistered", "Zone settings registered to SyncState")
 		}
 	}
 
@@ -144,7 +141,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 // handleDeletion handles the deletion of CloudflareDomain
 func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 	if controllerutil.ContainsFinalizer(r.domain, finalizerName) {
-		// Nothing to clean up on Cloudflare side for domain mapping
+		// Unregister from SyncState via Service
+		if r.Service != nil && r.domain.Status.ZoneID != "" {
+			source := service.Source{
+				Kind:      "CloudflareDomain",
+				Namespace: "", // Cluster-scoped
+				Name:      r.domain.Name,
+			}
+			if err := r.Service.Unregister(r.ctx, r.domain.Status.ZoneID, source); err != nil {
+				r.log.Error(err, "Failed to unregister from SyncState, continuing with deletion")
+			}
+		}
 
 		// Remove finalizer with conflict retry
 		if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.domain, func() {
@@ -400,6 +407,143 @@ func (r *Reconciler) findDomainsForCredentials(ctx context.Context, obj client.O
 	}
 
 	return requests
+}
+
+// registerZoneSettings registers zone settings configuration via Service.
+// Following six-layer architecture: L2 Controller registers config, L5 Sync Controller syncs to API.
+//
+//nolint:revive // cognitive complexity is acceptable for building config
+func (r *Reconciler) registerZoneSettings(creds *networkingv1alpha2.CloudflareCredentials) error {
+	if r.Service == nil {
+		return errors.New("CloudflareDomainService not initialized")
+	}
+
+	// Build configuration from spec
+	config := domainsvc.CloudflareDomainConfig{
+		Domain: r.domain.Spec.Domain,
+	}
+
+	// Convert SSL settings
+	if r.domain.Spec.SSL != nil {
+		ssl := r.domain.Spec.SSL
+		config.SSL = &domainsvc.SSLConfig{
+			Mode:       string(ssl.Mode),
+			MinVersion: string(ssl.MinTLSVersion),
+		}
+		if ssl.AlwaysUseHTTPS != nil {
+			config.SSL.AlwaysUseHTTPS = ssl.AlwaysUseHTTPS
+		}
+		if ssl.AutomaticHTTPSRewrites != nil {
+			config.SSL.AutomaticHTTPSRewrites = ssl.AutomaticHTTPSRewrites
+		}
+		if ssl.OpportunisticEncryption != nil {
+			config.SSL.OpportunisticEncryption = ssl.OpportunisticEncryption
+		}
+	}
+
+	// Convert Cache settings
+	if r.domain.Spec.Cache != nil {
+		cache := r.domain.Spec.Cache
+		config.Cache = &domainsvc.CacheConfig{
+			Level: string(cache.CacheLevel),
+		}
+		if cache.BrowserTTL != nil {
+			config.Cache.BrowserTTL = *cache.BrowserTTL
+		}
+		config.Cache.DevelopmentMode = &cache.DevelopmentMode
+		if cache.AlwaysOnline != nil {
+			config.Cache.AlwaysOnline = cache.AlwaysOnline
+		}
+	}
+
+	// Convert Security settings
+	if r.domain.Spec.Security != nil {
+		security := r.domain.Spec.Security
+		config.Security = &domainsvc.SecurityConfig{
+			Level: string(security.Level),
+		}
+		if security.BrowserCheck != nil {
+			config.Security.BrowserIntegrityCheck = security.BrowserCheck
+		}
+		if security.EmailObfuscation != nil {
+			config.Security.EmailObfuscation = security.EmailObfuscation
+		}
+		config.Security.HotlinkProtection = &security.HotlinkProtection
+		if security.WAF != nil {
+			config.Security.WAF = &domainsvc.WAFConfig{
+				Enabled: &security.WAF.Enabled,
+			}
+		}
+	}
+
+	// Convert Performance settings
+	if r.domain.Spec.Performance != nil {
+		perf := r.domain.Spec.Performance
+		config.Performance = &domainsvc.PerformanceConfig{
+			Polish: string(perf.Polish),
+			Mirage: &perf.Mirage,
+		}
+		if perf.Brotli != nil {
+			config.Performance.Brotli = perf.Brotli
+		}
+		if perf.HTTP2 != nil {
+			config.Performance.HTTP2 = perf.HTTP2
+		}
+		if perf.HTTP3 != nil {
+			config.Performance.HTTP3 = perf.HTTP3
+		}
+		if perf.ZeroRTT != nil {
+			config.Performance.ZeroRTT = perf.ZeroRTT
+		}
+		if perf.EarlyHints != nil {
+			config.Performance.EarlyHints = perf.EarlyHints
+		}
+		config.Performance.RocketLoader = &perf.RocketLoader
+		if perf.Minify != nil {
+			config.Performance.Minify = &domainsvc.MinifyConfig{
+				HTML: &perf.Minify.HTML,
+				CSS:  &perf.Minify.CSS,
+				JS:   &perf.Minify.JavaScript,
+			}
+		}
+	}
+
+	// Build credentials reference
+	credRef := networkingv1alpha2.CredentialsReference{
+		Name: creds.Name,
+	}
+
+	// Register via Service
+	opts := domainsvc.CloudflareDomainRegisterOptions{
+		AccountID:      creds.Spec.AccountID,
+		ZoneID:         r.domain.Status.ZoneID,
+		CredentialsRef: credRef,
+		Source: service.Source{
+			Kind:      "CloudflareDomain",
+			Namespace: "", // Cluster-scoped
+			Name:      r.domain.Name,
+		},
+		Config: config,
+	}
+
+	if err := r.Service.Register(r.ctx, opts); err != nil {
+		return fmt.Errorf("register zone settings: %w", err)
+	}
+
+	// Update ZoneID in SyncState if we just got it
+	if r.domain.Status.ZoneID != "" {
+		source := service.Source{
+			Kind:      "CloudflareDomain",
+			Namespace: "", // Cluster-scoped
+			Name:      r.domain.Name,
+		}
+		if err := r.Service.UpdateZoneID(r.ctx, source, r.domain.Status.ZoneID, creds.Spec.AccountID); err != nil {
+			r.log.V(1).Info("Failed to update ZoneID in SyncState", "error", err)
+		}
+	}
+
+	r.log.Info("Zone settings registered to SyncState", "domain", r.domain.Spec.Domain, "zoneId", r.domain.Status.ZoneID)
+	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

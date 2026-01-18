@@ -99,8 +99,8 @@ type AccessApplicationConfig struct {
 
 // AccessPolicyConfig contains policy configuration for AccessApplication
 type AccessPolicyConfig struct {
-	// GroupID is the resolved Cloudflare Access Group ID
-	GroupID string `json:"groupId"`
+	// GroupID is the resolved Cloudflare Access Group ID (set by L2 if resolving K8s AccessGroup)
+	GroupID string `json:"groupId,omitempty"`
 	// GroupName for display purposes
 	GroupName string `json:"groupName,omitempty"`
 	// Decision is the policy decision (allow, deny, bypass, non_identity)
@@ -111,6 +111,14 @@ type AccessPolicyConfig struct {
 	PolicyName string `json:"policyName,omitempty"`
 	// SessionDuration overrides application session duration
 	SessionDuration string `json:"sessionDuration,omitempty"`
+
+	// Group Reference fields (one of these will be set, resolved by L5 Sync Controller)
+	// CloudflareGroupID is a direct Cloudflare group ID reference (validated in L5)
+	CloudflareGroupID string `json:"cloudflareGroupId,omitempty"`
+	// CloudflareGroupName is a Cloudflare group name to look up (resolved in L5)
+	CloudflareGroupName string `json:"cloudflareGroupName,omitempty"`
+	// K8sAccessGroupName is a Kubernetes AccessGroup resource name (resolved in L5)
+	K8sAccessGroupName string `json:"k8sAccessGroupName,omitempty"`
 }
 
 // AccessGroupConfig contains the configuration for an AccessGroup.

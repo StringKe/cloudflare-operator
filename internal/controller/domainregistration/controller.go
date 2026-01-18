@@ -6,6 +6,7 @@ package domainregistration
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -23,12 +24,18 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
-	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
+	"github.com/StringKe/cloudflare-operator/internal/service"
+	domainsvc "github.com/StringKe/cloudflare-operator/internal/service/domain"
 )
 
 const (
 	finalizerName = "cloudflare.com/domain-registration-finalizer"
+)
+
+var (
+	// errLifecyclePending indicates a lifecycle operation is pending completion.
+	errLifecyclePending = errors.New("lifecycle operation pending, waiting for completion")
 )
 
 // Reconciler reconciles a DomainRegistration object
@@ -36,6 +43,7 @@ type Reconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
+	Service  *domainsvc.DomainRegistrationService // Core Service for SyncState management
 
 	// Internal state
 	ctx    context.Context
@@ -77,18 +85,21 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 	}
 
-	// Create API client
-	cfAPI, err := r.getAPIClient()
+	// Check if there's a pending lifecycle operation and apply result
+	result, requeue, err := r.applyLifecycleResult()
 	if err != nil {
-		r.updateState(networkingv1alpha2.DomainRegistrationStateError,
-			fmt.Sprintf("Failed to get API client: %v", err))
-		r.Recorder.Event(r.domain, corev1.EventTypeWarning,
-			controller.EventReasonAPIError, cf.SanitizeErrorMessage(err))
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+		if errors.Is(err, errLifecyclePending) {
+			// Operation pending, requeue to check status later
+			return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	if requeue {
+		return result, nil
 	}
 
-	// Sync domain
-	return r.syncDomain(cfAPI)
+	// Request sync via Service (six-layer architecture)
+	return r.requestSync()
 }
 
 // handleDeletion handles the deletion of DomainRegistration
@@ -98,8 +109,23 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 	}
 
 	// DomainRegistration is read-only for the domain itself
-	// We don't delete the domain from Cloudflare, just remove the finalizer
-	r.log.Info("DomainRegistration being deleted, removing finalizer only (domain not deleted from Cloudflare)")
+	// We don't delete the domain from Cloudflare, just unregister from SyncState and remove finalizer
+	r.log.Info("DomainRegistration being deleted, unregistering from SyncState")
+
+	// Unregister from SyncState
+	source := service.Source{
+		Kind: "DomainRegistration",
+		Name: r.domain.Name,
+	}
+	if err := r.Service.Unregister(r.ctx, r.domain.Spec.DomainName, source); err != nil {
+		r.log.Error(err, "failed to unregister from SyncState")
+		// Continue with finalizer removal even if unregister fails
+	}
+
+	// Cleanup SyncState if no other sources
+	if err := r.Service.CleanupSyncState(r.ctx, r.domain.Spec.DomainName); err != nil {
+		r.log.V(1).Info("Failed to cleanup SyncState", "error", err)
+	}
 
 	// Remove finalizer
 	if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.domain, func() {
@@ -111,90 +137,149 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 	return ctrl.Result{}, nil
 }
 
-// syncDomain syncs the domain configuration with Cloudflare
+// requestSync requests a sync of domain registration information via Service.
 //
-//nolint:revive // cognitive complexity is acceptable for sync logic
-func (r *Reconciler) syncDomain(cfAPI *cf.API) (ctrl.Result, error) {
-	r.updateState(networkingv1alpha2.DomainRegistrationStateSyncing, "Syncing domain information")
+//nolint:revive // cognitive complexity is acceptable for sync request logic
+func (r *Reconciler) requestSync() (ctrl.Result, error) {
+	r.updateState(networkingv1alpha2.DomainRegistrationStateSyncing, "Requesting domain sync")
 
-	// Get domain information from Cloudflare
-	domainInfo, err := cfAPI.GetRegistrarDomain(r.ctx, r.domain.Spec.DomainName)
+	// Resolve credentials
+	credRef := r.buildCredentialsRef()
+
+	// Get account ID from credentials
+	accountID := ""
+	if credRef.Name != "" {
+		creds := &networkingv1alpha2.CloudflareCredentials{}
+		if err := r.Get(r.ctx, types.NamespacedName{Name: credRef.Name}, creds); err == nil {
+			accountID = creds.Spec.AccountID
+		}
+	} else {
+		// Try default credentials
+		credsList := &networkingv1alpha2.CloudflareCredentialsList{}
+		if err := r.List(r.ctx, credsList); err == nil {
+			for _, cred := range credsList.Items {
+				if cred.Spec.IsDefault {
+					accountID = cred.Spec.AccountID
+					credRef.Name = cred.Name
+					break
+				}
+			}
+		}
+	}
+
+	// Build configuration if present
+	var config *domainsvc.DomainRegistrationConfiguration
+	if r.domain.Spec.Configuration != nil {
+		config = &domainsvc.DomainRegistrationConfiguration{
+			AutoRenew:   r.domain.Spec.Configuration.AutoRenew,
+			Privacy:     r.domain.Spec.Configuration.Privacy,
+			Locked:      r.domain.Spec.Configuration.Locked,
+			NameServers: r.domain.Spec.Configuration.NameServers,
+		}
+	}
+
+	// Request sync via Service
+	source := service.Source{
+		Kind: "DomainRegistration",
+		Name: r.domain.Name,
+	}
+
+	_, err := r.Service.RequestSync(r.ctx, domainsvc.DomainRegistrationRegisterOptions{
+		AccountID:      accountID,
+		Source:         source,
+		CredentialsRef: credRef,
+		DomainName:     r.domain.Spec.DomainName,
+		Configuration:  config,
+	})
 	if err != nil {
 		r.updateState(networkingv1alpha2.DomainRegistrationStateError,
-			fmt.Sprintf("Failed to get domain: %v", err))
+			fmt.Sprintf("Failed to request sync: %v", err))
 		r.Recorder.Event(r.domain, corev1.EventTypeWarning,
-			controller.EventReasonAPIError, cf.SanitizeErrorMessage(err))
+			controller.EventReasonAPIError, fmt.Sprintf("Failed to request sync: %v", err))
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	}
 
-	// Update status with domain information
-	r.domain.Status.DomainID = domainInfo.ID
-	r.domain.Status.CurrentRegistrar = domainInfo.CurrentRegistrar
-	r.domain.Status.RegistryStatuses = domainInfo.RegistryStatuses
-	r.domain.Status.Locked = domainInfo.Locked
-	r.domain.Status.TransferInStatus = domainInfo.TransferInStatus
+	// Update state to syncing and requeue to check result
+	r.updateState(networkingv1alpha2.DomainRegistrationStateSyncing, "Sync requested, waiting for completion")
+	return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+}
 
-	if !domainInfo.ExpiresAt.IsZero() {
-		r.domain.Status.ExpiresAt = &metav1.Time{Time: domainInfo.ExpiresAt}
-	}
-	if !domainInfo.CreatedAt.IsZero() {
-		r.domain.Status.CreatedAt = &metav1.Time{Time: domainInfo.CreatedAt}
-	}
-
-	// Check if configuration update is needed
-	if r.domain.Spec.Configuration != nil {
-		needsUpdate := false
-		config := cf.RegistrarDomainConfig{
-			AutoRenew: r.domain.Spec.Configuration.AutoRenew,
-			Privacy:   r.domain.Spec.Configuration.Privacy,
-			Locked:    r.domain.Spec.Configuration.Locked,
-		}
-
-		if len(r.domain.Spec.Configuration.NameServers) > 0 {
-			config.NameServers = r.domain.Spec.Configuration.NameServers
-		}
-
-		// Check if update is needed (simplified comparison)
-		// In production, you would compare with the current values
-		needsUpdate = true
-
-		if needsUpdate {
-			updatedInfo, err := cfAPI.UpdateRegistrarDomain(r.ctx, r.domain.Spec.DomainName, config)
-			if err != nil {
-				r.updateState(networkingv1alpha2.DomainRegistrationStateError,
-					fmt.Sprintf("Failed to update domain: %v", err))
-				r.Recorder.Event(r.domain, corev1.EventTypeWarning,
-					controller.EventReasonAPIError, cf.SanitizeErrorMessage(err))
-				return ctrl.Result{RequeueAfter: time.Minute}, nil
-			}
-
-			// Update status with new information
-			r.domain.Status.Locked = updatedInfo.Locked
-			r.domain.Status.AutoRenew = config.AutoRenew
-			r.domain.Status.Privacy = config.Privacy
-		}
+// applyLifecycleResult checks and applies results from SyncState.
+//
+//nolint:revive // cognitive complexity is acceptable for result application logic
+func (r *Reconciler) applyLifecycleResult() (ctrl.Result, bool, error) {
+	// Check if operation completed
+	completed, err := r.Service.IsLifecycleCompleted(r.ctx, r.domain.Spec.DomainName)
+	if err != nil {
+		r.log.V(1).Info("Error checking lifecycle status", "error", err)
+		return ctrl.Result{}, false, nil // No SyncState yet, proceed with sync
 	}
 
-	// Determine state based on domain information
-	state := r.determineState(domainInfo)
+	if !completed {
+		// Check for error
+		errMsg, _ := r.Service.GetLifecycleError(r.ctx, r.domain.Spec.DomainName)
+		if errMsg != "" {
+			r.updateState(networkingv1alpha2.DomainRegistrationStateError, errMsg)
+			r.Recorder.Event(r.domain, corev1.EventTypeWarning,
+				controller.EventReasonAPIError, errMsg)
+			return ctrl.Result{RequeueAfter: time.Minute}, true, nil
+		}
+
+		// Still pending
+		return ctrl.Result{}, false, errLifecyclePending
+	}
+
+	// Get the result
+	result, err := r.Service.GetLifecycleResult(r.ctx, r.domain.Spec.DomainName)
+	if err != nil {
+		r.log.Error(err, "Failed to get lifecycle result")
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, true, nil
+	}
+
+	if result == nil {
+		// No result yet, proceed with sync
+		return ctrl.Result{}, false, nil
+	}
+
+	// Apply result to status
+	r.domain.Status.DomainID = result.DomainID
+	r.domain.Status.CurrentRegistrar = result.CurrentRegistrar
+	r.domain.Status.RegistryStatuses = result.RegistryStatuses
+	r.domain.Status.Locked = result.Locked
+	r.domain.Status.TransferInStatus = result.TransferInStatus
+	r.domain.Status.AutoRenew = result.AutoRenew
+	r.domain.Status.Privacy = result.Privacy
+
+	//nolint:staticcheck // Time embedded access required for zero check
+	if !result.ExpiresAt.Time.IsZero() {
+		r.domain.Status.ExpiresAt = &metav1.Time{Time: result.ExpiresAt.Time}
+	}
+	//nolint:staticcheck // Time embedded access required for zero check
+	if !result.CreatedAt.Time.IsZero() {
+		r.domain.Status.CreatedAt = &metav1.Time{Time: result.CreatedAt.Time}
+	}
+
+	// Determine state based on result
+	state := r.determineState(result)
 	r.updateState(state, r.getStateMessage(state))
 
 	r.Recorder.Event(r.domain, corev1.EventTypeNormal, "Synced",
 		fmt.Sprintf("Domain %s synced successfully", r.domain.Spec.DomainName))
 
 	// Requeue periodically to monitor expiration
-	return ctrl.Result{RequeueAfter: 1 * time.Hour}, nil
+	return ctrl.Result{RequeueAfter: 1 * time.Hour}, true, nil
 }
 
-// determineState determines the domain state based on domain information
-func (*Reconciler) determineState(info *cf.RegistrarDomainInfo) networkingv1alpha2.DomainRegistrationState {
+// determineState determines the domain state based on sync result.
+func (*Reconciler) determineState(result *domainsvc.DomainRegistrationSyncResult) networkingv1alpha2.DomainRegistrationState {
 	// Check for transfer in progress
-	if info.TransferInStatus != "" && info.TransferInStatus != "complete" {
+	if result.TransferInStatus != "" && result.TransferInStatus != "complete" {
 		return networkingv1alpha2.DomainRegistrationStateTransferPending
 	}
 
 	// Check for expiration
-	if !info.ExpiresAt.IsZero() && info.ExpiresAt.Before(time.Now()) {
+	//nolint:staticcheck // Time embedded access required for zero check
+	if !result.ExpiresAt.Time.IsZero() && result.ExpiresAt.Time.Before(time.Now()) {
 		return networkingv1alpha2.DomainRegistrationStateExpired
 	}
 
@@ -202,7 +287,7 @@ func (*Reconciler) determineState(info *cf.RegistrarDomainInfo) networkingv1alph
 	return networkingv1alpha2.DomainRegistrationStateActive
 }
 
-// getStateMessage returns a human-readable message for the state
+// getStateMessage returns a human-readable message for the state.
 func (*Reconciler) getStateMessage(state networkingv1alpha2.DomainRegistrationState) string {
 	switch state {
 	case networkingv1alpha2.DomainRegistrationStateActive:
@@ -216,18 +301,17 @@ func (*Reconciler) getStateMessage(state networkingv1alpha2.DomainRegistrationSt
 	}
 }
 
-// getAPIClient creates a Cloudflare API client from credentials
-func (r *Reconciler) getAPIClient() (*cf.API, error) {
+// buildCredentialsRef builds a CredentialsReference from the domain spec.
+func (r *Reconciler) buildCredentialsRef() networkingv1alpha2.CredentialsReference {
 	if r.domain.Spec.CredentialsRef != nil {
-		ref := &networkingv1alpha2.CloudflareCredentialsRef{
+		return networkingv1alpha2.CredentialsReference{
 			Name: r.domain.Spec.CredentialsRef.Name,
 		}
-		return cf.NewAPIClientFromCredentialsRef(r.ctx, r.Client, ref)
 	}
-	return cf.NewAPIClientFromDefaultCredentials(r.ctx, r.Client)
+	return networkingv1alpha2.CredentialsReference{}
 }
 
-// updateState updates the state and status of the DomainRegistration
+// updateState updates the state and status of the DomainRegistration.
 func (r *Reconciler) updateState(state networkingv1alpha2.DomainRegistrationState, message string) {
 	r.domain.Status.State = state
 	r.domain.Status.Message = message

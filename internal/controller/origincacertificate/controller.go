@@ -31,21 +31,28 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
-	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
+	"github.com/StringKe/cloudflare-operator/internal/service"
+	domainsvc "github.com/StringKe/cloudflare-operator/internal/service/domain"
 )
 
 const (
 	finalizerName = "cloudflare.com/origin-ca-certificate-finalizer"
 )
 
-var errPrivateKeyNotFound = errors.New("private key not found in secret")
+var (
+	errPrivateKeyNotFound = errors.New("private key not found in secret")
+	// errLifecyclePending is returned when a lifecycle operation is pending completion.
+	// This triggers a requeue to check the operation status later.
+	errLifecyclePending = errors.New("lifecycle operation pending, waiting for completion")
+)
 
 // Reconciler reconciles an OriginCACertificate object
 type Reconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
+	Service  *domainsvc.OriginCACertificateService // Core Service for SyncState management
 
 	// Internal state
 	ctx  context.Context
@@ -88,21 +95,22 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 	}
 
-	// Create API client
-	cfAPI, err := r.getAPIClient()
-	if err != nil {
-		r.updateState(networkingv1alpha2.OriginCACertificateStateError, fmt.Sprintf("Failed to get API client: %v", err))
-		r.Recorder.Event(r.cert, corev1.EventTypeWarning, controller.EventReasonAPIError, cf.SanitizeErrorMessage(err))
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+	// Check if there's a pending lifecycle operation result to apply
+	if err := r.applyLifecycleResult(); err != nil {
+		if errors.Is(err, errLifecyclePending) {
+			// Operation still pending, requeue to check later
+			return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+		}
+		r.log.Error(err, "Failed to apply lifecycle result")
 	}
 
 	// Check if certificate already exists
 	if r.cert.Status.CertificateID != "" {
-		return r.reconcileExisting(cfAPI)
+		return r.reconcileExisting()
 	}
 
-	// Issue new certificate
-	return r.issueCertificate(cfAPI)
+	// Issue new certificate via SyncState
+	return r.issueCertificate()
 }
 
 // handleDeletion handles the deletion of OriginCACertificate
@@ -113,18 +121,32 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 		return ctrl.Result{}, nil
 	}
 
-	// Revoke certificate if it exists
-	if r.cert.Status.CertificateID != "" {
-		cfAPI, err := r.getAPIClient()
-		if err == nil {
-			if err := cfAPI.RevokeOriginCACertificate(r.ctx, r.cert.Status.CertificateID); err != nil {
-				if !cf.IsNotFoundError(err) {
-					r.log.Error(err, "Failed to revoke certificate")
-					// Continue with deletion anyway
-				}
-			} else {
-				r.log.Info("Certificate revoked", "certificateId", r.cert.Status.CertificateID)
-			}
+	// Revoke certificate via SyncState if it exists
+	if r.cert.Status.CertificateID != "" && r.Service != nil {
+		// Build credentials reference
+		credRef := r.buildCredentialsRef()
+
+		// Request revocation via Service
+		source := service.Source{
+			Kind:      "OriginCACertificate",
+			Namespace: r.cert.Namespace,
+			Name:      r.cert.Name,
+		}
+
+		_, err := r.Service.RequestRevoke(r.ctx, domainsvc.OriginCACertificateRevokeOptions{
+			Source:         source,
+			CredentialsRef: credRef,
+			CertificateID:  r.cert.Status.CertificateID,
+		})
+		if err != nil {
+			r.log.Error(err, "Failed to request certificate revocation, continuing with deletion")
+		} else {
+			r.log.Info("Certificate revocation requested", "certificateId", r.cert.Status.CertificateID)
+		}
+
+		// Cleanup SyncState
+		if cleanupErr := r.Service.CleanupSyncState(r.ctx, r.cert.Namespace, r.cert.Name); cleanupErr != nil {
+			r.log.Error(cleanupErr, "Failed to cleanup SyncState, continuing with deletion")
 		}
 	}
 
@@ -159,30 +181,11 @@ func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
 }
 
 // reconcileExisting handles an existing certificate
-func (r *Reconciler) reconcileExisting(cfAPI *cf.API) (ctrl.Result, error) {
-	// Get current certificate from Cloudflare
-	cert, err := cfAPI.GetOriginCACertificate(r.ctx, r.cert.Status.CertificateID)
-	if err != nil {
-		if cf.IsNotFoundError(err) {
-			// Certificate was deleted externally, issue new one
-			r.log.Info("Certificate not found in Cloudflare, issuing new one")
-			r.cert.Status.CertificateID = ""
-			r.cert.Status.Certificate = ""
-			return r.issueCertificate(cfAPI)
-		}
-		r.updateState(networkingv1alpha2.OriginCACertificateStateError, fmt.Sprintf("Failed to get certificate: %v", err))
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
-	}
-
-	// Update status with certificate details
-	expiresAt := metav1.NewTime(cert.ExpiresOn)
-	r.cert.Status.ExpiresAt = &expiresAt
-	r.cert.Status.Certificate = cert.Certificate
-
-	// Check if renewal is needed
+func (r *Reconciler) reconcileExisting() (ctrl.Result, error) {
+	// Certificate already exists - check if renewal is needed
 	if r.shouldRenew() {
-		r.log.Info("Certificate needs renewal", "expiresAt", cert.ExpiresOn)
-		return r.renewCertificate(cfAPI)
+		r.log.Info("Certificate needs renewal", "expiresAt", r.cert.Status.ExpiresAt)
+		return r.renewCertificate()
 	}
 
 	// Sync to Secret if configured
@@ -199,10 +202,10 @@ func (r *Reconciler) reconcileExisting(cfAPI *cf.API) (ctrl.Result, error) {
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 
-// issueCertificate issues a new certificate
+// issueCertificate issues a new certificate via SyncState
 //
 //nolint:revive // cognitive complexity is acceptable for certificate issuance
-func (r *Reconciler) issueCertificate(cfAPI *cf.API) (ctrl.Result, error) {
+func (r *Reconciler) issueCertificate() (ctrl.Result, error) {
 	r.updateState(networkingv1alpha2.OriginCACertificateStateIssuing, "Issuing certificate")
 
 	// Get or generate CSR
@@ -213,7 +216,21 @@ func (r *Reconciler) issueCertificate(cfAPI *cf.API) (ctrl.Result, error) {
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	}
 
-	// Create certificate
+	// Store private key in annotation temporarily for later Secret sync
+	if len(privateKey) > 0 {
+		if r.cert.Annotations == nil {
+			r.cert.Annotations = make(map[string]string)
+		}
+		r.cert.Annotations["cloudflare-operator.io/private-key"] = string(privateKey)
+		if err := r.Update(r.ctx, r.cert); err != nil {
+			r.log.Error(err, "Failed to store private key annotation")
+		}
+	}
+
+	// Build credentials reference
+	credRef := r.buildCredentialsRef()
+
+	// Calculate validity
 	validity := int(r.cert.Spec.Validity)
 	if validity == 0 {
 		validity = 5475 // Default 15 years
@@ -224,67 +241,112 @@ func (r *Reconciler) issueCertificate(cfAPI *cf.API) (ctrl.Result, error) {
 		requestType = "origin-rsa"
 	}
 
-	cert, err := cfAPI.CreateOriginCACertificate(r.ctx, cf.OriginCACertificateParams{
-		Hostnames:       r.cert.Spec.Hostnames,
-		RequestType:     requestType,
-		RequestValidity: validity,
-		CSR:             csr,
+	// Request certificate creation via Service
+	source := service.Source{
+		Kind:      "OriginCACertificate",
+		Namespace: r.cert.Namespace,
+		Name:      r.cert.Name,
+	}
+
+	_, err = r.Service.RequestCreate(r.ctx, domainsvc.OriginCACertificateCreateOptions{
+		Source:         source,
+		CredentialsRef: credRef,
+		Hostnames:      r.cert.Spec.Hostnames,
+		RequestType:    requestType,
+		ValidityDays:   validity,
+		CSR:            csr,
 	})
 	if err != nil {
-		r.updateState(networkingv1alpha2.OriginCACertificateStateError, fmt.Sprintf("Failed to issue certificate: %v", err))
-		r.Recorder.Event(r.cert, corev1.EventTypeWarning, controller.EventReasonAPIError, cf.SanitizeErrorMessage(err))
+		r.updateState(networkingv1alpha2.OriginCACertificateStateError, fmt.Sprintf("Failed to request certificate: %v", err))
+		r.Recorder.Event(r.cert, corev1.EventTypeWarning, "RequestFailed", err.Error())
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	}
 
-	// Update status
-	now := metav1.Now()
-	expiresAt := metav1.NewTime(cert.ExpiresOn)
-	r.cert.Status.CertificateID = cert.ID
-	r.cert.Status.Certificate = cert.Certificate
-	r.cert.Status.IssuedAt = &now
-	r.cert.Status.ExpiresAt = &expiresAt
+	r.log.Info("Certificate creation requested, waiting for completion")
+	r.Recorder.Event(r.cert, corev1.EventTypeNormal, "CertificateRequested",
+		"Certificate creation requested via SyncState")
 
-	// Calculate renewal time
-	if r.cert.Spec.Renewal != nil && r.cert.Spec.Renewal.Enabled {
-		renewBeforeDays := r.cert.Spec.Renewal.RenewBeforeDays
-		if renewBeforeDays == 0 {
-			renewBeforeDays = 30
-		}
-		renewalTime := cert.ExpiresOn.AddDate(0, 0, -renewBeforeDays)
-		renewalTimeMeta := metav1.NewTime(renewalTime)
-		r.cert.Status.RenewalTime = &renewalTimeMeta
-	}
-
-	// Sync to Secret if configured
-	if err := r.syncSecretWithKey(privateKey); err != nil {
-		r.log.Error(err, "Failed to sync Secret")
-		r.Recorder.Event(r.cert, corev1.EventTypeWarning, "SecretSyncFailed", err.Error())
-	}
-
-	r.updateState(networkingv1alpha2.OriginCACertificateStateReady, "Certificate issued successfully")
-	r.Recorder.Event(r.cert, corev1.EventTypeNormal, "CertificateIssued",
-		fmt.Sprintf("Certificate issued with ID %s, expires %s", cert.ID, cert.ExpiresOn.Format(time.RFC3339)))
-
-	return ctrl.Result{RequeueAfter: r.calculateRequeueTime()}, nil
+	// Requeue to check for completion
+	return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
 }
 
-// renewCertificate renews the certificate
-func (r *Reconciler) renewCertificate(cfAPI *cf.API) (ctrl.Result, error) {
+// renewCertificate renews the certificate via SyncState
+//
+//nolint:revive // cognitive complexity is acceptable for renewal logic
+func (r *Reconciler) renewCertificate() (ctrl.Result, error) {
 	r.updateState(networkingv1alpha2.OriginCACertificateStateRenewing, "Renewing certificate")
 
-	// Revoke old certificate
-	oldCertID := r.cert.Status.CertificateID
-	if err := cfAPI.RevokeOriginCACertificate(r.ctx, oldCertID); err != nil {
-		if !cf.IsNotFoundError(err) {
-			r.log.Error(err, "Failed to revoke old certificate", "certificateId", oldCertID)
+	// Get or generate CSR
+	csr, privateKey, err := r.getOrGenerateCSR()
+	if err != nil {
+		r.updateState(networkingv1alpha2.OriginCACertificateStateError, fmt.Sprintf("Failed to generate CSR: %v", err))
+		r.Recorder.Event(r.cert, corev1.EventTypeWarning, "CSRGenerationFailed", err.Error())
+		return ctrl.Result{RequeueAfter: time.Minute}, nil
+	}
+
+	// Store private key in annotation temporarily for later Secret sync
+	if len(privateKey) > 0 {
+		if r.cert.Annotations == nil {
+			r.cert.Annotations = make(map[string]string)
+		}
+		r.cert.Annotations["cloudflare-operator.io/private-key"] = string(privateKey)
+		if err := r.Update(r.ctx, r.cert); err != nil {
+			r.log.Error(err, "Failed to store private key annotation")
 		}
 	}
 
-	// Clear old certificate ID to trigger new issuance
-	r.cert.Status.CertificateID = ""
+	// Build credentials reference
+	credRef := r.buildCredentialsRef()
 
-	// Issue new certificate
-	return r.issueCertificate(cfAPI)
+	// Calculate validity
+	validity := int(r.cert.Spec.Validity)
+	if validity == 0 {
+		validity = 5475 // Default 15 years
+	}
+
+	requestType := string(r.cert.Spec.RequestType)
+	if requestType == "" {
+		requestType = "origin-rsa"
+	}
+
+	// Request certificate renewal via Service
+	source := service.Source{
+		Kind:      "OriginCACertificate",
+		Namespace: r.cert.Namespace,
+		Name:      r.cert.Name,
+	}
+
+	oldCertID := r.cert.Status.CertificateID
+
+	_, err = r.Service.RequestRenew(r.ctx, domainsvc.OriginCACertificateRenewOptions{
+		Source:         source,
+		CredentialsRef: credRef,
+		CertificateID:  oldCertID,
+		Hostnames:      r.cert.Spec.Hostnames,
+		RequestType:    requestType,
+		ValidityDays:   validity,
+		CSR:            csr,
+	})
+	if err != nil {
+		r.updateState(networkingv1alpha2.OriginCACertificateStateError, fmt.Sprintf("Failed to request renewal: %v", err))
+		r.Recorder.Event(r.cert, corev1.EventTypeWarning, "RenewalRequestFailed", err.Error())
+		return ctrl.Result{RequeueAfter: time.Minute}, nil
+	}
+
+	r.log.Info("Certificate renewal requested, waiting for completion", "oldCertId", oldCertID)
+	r.Recorder.Event(r.cert, corev1.EventTypeNormal, "RenewalRequested",
+		"Certificate renewal requested via SyncState")
+
+	// Clear old certificate ID to indicate renewal is in progress
+	r.cert.Status.CertificateID = ""
+	if err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.cert, func() {
+		r.cert.Status.CertificateID = ""
+	}); err != nil {
+		r.log.Error(err, "Failed to clear certificate ID")
+	}
+
+	// Requeue to check for completion
+	return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
 }
 
 // shouldRenew checks if the certificate should be renewed
@@ -569,18 +631,90 @@ func (r *Reconciler) syncSecretWithKey(privateKey []byte) error {
 	return nil
 }
 
-// getAPIClient creates a Cloudflare API client from credentials
-func (r *Reconciler) getAPIClient() (*cf.API, error) {
-	if r.cert.Spec.CredentialsRef != nil {
-		// Use specified credentials reference
-		ref := &networkingv1alpha2.CloudflareCredentialsRef{
-			Name: r.cert.Spec.CredentialsRef.Name,
-		}
-		return cf.NewAPIClientFromCredentialsRef(r.ctx, r.Client, ref)
+// applyLifecycleResult checks for completed lifecycle operation and applies the result
+//
+//nolint:revive // cognitive complexity is acceptable for result application logic
+func (r *Reconciler) applyLifecycleResult() error {
+	if r.Service == nil {
+		return nil
 	}
 
-	// Use default credentials
-	return cf.NewAPIClientFromDefaultCredentials(r.ctx, r.Client)
+	// Check if there's a completed lifecycle operation
+	result, err := r.Service.GetLifecycleResult(r.ctx, r.cert.Namespace, r.cert.Name)
+	if err != nil {
+		return fmt.Errorf("get lifecycle result: %w", err)
+	}
+
+	if result == nil {
+		// Check if operation is still pending
+		completed, err := r.Service.IsLifecycleCompleted(r.ctx, r.cert.Namespace, r.cert.Name)
+		if err != nil {
+			return err
+		}
+		if !completed {
+			// Check for errors
+			errMsg, _ := r.Service.GetLifecycleError(r.ctx, r.cert.Namespace, r.cert.Name)
+			if errMsg != "" {
+				return fmt.Errorf("lifecycle operation failed: %s", errMsg)
+			}
+			return errLifecyclePending
+		}
+		return nil
+	}
+
+	// Apply result to status
+	now := metav1.Now()
+	r.cert.Status.CertificateID = result.CertificateID
+	r.cert.Status.Certificate = result.Certificate
+	r.cert.Status.IssuedAt = &now
+	if result.ExpiresAt != nil {
+		r.cert.Status.ExpiresAt = result.ExpiresAt
+	}
+
+	// Calculate renewal time
+	if r.cert.Spec.Renewal != nil && r.cert.Spec.Renewal.Enabled && r.cert.Status.ExpiresAt != nil {
+		renewBeforeDays := r.cert.Spec.Renewal.RenewBeforeDays
+		if renewBeforeDays == 0 {
+			renewBeforeDays = 30
+		}
+		renewalTime := r.cert.Status.ExpiresAt.Time.AddDate(0, 0, -renewBeforeDays) //nolint:staticcheck // Time embedded access required
+		renewalTimeMeta := metav1.NewTime(renewalTime)
+		r.cert.Status.RenewalTime = &renewalTimeMeta
+	}
+
+	// Sync to Secret if configured
+	if privateKeyStr, ok := r.cert.Annotations["cloudflare-operator.io/private-key"]; ok && privateKeyStr != "" {
+		if err := r.syncSecretWithKey([]byte(privateKeyStr)); err != nil {
+			r.log.Error(err, "Failed to sync Secret")
+			r.Recorder.Event(r.cert, corev1.EventTypeWarning, "SecretSyncFailed", err.Error())
+		}
+
+		// Remove the private key from annotation after syncing
+		delete(r.cert.Annotations, "cloudflare-operator.io/private-key")
+		if updateErr := r.Update(r.ctx, r.cert); updateErr != nil {
+			r.log.Error(updateErr, "Failed to remove private key annotation")
+		}
+	}
+
+	r.log.Info("Lifecycle result applied",
+		"certificateId", result.CertificateID,
+		"expiresAt", r.cert.Status.ExpiresAt)
+	r.Recorder.Event(r.cert, corev1.EventTypeNormal, "CertificateIssued",
+		fmt.Sprintf("Certificate issued with ID %s", result.CertificateID))
+
+	return nil
+}
+
+// buildCredentialsRef builds a CredentialsReference from spec
+func (r *Reconciler) buildCredentialsRef() networkingv1alpha2.CredentialsReference {
+	if r.cert.Spec.CredentialsRef != nil {
+		return networkingv1alpha2.CredentialsReference{
+			Name: r.cert.Spec.CredentialsRef.Name,
+		}
+	}
+	return networkingv1alpha2.CredentialsReference{
+		Name: "default",
+	}
 }
 
 // updateState updates the state and status of the OriginCACertificate

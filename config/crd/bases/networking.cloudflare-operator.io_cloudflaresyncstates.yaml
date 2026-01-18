@@ -95,6 +95,7 @@ spec:
                   synced
                 enum:
                 - TunnelConfiguration
+                - TunnelLifecycle
                 - DNSRecord
                 - AccessApplication
                 - AccessGroup
@@ -117,6 +118,7 @@ spec:
                 - DomainRegistration
                 - DevicePostureRule
                 - DeviceSettingsPolicy
+                - WARPConnector
                 type: string
               sources:
                 description: |-
@@ -262,6 +264,14 @@ spec:
                   sync to Cloudflare
                 format: date-time
                 type: string
+              resultData:
+                additionalProperties:
+                  type: string
+                description: |-
+                  ResultData contains resource-specific output data from the sync operation
+                  For TunnelLifecycle: tunnelId, tunnelToken, credentials (base64)
+                  For OriginCACertificate: certificate (PEM)
+                type: object
               syncStatus:
                 description: SyncStatus indicates the current synchronization state
                 enum:

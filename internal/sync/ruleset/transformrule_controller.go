@@ -13,11 +13,18 @@ import (
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/StringKe/cloudflare-operator/api/v1alpha2"
+	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	rulesetsvc "github.com/StringKe/cloudflare-operator/internal/service/ruleset"
 	"github.com/StringKe/cloudflare-operator/internal/sync/common"
+)
+
+const (
+	// TransformRuleFinalizerName is the finalizer for Transform Rule SyncState resources.
+	TransformRuleFinalizerName = "transformrule.sync.cloudflare-operator.io/finalizer"
 )
 
 // TransformRuleController is the Sync Controller for Transform Rule Configuration.
@@ -59,18 +66,29 @@ func (r *TransformRuleController) Reconcile(ctx context.Context, req ctrl.Reques
 		"cloudflareId", syncState.Spec.CloudflareID,
 		"sources", len(syncState.Spec.Sources))
 
+	// Handle deletion - this is the SINGLE point for Cloudflare API delete calls
+	if !syncState.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, syncState)
+	}
+
+	// Check if there are any sources - if none, clear rules from Cloudflare
+	if len(syncState.Spec.Sources) == 0 {
+		logger.Info("No sources in SyncState, clearing transform rules from Cloudflare")
+		return r.handleDeletion(ctx, syncState)
+	}
+
+	// Add finalizer if not present
+	if !controllerutil.ContainsFinalizer(syncState, TransformRuleFinalizerName) {
+		controllerutil.AddFinalizer(syncState, TransformRuleFinalizerName)
+		if err := r.Client.Update(ctx, syncState); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{Requeue: true}, nil
+	}
+
 	// Skip if there's a pending debounced request
 	if r.Debouncer.IsPending(req.Name) {
 		logger.V(1).Info("Skipping reconcile - debounced request pending")
-		return ctrl.Result{}, nil
-	}
-
-	// Check if there are any sources
-	if len(syncState.Spec.Sources) == 0 {
-		logger.Info("No sources in SyncState, marking as synced (no-op)")
-		if err := r.SetSyncStatus(ctx, syncState, v1alpha2.SyncStatusSynced); err != nil {
-			return ctrl.Result{}, err
-		}
 		return ctrl.Result{}, nil
 	}
 
@@ -270,6 +288,81 @@ func (*TransformRuleController) convertRules(rules []rulesetsvc.TransformRuleDef
 	}
 
 	return cfRules
+}
+
+// handleDeletion handles the deletion of Transform Rule from Cloudflare.
+// This clears the transform rules by updating with an empty rules array.
+// Following Unified Sync Architecture:
+// Resource Controller unregisters → SyncState updated → Sync Controller deletes from Cloudflare
+//
+//nolint:revive // cognitive complexity unavoidable: deletion logic requires multiple cleanup steps
+func (r *TransformRuleController) handleDeletion(
+	ctx context.Context,
+	syncState *v1alpha2.CloudflareSyncState,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	// If no finalizer, nothing to do
+	if !controllerutil.ContainsFinalizer(syncState, TransformRuleFinalizerName) {
+		return ctrl.Result{}, nil
+	}
+
+	// Try to extract config to get the type (which determines phase) for clearing rules
+	config, err := r.extractConfig(syncState)
+	if err == nil && config != nil && config.Type != "" {
+		// We have config with type, clear the transform rules
+		apiClient, apiErr := common.CreateAPIClient(ctx, r.Client, syncState)
+		if apiErr != nil {
+			logger.Error(apiErr, "Failed to create API client for deletion")
+			return ctrl.Result{RequeueAfter: common.RequeueAfterError(apiErr)}, nil
+		}
+
+		zoneID := syncState.Spec.ZoneID
+		if zoneID != "" {
+			phase := r.getPhase(config.Type)
+			logger.Info("Clearing Transform Rule from Cloudflare",
+				"zoneId", zoneID,
+				"phase", phase)
+
+			// Update with empty rules to clear the ruleset
+			_, clearErr := apiClient.UpdateEntrypointRuleset(ctx, zoneID, phase, "", []cloudflare.RulesetRule{})
+			if clearErr != nil {
+				if !cf.IsNotFoundError(clearErr) {
+					logger.Error(clearErr, "Failed to clear Transform Rule")
+					if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, clearErr); statusErr != nil {
+						logger.Error(statusErr, "Failed to update error status")
+					}
+					return ctrl.Result{RequeueAfter: common.RequeueAfterError(clearErr)}, nil
+				}
+				logger.Info("Transform ruleset already cleared or not found")
+			} else {
+				logger.Info("Successfully cleared Transform Rule from Cloudflare")
+			}
+		}
+	} else {
+		// No config available - just log and clean up SyncState
+		logger.Info("No config available for Transform Rule deletion, cleaning up SyncState only")
+	}
+
+	// Remove finalizer
+	controllerutil.RemoveFinalizer(syncState, TransformRuleFinalizerName)
+	if err := r.Client.Update(ctx, syncState); err != nil {
+		logger.Error(err, "Failed to remove finalizer")
+		return ctrl.Result{}, err
+	}
+
+	// If sources are empty (not a deletion timestamp trigger), delete the SyncState itself
+	if syncState.DeletionTimestamp.IsZero() && len(syncState.Spec.Sources) == 0 {
+		logger.Info("Deleting orphaned SyncState")
+		if err := r.Client.Delete(ctx, syncState); err != nil {
+			if client.IgnoreNotFound(err) != nil {
+				logger.Error(err, "Failed to delete SyncState")
+				return ctrl.Result{}, err
+			}
+		}
+	}
+
+	return ctrl.Result{}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

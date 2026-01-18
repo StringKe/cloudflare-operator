@@ -213,3 +213,179 @@ type OriginCACertificateSyncResult struct {
 	// PrivateKey is the private key PEM (only on creation)
 	PrivateKey string
 }
+
+// OriginCACertificateAction defines the action to perform on a certificate.
+type OriginCACertificateAction string
+
+const (
+	// OriginCACertificateActionCreate creates a new certificate
+	OriginCACertificateActionCreate OriginCACertificateAction = "create"
+	// OriginCACertificateActionRevoke revokes an existing certificate
+	OriginCACertificateActionRevoke OriginCACertificateAction = "revoke"
+	// OriginCACertificateActionRenew renews an existing certificate
+	OriginCACertificateActionRenew OriginCACertificateAction = "renew"
+)
+
+// OriginCACertificateLifecycleConfig contains lifecycle operation configuration.
+type OriginCACertificateLifecycleConfig struct {
+	// Action is the lifecycle operation to perform
+	Action OriginCACertificateAction `json:"action"`
+	// CertificateID is the existing certificate ID (for revoke/renew)
+	CertificateID string `json:"certificateId,omitempty"`
+	// Hostnames is the list of hostnames to cover (for create/renew)
+	Hostnames []string `json:"hostnames,omitempty"`
+	// RequestType is the certificate request type (origin-rsa, origin-ecc)
+	RequestType string `json:"requestType,omitempty"`
+	// ValidityDays is the certificate validity in days
+	ValidityDays int `json:"validityDays,omitempty"`
+	// CSR is the Certificate Signing Request
+	CSR string `json:"csr,omitempty"`
+}
+
+// Result data keys for OriginCACertificate SyncState.
+const (
+	ResultKeyOriginCACertificateID = "certificateId"
+	ResultKeyOriginCACertificate   = "certificate"
+	ResultKeyOriginCAExpiresAt     = "expiresAt"
+	ResultKeyOriginCARequestType   = "requestType"
+	ResultKeyOriginCAHostnames     = "hostnames"
+)
+
+// OriginCACertificateCreateOptions contains options for creating an Origin CA certificate.
+type OriginCACertificateCreateOptions struct {
+	// AccountID is the Cloudflare account ID
+	AccountID string
+	// ZoneID is the Cloudflare zone ID
+	ZoneID string
+	// Source identifies the K8s resource
+	Source service.Source
+	// CredentialsRef references the CloudflareCredentials to use
+	CredentialsRef v1alpha2.CredentialsReference
+	// Hostnames is the list of hostnames to cover
+	Hostnames []string
+	// RequestType is the certificate request type (origin-rsa, origin-ecc)
+	RequestType string
+	// ValidityDays is the certificate validity in days
+	ValidityDays int
+	// CSR is the Certificate Signing Request
+	CSR string
+}
+
+// OriginCACertificateRevokeOptions contains options for revoking an Origin CA certificate.
+type OriginCACertificateRevokeOptions struct {
+	// AccountID is the Cloudflare account ID
+	AccountID string
+	// ZoneID is the Cloudflare zone ID
+	ZoneID string
+	// Source identifies the K8s resource
+	Source service.Source
+	// CredentialsRef references the CloudflareCredentials to use
+	CredentialsRef v1alpha2.CredentialsReference
+	// CertificateID is the ID of the certificate to revoke
+	CertificateID string
+}
+
+// OriginCACertificateRenewOptions contains options for renewing an Origin CA certificate.
+type OriginCACertificateRenewOptions struct {
+	// AccountID is the Cloudflare account ID
+	AccountID string
+	// ZoneID is the Cloudflare zone ID
+	ZoneID string
+	// Source identifies the K8s resource
+	Source service.Source
+	// CredentialsRef references the CloudflareCredentials to use
+	CredentialsRef v1alpha2.CredentialsReference
+	// CertificateID is the existing certificate ID to revoke
+	CertificateID string
+	// Hostnames is the list of hostnames to cover
+	Hostnames []string
+	// RequestType is the certificate request type (origin-rsa, origin-ecc)
+	RequestType string
+	// ValidityDays is the certificate validity in days
+	ValidityDays int
+	// CSR is the Certificate Signing Request
+	CSR string
+}
+
+// DomainRegistration Types
+
+// DomainRegistrationAction defines the action to perform on a domain registration.
+type DomainRegistrationAction string
+
+const (
+	// DomainRegistrationActionSync syncs domain information from Cloudflare
+	DomainRegistrationActionSync DomainRegistrationAction = "sync"
+	// DomainRegistrationActionUpdate updates domain configuration in Cloudflare
+	DomainRegistrationActionUpdate DomainRegistrationAction = "update"
+)
+
+// DomainRegistrationLifecycleConfig contains lifecycle operation configuration for domain registration.
+type DomainRegistrationLifecycleConfig struct {
+	// Action is the lifecycle operation to perform
+	Action DomainRegistrationAction `json:"action"`
+	// DomainName is the domain name to manage
+	DomainName string `json:"domainName"`
+	// Configuration is the optional domain configuration to apply
+	Configuration *DomainRegistrationConfiguration `json:"configuration,omitempty"`
+}
+
+// DomainRegistrationConfiguration contains domain registration configuration settings.
+type DomainRegistrationConfiguration struct {
+	// AutoRenew enables auto-renewal
+	AutoRenew bool `json:"autoRenew,omitempty"`
+	// Privacy enables WHOIS privacy
+	Privacy bool `json:"privacy,omitempty"`
+	// Locked enables registrar lock
+	Locked bool `json:"locked,omitempty"`
+	// NameServers is the list of name servers
+	NameServers []string `json:"nameServers,omitempty"`
+}
+
+// DomainRegistrationSyncResult contains the result of a domain registration sync.
+type DomainRegistrationSyncResult struct {
+	// DomainID is the domain ID
+	DomainID string
+	// CurrentRegistrar is the current registrar
+	CurrentRegistrar string
+	// RegistryStatuses are the registry statuses (comma-separated string from Cloudflare)
+	RegistryStatuses string
+	// Locked indicates if the domain is locked
+	Locked bool
+	// TransferInStatus is the transfer in status
+	TransferInStatus string
+	// ExpiresAt is the expiration time
+	ExpiresAt metav1.Time
+	// CreatedAt is the creation time
+	CreatedAt metav1.Time
+	// AutoRenew indicates if auto-renewal is enabled
+	AutoRenew bool
+	// Privacy indicates if WHOIS privacy is enabled
+	Privacy bool
+}
+
+// Result data keys for DomainRegistration SyncState.
+const (
+	ResultKeyDomainID         = "domainId"
+	ResultKeyCurrentRegistrar = "currentRegistrar"
+	ResultKeyRegistryStatuses = "registryStatuses"
+	ResultKeyDomainLocked     = "locked"
+	ResultKeyTransferInStatus = "transferInStatus"
+	ResultKeyDomainExpiresAt  = "expiresAt"
+	ResultKeyDomainCreatedAt  = "createdAt"
+	ResultKeyDomainAutoRenew  = "autoRenew"
+	ResultKeyDomainPrivacy    = "privacy"
+)
+
+// DomainRegistrationRegisterOptions contains options for registering a DomainRegistration.
+type DomainRegistrationRegisterOptions struct {
+	// AccountID is the Cloudflare account ID
+	AccountID string
+	// Source identifies the K8s resource
+	Source service.Source
+	// CredentialsRef references the CloudflareCredentials to use
+	CredentialsRef v1alpha2.CredentialsReference
+	// DomainName is the domain name to manage
+	DomainName string
+	// Configuration is the optional domain configuration to apply
+	Configuration *DomainRegistrationConfiguration
+}

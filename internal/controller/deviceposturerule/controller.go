@@ -108,19 +108,17 @@ func (r *DevicePostureRuleReconciler) resolveCredentials() (*controller.Credenti
 	return info, nil
 }
 
+// handleDeletion handles the deletion of a DevicePostureRule.
+// Following Unified Sync Architecture: Resource Controller only unregisters from SyncState,
+// the L5 Sync Controller handles actual Cloudflare API deletion.
 func (r *DevicePostureRuleReconciler) handleDeletion(
-	credInfo *controller.CredentialsInfo,
+	_ *controller.CredentialsInfo,
 ) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(r.rule, FinalizerName) {
 		return ctrl.Result{}, nil
 	}
 
-	// Delete from Cloudflare
-	if result, shouldReturn := r.deleteFromCloudflare(credInfo); shouldReturn {
-		return result, nil
-	}
-
-	// Unregister from SyncState
+	// Unregister from SyncState - L5 Sync Controller will handle Cloudflare deletion
 	source := service.Source{
 		Kind:      "DevicePostureRule",
 		Namespace: "",
@@ -128,8 +126,13 @@ func (r *DevicePostureRuleReconciler) handleDeletion(
 	}
 	if err := r.deviceService.Unregister(r.ctx, r.rule.Status.RuleID, source); err != nil {
 		r.log.Error(err, "Failed to unregister Device Posture Rule from SyncState")
-		// Non-fatal - continue with finalizer removal
+		r.Recorder.Event(r.rule, corev1.EventTypeWarning, "UnregisterFailed",
+			fmt.Sprintf("Failed to unregister from SyncState: %s", err.Error()))
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
+
+	r.log.Info("Unregistered Device Posture Rule from SyncState, L5 Sync Controller will handle Cloudflare deletion")
+	r.Recorder.Event(r.rule, corev1.EventTypeNormal, "Unregistered", "Unregistered from SyncState")
 
 	// Remove finalizer with retry logic
 	if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.rule, func() {
@@ -141,47 +144,6 @@ func (r *DevicePostureRuleReconciler) handleDeletion(
 	r.Recorder.Event(r.rule, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
 
 	return ctrl.Result{}, nil
-}
-
-// deleteFromCloudflare deletes the device posture rule from Cloudflare.
-// Returns (result, shouldReturn) where shouldReturn indicates if caller should return.
-func (r *DevicePostureRuleReconciler) deleteFromCloudflare(
-	credInfo *controller.CredentialsInfo,
-) (ctrl.Result, bool) {
-	if r.rule.Status.RuleID == "" {
-		return ctrl.Result{}, false
-	}
-
-	apiClient, err := cf.NewAPIClientFromDetails(r.ctx, r.Client, controller.OperatorNamespace, r.rule.Spec.Cloudflare)
-	if err != nil {
-		r.log.Error(err, "Failed to create API client for deletion")
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, true
-	}
-
-	r.log.Info("Deleting Device Posture Rule from Cloudflare", "ruleId", r.rule.Status.RuleID)
-
-	err = apiClient.DeleteDevicePostureRule(r.rule.Status.RuleID)
-	if err == nil {
-		r.Recorder.Event(r.rule, corev1.EventTypeNormal, controller.EventReasonDeleted, "Deleted from Cloudflare")
-		return ctrl.Result{}, false
-	}
-
-	if cf.IsNotFoundError(err) {
-		r.log.Info("Device Posture Rule already deleted from Cloudflare")
-		r.Recorder.Event(r.rule, corev1.EventTypeNormal, "AlreadyDeleted",
-			"Device Posture Rule was already deleted from Cloudflare")
-		return ctrl.Result{}, false
-	}
-
-	r.log.Error(err, "Failed to delete Device Posture Rule from Cloudflare")
-	r.Recorder.Event(r.rule, corev1.EventTypeWarning, controller.EventReasonDeleteFailed,
-		fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
-
-	// Note: credInfo is passed but currently unused as deleteFromCloudflare still uses
-	// cf.NewAPIClientFromDetails directly for deletion. This parameter is included
-	// to maintain consistency with the interface pattern when we migrate to SyncState deletion.
-	_ = credInfo
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, true
 }
 
 // registerDevicePostureRule registers the Device Posture Rule configuration to SyncState.

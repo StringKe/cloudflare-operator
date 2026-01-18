@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/credentials"
@@ -40,6 +41,9 @@ const (
 
 	// Secret finalizer prefix - append tunnel name for multi-tunnel support (PR #158 fix)
 	secretFinalizerPrefix = "cloudflare-operator.io/secret-finalizer-"
+
+	// tunnelLifecycleCheckInterval is the interval to check for lifecycle operation completion
+	tunnelLifecycleCheckInterval = 2 * time.Second
 )
 
 var tunnelValidProtoMap = map[string]bool{

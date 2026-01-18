@@ -9,6 +9,7 @@
 **Fork 来源**: [adyanth/cloudflare-operator](https://github.com/adyanth/cloudflare-operator)
 
 **技术栈**:
+
 - Go 1.25
 - Kubebuilder v4
 - controller-runtime v0.22
@@ -18,43 +19,44 @@
 ## 当前实现状态
 
 ### API Group
+
 - **Group**: `networking.cloudflare-operator.io`
 - **版本**: v1alpha1 (deprecated), v1alpha2 (storage version)
 
 ### 已实现的 CRD (30个)
 
-| 类别 | CRD | 作用域 | 状态 |
-|------|-----|--------|------|
-| **凭证** | CloudflareCredentials | Cluster | ✅ 完成 |
-| **域名配置** | CloudflareDomain | Cluster | ✅ 完成 (SSL/TLS, 缓存, 安全, WAF) |
-| **网络层** | Tunnel | Namespaced | ✅ 完成 |
-| | ClusterTunnel | Cluster | ✅ 完成 |
-| | VirtualNetwork | Cluster | ✅ 完成 |
-| | NetworkRoute | Cluster | ✅ 完成 |
-| | WARPConnector | Namespaced | ⚠️ 框架完成 |
-| **服务层** | TunnelBinding | Namespaced | ✅ 完成 |
-| | PrivateService | Namespaced | ✅ 完成 |
-| | DNSRecord | Namespaced | ✅ 完成 |
-| **身份层** | AccessApplication | Cluster | ✅ 完成 |
-| | AccessGroup | Cluster | ✅ 完成 |
-| | AccessServiceToken | Cluster | ✅ 完成 |
-| | AccessIdentityProvider | Cluster | ✅ 完成 |
-| | AccessTunnel | Namespaced | ⚠️ 框架完成 |
-| **设备层** | DevicePostureRule | Cluster | ⚠️ 框架完成 |
-| | DeviceSettingsPolicy | Cluster | ⚠️ 框架完成 |
-| **网关层** | GatewayRule | Cluster | ⚠️ 框架完成 |
-| | GatewayList | Cluster | ⚠️ 框架完成 |
-| | GatewayConfiguration | Cluster | ✅ 完成 |
-| **SSL/TLS** | OriginCACertificate | Namespaced | ✅ 完成 (自动 K8s Secret) |
-| **R2 存储** | R2Bucket | Namespaced | ✅ 完成 (生命周期规则) |
-| | R2BucketDomain | Namespaced | ✅ 完成 (自定义域名) |
-| | R2BucketNotification | Namespaced | ✅ 完成 (事件通知) |
-| **规则引擎** | ZoneRuleset | Namespaced | ✅ 完成 (WAF, 速率限制等) |
-| | TransformRule | Namespaced | ✅ 完成 (URL/Header 转换) |
-| | RedirectRule | Namespaced | ✅ 完成 (重定向规则) |
-| **域名注册** | DomainRegistration | Cluster | ✅ 完成 (Enterprise) |
-| **K8s 集成** | TunnelIngressClassConfig | Cluster | ⚠️ 框架完成 |
-| | TunnelGatewayClassConfig | Cluster | ⚠️ 框架完成 |
+| 类别         | CRD                      | 作用域     | 状态                               |
+| ------------ | ------------------------ | ---------- | ---------------------------------- |
+| **凭证**     | CloudflareCredentials    | Cluster    | ✅ 完成                            |
+| **域名配置** | CloudflareDomain         | Cluster    | ✅ 完成 (SSL/TLS, 缓存, 安全, WAF) |
+| **网络层**   | Tunnel                   | Namespaced | ✅ 完成                            |
+|              | ClusterTunnel            | Cluster    | ✅ 完成                            |
+|              | VirtualNetwork           | Cluster    | ✅ 完成                            |
+|              | NetworkRoute             | Cluster    | ✅ 完成                            |
+|              | WARPConnector            | Namespaced | ⚠️ 框架完成                        |
+| **服务层**   | TunnelBinding            | Namespaced | ✅ 完成                            |
+|              | PrivateService           | Namespaced | ✅ 完成                            |
+|              | DNSRecord                | Namespaced | ✅ 完成                            |
+| **身份层**   | AccessApplication        | Cluster    | ✅ 完成                            |
+|              | AccessGroup              | Cluster    | ✅ 完成                            |
+|              | AccessServiceToken       | Cluster    | ✅ 完成                            |
+|              | AccessIdentityProvider   | Cluster    | ✅ 完成                            |
+|              | AccessTunnel             | Namespaced | ⚠️ 框架完成                        |
+| **设备层**   | DevicePostureRule        | Cluster    | ⚠️ 框架完成                        |
+|              | DeviceSettingsPolicy     | Cluster    | ⚠️ 框架完成                        |
+| **网关层**   | GatewayRule              | Cluster    | ⚠️ 框架完成                        |
+|              | GatewayList              | Cluster    | ⚠️ 框架完成                        |
+|              | GatewayConfiguration     | Cluster    | ✅ 完成                            |
+| **SSL/TLS**  | OriginCACertificate      | Namespaced | ✅ 完成 (自动 K8s Secret)          |
+| **R2 存储**  | R2Bucket                 | Namespaced | ✅ 完成 (生命周期规则)             |
+|              | R2BucketDomain           | Namespaced | ✅ 完成 (自定义域名)               |
+|              | R2BucketNotification     | Namespaced | ✅ 完成 (事件通知)                 |
+| **规则引擎** | ZoneRuleset              | Namespaced | ✅ 完成 (WAF, 速率限制等)          |
+|              | TransformRule            | Namespaced | ✅ 完成 (URL/Header 转换)          |
+|              | RedirectRule             | Namespaced | ✅ 完成 (重定向规则)               |
+| **域名注册** | DomainRegistration       | Cluster    | ✅ 完成 (Enterprise)               |
+| **K8s 集成** | TunnelIngressClassConfig | Cluster    | ⚠️ 框架完成                        |
+|              | TunnelGatewayClassConfig | Cluster    | ⚠️ 框架完成                        |
 
 ### Secret 位置说明
 
@@ -205,6 +207,7 @@ apiClient, err := cf.NewAPIClientFromDetails(ctx, r.Client, namespace, cloudflar
 ```
 
 **例外情况** (允许直接创建 API 客户端):
+
 - **删除操作**: `deleteFromCloudflare()` 方法中临时创建客户端执行删除（过渡期）
 - **证书颁发**: OriginCACertificate 需要直接 API 调用获取证书
 - **域名注册**: DomainRegistration 需要直接 API 调用
@@ -398,11 +401,11 @@ K8s Resources → Resource Controllers → Core Services → SyncState CRD → S
 
 ### 资源分类
 
-| 类型 | 说明 | 示例 |
-|------|------|------|
-| **聚合型** | 多个 K8s 资源 → 一个 CF 资源 | Tunnel Config (Tunnel + Ingress + TunnelBinding + Gateway) |
-| **一对一型** | 一个 K8s 资源 → 一个 CF 资源 | DNSRecord, VirtualNetwork, NetworkRoute |
-| **依赖型** | 资源间有顺序依赖 | AccessApplication → AccessGroup |
+| 类型         | 说明                         | 示例                                                       |
+| ------------ | ---------------------------- | ---------------------------------------------------------- |
+| **聚合型**   | 多个 K8s 资源 → 一个 CF 资源 | Tunnel Config (Tunnel + Ingress + TunnelBinding + Gateway) |
+| **一对一型** | 一个 K8s 资源 → 一个 CF 资源 | DNSRecord, VirtualNetwork, NetworkRoute                    |
+| **依赖型**   | 资源间有顺序依赖             | AccessApplication → AccessGroup                            |
 
 ### 来源优先级
 
@@ -457,6 +460,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 ### 竞态条件解决示例
 
 **之前 (直接 API 调用)**:
+
 ```
 T0: Tunnel Controller  → PUT config (ingress: [])
 T1: Ingress Controller → PUT config (ingress: [app.com])
@@ -465,6 +469,7 @@ T2: TunnelBinding      → PUT config (ingress: [api.com])  ← 覆盖了 T1!
 ```
 
 **现在 (通过 SyncState)**:
+
 ```
 T0: Tunnel Controller  → Register settings to SyncState
 T1: Ingress Controller → UpdateSource (乐观锁重试)
@@ -644,27 +649,32 @@ make test-e2e           # Kind 集群 E2E 测试
 ### 必须步骤
 
 1. **创建类型定义**
+
    ```bash
    # 创建 api/v1alpha2/myresource_types.go
    ```
 
 2. **生成代码**
+
    ```bash
    make manifests generate
    ```
 
 3. **🔴 添加到 kustomization.yaml** (容易遗忘！)
+
    ```bash
    # 编辑 config/crd/kustomization.yaml，在 resources 中添加:
    - bases/networking.cloudflare-operator.io_myresources.yaml
    ```
 
 4. **创建控制器**
+
    ```bash
    # 创建 internal/controller/myresource/controller.go
    ```
 
 5. **注册控制器到 main.go**
+
    ```go
    if err = (&myresource.Reconciler{...}).SetupWithManager(mgr); err != nil {
        // ...
@@ -864,45 +874,70 @@ if err = (&myresourcesync.SyncController{
 
 六层架构实施状态一览 (按数据流顺序):
 
-| 资源 | L2 Controller | L3 Service | L4 SyncState | L5 Sync Ctrl | 完成度 |
-|------|:-------------:|:----------:|:------------:|:------------:|:------:|
-| **Tunnel** | ⚠️ 待迁移 | ✅ | ✅ | ✅ | 75% |
-| **ClusterTunnel** | ⚠️ 待迁移 | ✅ | ✅ | ✅ | 75% |
-| **TunnelBinding** | ✅ | ✅ | ✅ | ✅ | 100% |
-| **DNSRecord** | ⚠️ 待迁移 | ✅ | ✅ | ✅ | 75% |
-| **VirtualNetwork** | ✅ | ✅ | ✅ | ✅ | 100% |
-| **NetworkRoute** | ✅ | ✅ | ✅ | ✅ | 100% |
-| **PrivateService** | ✅ | ✅ | ✅ | ✅ | 100% |
-| **AccessApplication** | ✅ | ✅ | ✅ | ✅ | 100% |
-| **AccessGroup** | ✅ | ✅ | ✅ | ✅ | 100% |
-| **AccessServiceToken** | ✅ | ✅ | ✅ | ✅ | 100% |
-| **AccessIdentityProvider** | ✅ | ✅ | ✅ | ✅ | 100% |
-| **DevicePostureRule** | ✅ | ✅ | ✅ | ✅ | 100% |
-| **DeviceSettingsPolicy** | ✅ | ✅ | ✅ | ✅ | 100% |
-| **GatewayRule** | ✅ | ✅ | ✅ | ✅ | 100% |
-| **GatewayList** | ✅ | ✅ | ✅ | ✅ | 100% |
-| **GatewayConfiguration** | ✅ | ✅ | ✅ | ✅ | 100% |
-| **R2Bucket** | ✅ | ✅ | ✅ | ✅ | 100% |
-| **R2BucketDomain** | ✅ | ✅ | ✅ | ✅ | 100% |
-| **R2BucketNotification** | ✅ | ✅ | ✅ | ✅ | 100% |
-| **ZoneRuleset** | ✅ | ✅ | ✅ | ✅ | 100% |
-| **TransformRule** | ✅ | ✅ | ✅ | ✅ | 100% |
-| **RedirectRule** | ✅ | ✅ | ✅ | ✅ | 100% |
-| **CloudflareDomain** | ⚠️ 待迁移 | ✅ | ❌ | ❌ | 25% |
-| **OriginCACertificate** | 🔒 例外 | ✅ | ❌ | ❌ | N/A |
-| **DomainRegistration** | 🔒 例外 | ❌ | ❌ | ❌ | N/A |
-| **Ingress** | ⚠️ 混合 | ✅ | ✅ | ✅ | 75% |
-| **Gateway** | ⚠️ 混合 | ✅ | ✅ | ✅ | 75% |
+| 资源                       | L2 Controller | L3 Service | L4 SyncState | L5 Sync Ctrl | 完成度 | 备注                              |
+| -------------------------- | :-----------: | :--------: | :----------: | :----------: | :----: | --------------------------------- |
+| **Tunnel**                 |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | cfAPI 仅用于元数据存储            |
+| **ClusterTunnel**          |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | cfAPI 仅用于元数据存储            |
+| **TunnelBinding**          |   ⚠️ 废弃    |     ✅     |      ✅      |      ✅      |  75%   | DNS TXT 管理 (废弃资源)           |
+| **DNSRecord**              |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **VirtualNetwork**         |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **NetworkRoute**           |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **PrivateService**         |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **AccessApplication**      |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | Group 解析移至 L5                 |
+| **AccessGroup**            |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **AccessServiceToken**     |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **AccessIdentityProvider** |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **DevicePostureRule**      |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | 删除通过 L5 Sync Controller       |
+| **DeviceSettingsPolicy**   |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **GatewayRule**            |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | 删除通过 L5 Sync Controller       |
+| **GatewayList**            |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | 删除通过 L5 Sync Controller       |
+| **GatewayConfiguration**   |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **R2Bucket**               |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **R2BucketDomain**         |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **R2BucketNotification**   |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **ZoneRuleset**            |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **TransformRule**          |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **RedirectRule**           |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **CloudflareDomain**       |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **OriginCACertificate**    |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **DomainRegistration**     |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **Ingress**                |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | DNS Automatic 已迁移              |
+| **Gateway**                |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
 
 **图例**:
-- ✅ 已按六层架构实现
-- ⚠️ 待迁移: Resource Controller 仍直接调用 Cloudflare API
-- 🔒 例外: 资源类型需要直接 API 调用 (证书颁发、域名注册等)
 
-**迁移优先级**:
-1. **P0 (完成)**: Core Services 和 Sync Controllers 全部实现
-2. **P1 (进行中)**: Resource Controllers 迁移至只调用 Service
-3. **P2 (待定)**: 删除操作完全通过 SyncState 处理
+- ✅ 已按六层架构实现
+- ⚠️ 废弃: 资源已标记为废弃，将在未来版本移除
+
+**废弃资源说明**:
+
+**TunnelBinding** (v1alpha1): 已废弃，请迁移到以下替代方案：
+- **Ingress** with `TunnelIngressClassConfig` - 标准 K8s Ingress 集成
+- **Gateway API** (HTTPRoute, TCPRoute, UDPRoute) - 现代云原生网关
+- **DNSRecord** CRD - 用于需要手动管理 DNS 的场景
+
+TunnelBinding 的 DNS TXT 管理模式 (`createDNSLogic`/`deleteDNSLogic`) 是该资源特有的所有权追踪机制，
+与标准 DNSRecord CRD 模式不同。由于资源已废弃，保留现有实现直到移除。
+
+**已完成迁移**:
+
+- ✅ GatewayRule: 删除操作从 L2 移至 L5 Sync Controller (含 Finalizer)
+- ✅ GatewayList: 删除操作从 L2 移至 L5 Sync Controller (含 Finalizer)
+- ✅ DevicePostureRule: 删除操作从 L2 移至 L5 Sync Controller (含 Finalizer)
+- ✅ DeviceSettingsPolicy: L5 Sync Controller 添加 Finalizer 和完整删除处理
+- ✅ GatewayConfiguration: L5 Sync Controller 添加 Finalizer 和完整删除处理
+- ✅ CloudflareDomain: L5 Sync Controller 添加 Finalizer 和完整删除处理 (Zone 设置保留)
+- ✅ TunnelConfiguration: L5 Sync Controller 添加 Finalizer 和完整删除处理 (清空配置)
+- ✅ ZoneRuleset: L5 Sync Controller 添加 Finalizer 和完整删除处理 (清空规则)
+- ✅ TransformRule: L5 Sync Controller 添加 Finalizer 和完整删除处理 (清空规则)
+- ✅ RedirectRule: L5 Sync Controller 添加 Finalizer 和完整删除处理 (清空规则)
+- ✅ AccessApplication: Group 引用解析从 L2 移至 L5 Sync Controller
+- ✅ Ingress: DNS Automatic 模式从直接 API 改为 dnsService.Register()
+- ✅ DomainRegistration: 完整六层架构
+- ✅ OriginCACertificate: 完整六层架构
+- ✅ Tunnel/ClusterTunnel: cfAPI 仅用于元数据，核心操作通过 LifecycleService
+- ✅ DNSRecord: 完整六层架构
+- ✅ Gateway: 完整六层架构
 
 ---
 
@@ -1008,6 +1043,7 @@ controller.BuildCredentialsRef(cloudflareDetails, namespace)
    - `make test` - 单元测试
 
 2. **修改 CRD 后必须运行**:
+
    ```bash
    make manifests generate
    ```
@@ -1033,6 +1069,7 @@ chore: 构建/工具
 ```
 
 示例:
+
 ```
 feat(networkroute): add VirtualNetwork watch handler
 

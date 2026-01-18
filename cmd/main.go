@@ -37,9 +37,12 @@ import (
 	"github.com/StringKe/cloudflare-operator/internal/controller/virtualnetwork"
 	"github.com/StringKe/cloudflare-operator/internal/controller/warpconnector"
 	"github.com/StringKe/cloudflare-operator/internal/controller/zoneruleset"
+	domainsvc "github.com/StringKe/cloudflare-operator/internal/service/domain"
+	warpsvc "github.com/StringKe/cloudflare-operator/internal/service/warp"
 	accesssync "github.com/StringKe/cloudflare-operator/internal/sync/access"
 	devicesync "github.com/StringKe/cloudflare-operator/internal/sync/device"
 	dnssync "github.com/StringKe/cloudflare-operator/internal/sync/dns"
+	domainsync "github.com/StringKe/cloudflare-operator/internal/sync/domain"
 	gatewaysync "github.com/StringKe/cloudflare-operator/internal/sync/gateway"
 	networkroutesync "github.com/StringKe/cloudflare-operator/internal/sync/networkroute"
 	privateservicesync "github.com/StringKe/cloudflare-operator/internal/sync/privateservice"
@@ -47,6 +50,7 @@ import (
 	rulesetsync "github.com/StringKe/cloudflare-operator/internal/sync/ruleset"
 	tunnelconfigsync "github.com/StringKe/cloudflare-operator/internal/sync/tunnel"
 	virtualnetworksync "github.com/StringKe/cloudflare-operator/internal/sync/virtualnetwork"
+	warpsync "github.com/StringKe/cloudflare-operator/internal/sync/warp"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -379,9 +383,13 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "GatewayConfiguration")
 		os.Exit(1)
 	}
+	// Create WARP connector service for L3 operations
+	warpConnectorService := warpsvc.NewConnectorService(mgr.GetClient())
+
 	if err = (&warpconnector.WARPConnectorReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:  mgr.GetClient(),
+		Scheme:  mgr.GetScheme(),
+		Service: warpConnectorService,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WARPConnector")
 		os.Exit(1)
@@ -402,10 +410,14 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "CloudflareDomain")
 		os.Exit(1)
 	}
+	// OriginCACertificate service for SyncState management
+	originCASvc := domainsvc.NewOriginCACertificateService(mgr.GetClient())
+
 	if err = (&origincacertificate.Reconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorderFor("origincacertificate-controller"),
+		Service:  originCASvc,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "OriginCACertificate")
 		os.Exit(1)
@@ -458,10 +470,14 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "RedirectRule")
 		os.Exit(1)
 	}
+	// DomainRegistration service for SyncState management
+	domainRegSvc := domainsvc.NewDomainRegistrationService(mgr.GetClient())
+
 	if err = (&domainregistration.Reconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorderFor("domainregistration-controller"),
+		Service:  domainRegSvc,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "DomainRegistration")
 		os.Exit(1)
@@ -635,6 +651,36 @@ func main() {
 	// DeviceSettingsPolicySyncController syncs DeviceSettingsPolicy configuration to Cloudflare API
 	if err = devicesync.NewSettingsPolicyController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "DeviceSettingsPolicySync")
+		os.Exit(1)
+	}
+
+	// TunnelLifecycleSyncController handles Tunnel creation/deletion via Cloudflare API
+	if err = tunnelconfigsync.NewLifecycleController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "TunnelLifecycleSync")
+		os.Exit(1)
+	}
+
+	// CloudflareDomainSyncController syncs CloudflareDomain zone settings to Cloudflare API
+	if err = domainsync.NewCloudflareDomainController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "CloudflareDomainSync")
+		os.Exit(1)
+	}
+
+	// OriginCACertificateSyncController handles Origin CA certificate lifecycle via Cloudflare API
+	if err = domainsync.NewOriginCACertificateController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "OriginCACertificateSync")
+		os.Exit(1)
+	}
+
+	// DomainRegistrationSyncController syncs DomainRegistration status from Cloudflare API
+	if err = domainsync.NewDomainRegistrationController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "DomainRegistrationSync")
+		os.Exit(1)
+	}
+
+	// WARPConnectorSyncController handles WARP connector lifecycle via Cloudflare API
+	if err = warpsync.NewConnectorController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "WARPConnectorSync")
 		os.Exit(1)
 	}
 

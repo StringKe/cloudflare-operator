@@ -9,12 +9,18 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	devicesvc "github.com/StringKe/cloudflare-operator/internal/service/device"
 	"github.com/StringKe/cloudflare-operator/internal/sync/common"
+)
+
+const (
+	// SettingsPolicyFinalizerName is the finalizer for Device Settings Policy SyncState resources.
+	SettingsPolicyFinalizerName = "devicesettingspolicy.sync.cloudflare-operator.io/finalizer"
 )
 
 // SettingsPolicyController is the Sync Controller for Device Settings Policy Configuration.
@@ -54,18 +60,29 @@ func (r *SettingsPolicyController) Reconcile(ctx context.Context, req ctrl.Reque
 		"cloudflareId", syncState.Spec.CloudflareID,
 		"sources", len(syncState.Spec.Sources))
 
+	// Handle deletion - this is the SINGLE point for Cloudflare API delete calls
+	if !syncState.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, syncState)
+	}
+
+	// Check if there are any sources - if none, clear settings on Cloudflare
+	if len(syncState.Spec.Sources) == 0 {
+		logger.Info("No sources in SyncState, clearing settings from Cloudflare")
+		return r.handleDeletion(ctx, syncState)
+	}
+
+	// Add finalizer if not present
+	if !controllerutil.ContainsFinalizer(syncState, SettingsPolicyFinalizerName) {
+		controllerutil.AddFinalizer(syncState, SettingsPolicyFinalizerName)
+		if err := r.Client.Update(ctx, syncState); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{Requeue: true}, nil
+	}
+
 	// Skip if there's a pending debounced request
 	if r.Debouncer.IsPending(req.Name) {
 		logger.V(1).Info("Skipping reconcile - debounced request pending")
-		return ctrl.Result{}, nil
-	}
-
-	// Check if there are any sources
-	if len(syncState.Spec.Sources) == 0 {
-		logger.Info("No sources in SyncState, marking as synced (no-op)")
-		if err := r.SetSyncStatus(ctx, syncState, v1alpha2.SyncStatusSynced); err != nil {
-			return ctrl.Result{}, err
-		}
 		return ctrl.Result{}, nil
 	}
 
@@ -240,6 +257,88 @@ func (r *SettingsPolicyController) syncToCloudflare(
 		"autoPopulatedRoutesCount", result.AutoPopulatedRoutesCount)
 
 	return result, nil
+}
+
+// handleDeletion handles the deletion of Device Settings Policy from Cloudflare.
+// This clears split tunnel entries and fallback domains by setting them to empty arrays.
+// Following Unified Sync Architecture:
+// Resource Controller unregisters → SyncState updated → Sync Controller deletes from Cloudflare
+//
+//nolint:revive // cognitive complexity unavoidable: deletion logic requires multiple cleanup steps
+func (r *SettingsPolicyController) handleDeletion(
+	ctx context.Context,
+	syncState *v1alpha2.CloudflareSyncState,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	// If no finalizer, nothing to do
+	if !controllerutil.ContainsFinalizer(syncState, SettingsPolicyFinalizerName) {
+		return ctrl.Result{}, nil
+	}
+
+	// Clear settings from Cloudflare by setting empty arrays
+	apiClient, err := common.CreateAPIClient(ctx, r.Client, syncState)
+	if err != nil {
+		logger.Error(err, "Failed to create API client for deletion")
+		return ctrl.Result{RequeueAfter: common.RequeueAfterError(err)}, nil
+	}
+
+	logger.Info("Clearing Device Settings Policy from Cloudflare")
+
+	// Clear split tunnel exclude entries
+	if err := apiClient.UpdateSplitTunnelExclude([]cf.SplitTunnelEntry{}); err != nil {
+		if !cf.IsNotFoundError(err) {
+			logger.Error(err, "Failed to clear split tunnel exclude entries")
+			if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
+				logger.Error(statusErr, "Failed to update error status")
+			}
+			return ctrl.Result{RequeueAfter: common.RequeueAfterError(err)}, nil
+		}
+	}
+
+	// Clear split tunnel include entries
+	if err := apiClient.UpdateSplitTunnelInclude([]cf.SplitTunnelEntry{}); err != nil {
+		if !cf.IsNotFoundError(err) {
+			logger.Error(err, "Failed to clear split tunnel include entries")
+			if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
+				logger.Error(statusErr, "Failed to update error status")
+			}
+			return ctrl.Result{RequeueAfter: common.RequeueAfterError(err)}, nil
+		}
+	}
+
+	// Clear fallback domains
+	if err := apiClient.UpdateFallbackDomains([]cf.FallbackDomainEntry{}); err != nil {
+		if !cf.IsNotFoundError(err) {
+			logger.Error(err, "Failed to clear fallback domains")
+			if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
+				logger.Error(statusErr, "Failed to update error status")
+			}
+			return ctrl.Result{RequeueAfter: common.RequeueAfterError(err)}, nil
+		}
+	}
+
+	logger.Info("Successfully cleared Device Settings Policy from Cloudflare")
+
+	// Remove finalizer
+	controllerutil.RemoveFinalizer(syncState, SettingsPolicyFinalizerName)
+	if err := r.Client.Update(ctx, syncState); err != nil {
+		logger.Error(err, "Failed to remove finalizer")
+		return ctrl.Result{}, err
+	}
+
+	// If sources are empty (not a deletion timestamp trigger), delete the SyncState itself
+	if syncState.DeletionTimestamp.IsZero() && len(syncState.Spec.Sources) == 0 {
+		logger.Info("Deleting orphaned SyncState")
+		if err := r.Client.Delete(ctx, syncState); err != nil {
+			if client.IgnoreNotFound(err) != nil {
+				logger.Error(err, "Failed to delete SyncState")
+				return ctrl.Result{}, err
+			}
+		}
+	}
+
+	return ctrl.Result{}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

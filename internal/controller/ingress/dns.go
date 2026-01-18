@@ -18,8 +18,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
-	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
+	"github.com/StringKe/cloudflare-operator/internal/service"
+	dnssvc "github.com/StringKe/cloudflare-operator/internal/service/dns"
 )
 
 // reconcileDNS creates/updates DNS records for Ingress hostnames
@@ -76,7 +77,7 @@ func (*Reconciler) collectHostnames(ingress *networkingv1.Ingress) []string {
 	return hostnames
 }
 
-// reconcileDNSAutomatic creates DNS records directly via Cloudflare API
+// reconcileDNSAutomatic registers DNS records via DNS Service (SyncState-based)
 // nolint:revive // Cognitive complexity for DNS reconciliation with error aggregation
 func (r *Reconciler) reconcileDNSAutomatic(
 	ctx context.Context,
@@ -92,17 +93,13 @@ func (r *Reconciler) reconcileDNSAutomatic(
 		return err
 	}
 
-	// Initialize API client
-	apiClient, err := r.initAPIClient(ctx, tunnel, config)
-	if err != nil {
-		return fmt.Errorf("failed to initialize API client: %w", err)
-	}
-
 	// Get tunnel ID for CNAME target
 	tunnelID := tunnel.GetStatus().TunnelId
 	if tunnelID == "" {
 		return fmt.Errorf("tunnel %s has no tunnel ID", tunnel.GetName())
 	}
+
+	accountID := tunnel.GetStatus().AccountId
 
 	// Determine if DNS should be proxied
 	proxied := config.IsDNSProxied()
@@ -111,19 +108,27 @@ func (r *Reconciler) reconcileDNSAutomatic(
 		proxied = p
 	}
 
+	// Get credentials reference from tunnel
+	credRef := r.getCredentialsReferenceFromTunnel(tunnel)
+
 	// Resolve Zone IDs for all hostnames using DomainResolver
 	hostnameZones, err := r.domainResolver.ResolveMultiple(ctx, hostnames)
 	if err != nil {
 		logger.Error(err, "Failed to resolve domains for hostnames")
-		// Fall back to using apiClient.ValidZoneId for all hostnames
 	}
 
-	// Create/update DNS for each hostname with error aggregation
+	// Get fallback zone ID from tunnel status
+	fallbackZoneID := tunnel.GetStatus().ZoneId
+	fallbackDomain := tunnel.GetSpec().Cloudflare.Domain
+
+	// Create DNS Service and register records
+	svc := dnssvc.NewService(r.Client)
 	var errs []error
+
 	for _, hostname := range hostnames {
 		// Determine Zone ID and domain for this hostname
-		zoneID := apiClient.ValidZoneId
-		domainName := apiClient.ValidDomainName
+		zoneID := fallbackZoneID
+		domainName := fallbackDomain
 		if domainInfo, ok := hostnameZones[hostname]; ok && domainInfo != nil {
 			zoneID = domainInfo.ZoneID
 			domainName = domainInfo.Domain
@@ -137,89 +142,43 @@ func (r *Reconciler) reconcileDNSAutomatic(
 		}
 
 		// Validate that hostname belongs to the resolved domain
-		// This prevents creating records in the wrong zone (e.g., foo.sup-game.com in sup-any.com zone)
 		if domainName != "" && !hostnameBelongsToDomain(hostname, domainName) {
 			errs = append(errs, fmt.Errorf("hostname %q does not belong to domain %q: create a CloudflareDomain resource for the correct domain", hostname, domainName))
 			continue
 		}
 
-		if err := r.createOrUpdateDNSAutomaticInZone(ctx, apiClient, hostname, tunnelID, zoneID, proxied); err != nil {
-			logger.Error(err, "Failed to create/update DNS record", "hostname", hostname)
+		// Build DNS record config
+		dnsConfig := dnssvc.DNSRecordConfig{
+			Name:    hostname,
+			Type:    "CNAME",
+			Content: fmt.Sprintf("%s.cfargotunnel.com", tunnelID),
+			TTL:     1, // Auto
+			Proxied: proxied,
+			Comment: fmt.Sprintf("Managed by cloudflare-operator IngressAutomatic: %s/%s", ingress.Namespace, ingress.Name),
+		}
+
+		// Register DNS record via Service (will be synced by Sync Controller)
+		if err := svc.Register(ctx, dnssvc.RegisterOptions{
+			ZoneID:    zoneID,
+			AccountID: accountID,
+			Source: service.Source{
+				Kind:      "IngressAutomatic",
+				Namespace: ingress.Namespace,
+				Name:      fmt.Sprintf("%s-%s", ingress.Name, sanitizeHostnameForSource(hostname)),
+			},
+			Config:         dnsConfig,
+			CredentialsRef: credRef,
+		}); err != nil {
+			logger.Error(err, "Failed to register DNS record", "hostname", hostname)
 			errs = append(errs, fmt.Errorf("DNS record %s: %w", hostname, err))
+		} else {
+			logger.Info("DNS record registered to SyncState", "hostname", hostname, "zoneId", zoneID)
 		}
 	}
 
 	if len(errs) > 0 {
-		return fmt.Errorf("failed to create/update %d DNS records: %w", len(errs), errors.Join(errs...))
+		return fmt.Errorf("failed to register %d DNS records: %w", len(errs), errors.Join(errs...))
 	}
-	return nil
-}
-
-// createOrUpdateDNSAutomaticInZone creates or updates a DNS CNAME record in a specific zone
-func (*Reconciler) createOrUpdateDNSAutomaticInZone(ctx context.Context, apiClient *cf.API, hostname, tunnelID, zoneID string, proxied bool) error {
-	logger := log.FromContext(ctx)
-
-	// Target is the tunnel hostname
-	target := fmt.Sprintf("%s.cfargotunnel.com", tunnelID)
-
-	// Try to get existing DNS record using InZone method
-	existingID, err := apiClient.GetDNSCNameIDInZone(zoneID, hostname)
-	if err != nil {
-		// This is a real error (API failure or multiple records found)
-		return fmt.Errorf("failed to check existing DNS record: %w", err)
-	}
-
-	// Use InsertOrUpdateCNameInZone for zone-specific operations
-	_, err = apiClient.InsertOrUpdateCNameInZone(zoneID, hostname, existingID, tunnelID, proxied)
-	if err != nil {
-		if existingID != "" {
-			return fmt.Errorf("failed to update DNS record: %w", err)
-		}
-		return fmt.Errorf("failed to create DNS record: %w", err)
-	}
-
-	if existingID != "" {
-		logger.Info("DNS record updated", "hostname", hostname, "target", target, "zoneId", zoneID)
-	} else {
-		logger.Info("DNS record created", "hostname", hostname, "target", target, "zoneId", zoneID)
-	}
-
-	return nil
-}
-
-// createOrUpdateDNSAutomatic creates or updates a DNS CNAME record via Cloudflare API (legacy, uses ValidZoneId)
-//
-//nolint:unused // legacy function kept for reference
-func (*Reconciler) createOrUpdateDNSAutomatic(ctx context.Context, apiClient *cf.API, hostname, tunnelID string, _ bool) error {
-	logger := log.FromContext(ctx)
-
-	// Target is the tunnel hostname
-	target := fmt.Sprintf("%s.cfargotunnel.com", tunnelID)
-
-	// Try to get existing DNS record
-	// GetDNSCNameId returns ("", nil) if record doesn't exist, which is not an error
-	existingID, err := apiClient.GetDNSCNameId(hostname)
-	if err != nil {
-		// This is a real error (API failure or multiple records found)
-		return fmt.Errorf("failed to check existing DNS record: %w", err)
-	}
-
-	if existingID != "" {
-		// Update existing record
-		_, err = apiClient.InsertOrUpdateCName(hostname, existingID)
-		if err != nil {
-			return fmt.Errorf("failed to update DNS record: %w", err)
-		}
-		logger.Info("DNS record updated", "hostname", hostname, "target", target)
-	} else {
-		// Create new record (existingID is empty, meaning record doesn't exist)
-		_, err = apiClient.InsertOrUpdateCName(hostname, "")
-		if err != nil {
-			return fmt.Errorf("failed to create DNS record: %w", err)
-		}
-		logger.Info("DNS record created", "hostname", hostname, "target", target)
-	}
-
 	return nil
 }
 
@@ -371,71 +330,33 @@ func (r *Reconciler) cleanupDNS(ctx context.Context, ingress *networkingv1.Ingre
 	}
 }
 
-// cleanupDNSAutomatic removes DNS records created via Cloudflare API
+// cleanupDNSAutomatic unregisters DNS records from SyncState
 // nolint:revive // Cognitive complexity for DNS cleanup logic
 func (r *Reconciler) cleanupDNSAutomatic(
 	ctx context.Context,
-	_ *networkingv1.Ingress,
+	ingress *networkingv1.Ingress,
 	hostnames []string,
-	config *networkingv1alpha2.TunnelIngressClassConfig,
+	_ *networkingv1alpha2.TunnelIngressClassConfig,
 ) error {
 	logger := log.FromContext(ctx)
 
-	// Get tunnel
-	tunnel, err := r.getTunnel(ctx, config)
-	if err != nil {
-		return err
-	}
-
-	// Initialize API client
-	apiClient, err := r.initAPIClient(ctx, tunnel, config)
-	if err != nil {
-		return fmt.Errorf("failed to initialize API client: %w", err)
-	}
-
-	// Resolve Zone IDs for all hostnames using DomainResolver
-	hostnameZones, err := r.domainResolver.ResolveMultiple(ctx, hostnames)
-	if err != nil {
-		logger.Error(err, "Failed to resolve domains for hostnames")
-		// Fall back to using apiClient.ValidZoneId for all hostnames
-	}
-
-	// Delete DNS for each hostname with error aggregation
+	// Create DNS Service and unregister records
+	svc := dnssvc.NewService(r.Client)
 	var errs []error
+
 	for _, hostname := range hostnames {
-		// Determine Zone ID for this hostname
-		zoneID := apiClient.ValidZoneId
-		if domainInfo, ok := hostnameZones[hostname]; ok && domainInfo != nil {
-			zoneID = domainInfo.ZoneID
+		source := service.Source{
+			Kind:      "IngressAutomatic",
+			Namespace: ingress.Namespace,
+			Name:      fmt.Sprintf("%s-%s", ingress.Name, sanitizeHostnameForSource(hostname)),
 		}
 
-		if zoneID == "" {
-			logger.Info("No Zone ID found, skipping DNS cleanup", "hostname", hostname)
-			continue
-		}
-
-		// Get DNS record ID using InZone method
-		recordID, err := apiClient.GetDNSCNameIDInZone(zoneID, hostname)
-		if err != nil {
-			if cf.IsNotFoundError(err) {
-				logger.Info("DNS record not found, skipping deletion", "hostname", hostname)
-				continue
-			}
-			logger.Error(err, "Failed to get DNS record ID", "hostname", hostname)
-			errs = append(errs, fmt.Errorf("get DNS record ID for %s: %w", hostname, err))
-			continue
-		}
-
-		if recordID == "" {
-			continue
-		}
-
-		// Delete the record using InZone method
-		if err := apiClient.DeleteDNSRecordInZone(zoneID, recordID); err != nil {
-			logger.Error(err, "Failed to delete DNS record", "hostname", hostname, "zoneId", zoneID)
-			errs = append(errs, fmt.Errorf("delete DNS record %s: %w", hostname, err))
+		// Unregister DNS record via Service (Sync Controller will handle deletion)
+		if err := svc.Unregister(ctx, "", source); err != nil {
+			logger.Error(err, "Failed to unregister DNS record", "hostname", hostname)
+			errs = append(errs, fmt.Errorf("unregister DNS record %s: %w", hostname, err))
 		} else {
-			logger.Info("DNS record deleted", "hostname", hostname, "zoneId", zoneID)
+			logger.Info("DNS record unregistered from SyncState", "hostname", hostname)
 		}
 	}
 
@@ -445,43 +366,19 @@ func (r *Reconciler) cleanupDNSAutomatic(
 	return nil
 }
 
-// initAPIClient initializes the Cloudflare API client for a tunnel.
-// This function properly sets ValidTunnelId, ValidTunnelName, ValidZoneId, and ValidAccountId
-// from the tunnel's status, which are required for DNS operations like InsertOrUpdateCName.
-func (r *Reconciler) initAPIClient(
-	ctx context.Context,
-	tunnel TunnelInterface,
-	_ *networkingv1alpha2.TunnelIngressClassConfig,
-) (*cf.API, error) {
-	spec := tunnel.GetSpec()
-	status := tunnel.GetStatus()
-
-	// Determine namespace for secret lookup
-	secretNamespace := tunnel.GetNamespace()
-	if secretNamespace == "" {
-		secretNamespace = r.OperatorNamespace
+// sanitizeHostnameForSource converts a hostname to a valid Source name component
+// (replaces dots with dashes and removes invalid characters)
+func sanitizeHostnameForSource(hostname string) string {
+	// Replace dots with dashes
+	name := strings.ReplaceAll(hostname, ".", "-")
+	// Remove trailing dashes
+	name = strings.Trim(name, "-")
+	// Truncate to avoid overly long names
+	if len(name) > 50 {
+		name = name[:50]
+		name = strings.Trim(name, "-")
 	}
-
-	// Use NewAPIClientFromDetails which handles all credential loading modes:
-	// - CloudflareCredentials reference
-	// - Legacy inline secret
-	// - Default CloudflareCredentials
-	apiClient, err := cf.NewAPIClientFromDetails(ctx, r.Client, secretNamespace, spec.Cloudflare)
-	if err != nil {
-		return nil, err
-	}
-
-	// CRITICAL FIX: Set ValidTunnelId, ValidTunnelName, ValidZoneId, and ValidAccountId from tunnel status.
-	// These fields are required by InsertOrUpdateCName and other DNS operations.
-	// Without them, InsertOrUpdateCName generates invalid CNAME content like ".cfargotunnel.com"
-	// instead of "<tunnel-id>.cfargotunnel.com", causing Cloudflare API error 9007.
-	apiClient.ValidTunnelId = status.TunnelId
-	apiClient.ValidTunnelName = status.TunnelName
-	apiClient.ValidZoneId = status.ZoneId
-	apiClient.ValidAccountId = status.AccountId
-	apiClient.ValidDomainName = apiClient.Domain // Use the domain from cloudflare spec
-
-	return apiClient, nil
+	return name
 }
 
 // hostnameBelongsToDomain checks if a hostname belongs to a domain.

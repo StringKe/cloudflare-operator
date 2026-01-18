@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"time"
@@ -68,57 +69,6 @@ func labelsForTunnel(cf Tunnel) map[string]string {
 	}
 }
 
-// handleTunnelConflict handles the case where tunnel creation failed due to conflict.
-// Returns nil if tunnel was successfully adopted, error otherwise.
-//
-//nolint:revive // secretExists is necessary to determine adoption success
-func handleTunnelConflict(r GenericTunnelReconciler, createErr error, secretExists bool) error {
-	r.GetLog().Info("Tunnel already exists (concurrent creation detected), attempting to adopt")
-	retryTunnelID, retryErr := r.GetCfAPI().GetTunnelId()
-	if retryErr != nil || retryTunnelID == "" {
-		r.GetLog().Error(createErr, "Tunnel creation conflict but unable to find tunnel")
-		r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning,
-			"FailedCreate", "Tunnel creation conflict - unable to resolve")
-		return createErr
-	}
-
-	r.GetLog().Info("Successfully found tunnel after conflict, adopting", "tunnelId", retryTunnelID)
-	r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal,
-		"Adopted", "Adopted tunnel after concurrent creation conflict")
-
-	if !secretExists {
-		err := fmt.Errorf("tunnel %s was created but credentials are missing", retryTunnelID)
-		r.GetLog().Error(err, "Cannot recover tunnel without credentials")
-		r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning,
-			"AdoptionFailed", "Tunnel exists but credentials are lost - manual intervention required")
-		return err
-	}
-	return nil
-}
-
-// createOrAdoptTunnel attempts to create a new tunnel or adopt an existing one on conflict.
-func createOrAdoptTunnel(r GenericTunnelReconciler, secretExists bool) error {
-	_, creds, createErr := r.GetCfAPI().CreateTunnel()
-	if createErr == nil {
-		r.GetLog().Info("Tunnel created on Cloudflare")
-		r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal,
-			"Created", "Tunnel created successfully on Cloudflare")
-		r.SetTunnelCreds(creds)
-		return nil
-	}
-
-	// P0 FIX: Handle "tunnel already exists" error gracefully
-	// This can happen when concurrent reconciles race
-	if cf.IsConflictError(createErr) {
-		return handleTunnelConflict(r, createErr, secretExists)
-	}
-
-	r.GetLog().Error(createErr, "unable to create Tunnel")
-	r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning,
-		"FailedCreate", "Unable to create Tunnel on Cloudflare")
-	return createErr
-}
-
 func setupTunnel(r GenericTunnelReconciler) (ctrl.Result, bool, error) {
 	okNewTunnel := r.GetTunnel().GetSpec().NewTunnel != nil
 	okExistingTunnel := r.GetTunnel().GetSpec().ExistingTunnel != nil
@@ -184,76 +134,219 @@ func setupExistingTunnel(r GenericTunnelReconciler) error {
 	return nil
 }
 
+// setupNewTunnel sets up a new tunnel using the SyncState-based lifecycle pattern.
+// This follows the six-layer architecture where:
+// - L2 Controller requests operations via L3 Service
+// - L5 Sync Controller performs actual API calls
+// - Results are stored in SyncState.Status.ResultData
+//
+//nolint:revive // cognitive complexity is acceptable for state machine logic
 func setupNewTunnel(r GenericTunnelReconciler) error {
-	// New tunnel, not yet setup, create on Cloudflare
-	if r.GetTunnel().GetStatus().TunnelId == "" {
-		r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal, "Creating", "Tunnel is being created")
-		r.GetCfAPI().TunnelName = r.GetTunnel().GetSpec().NewTunnel.Name
+	tunnel := r.GetTunnel()
+	ctx := r.GetContext()
+	log := r.GetLog()
 
-		// Check if we already have a secret with credentials (from a previous partial reconcile)
-		secret := &corev1.Secret{}
-		secretExists := false
-		if err := r.GetClient().Get(r.GetContext(), TunnelNamespacedName(r), secret); err == nil {
-			if creds, ok := secret.Data[CredentialsJsonFilename]; ok && len(creds) > 0 {
-				secretExists = true
-				r.SetTunnelCreds(string(creds))
-				r.GetLog().Info("Found existing credentials secret, will try to adopt tunnel")
-			}
-		}
-
-		// Try to find existing tunnel with this name first (adoption logic)
-		existingTunnelID, err := r.GetCfAPI().GetTunnelId()
-		if err == nil && existingTunnelID != "" {
-			// Found existing tunnel, adopt it
-			r.GetLog().Info("Found existing tunnel with same name, adopting",
-				"tunnelId", existingTunnelID, "tunnelName", r.GetCfAPI().ValidTunnelName)
-			r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal,
-				"Adopted", "Adopted existing tunnel from Cloudflare")
-
-			if !secretExists {
-				// We found a tunnel but don't have credentials - this is a problem
-				// The tunnel might have been created by this operator but the secret was deleted
-				// We cannot recover without deleting and recreating the tunnel
-				err := fmt.Errorf("found existing tunnel %s but no credentials secret", existingTunnelID)
-				r.GetLog().Error(err, "Cannot adopt tunnel without credentials")
-				r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning,
-					"AdoptionFailed", "Found tunnel but missing credentials secret")
-				return err
-			}
-		} else {
-			// Create new tunnel
-			if err := createOrAdoptTunnel(r, secretExists); err != nil {
-				return err
-			}
-		}
-
-		// CRITICAL: Update status immediately after tunnel creation/adoption
-		// This prevents duplicate creation attempts on subsequent reconciles
-		// P0 FIX: Retry status update with conflict handling
-		if err := updateTunnelStatusMinimalWithRetry(r); err != nil {
-			r.GetLog().Error(err, "Failed to update tunnel status after creation")
-			// Don't return error - the tunnel was created, we should continue
-			// The status will be updated on the next reconcile
-		}
-	} else {
-		// Read existing secret into tunnelCreds
-		secret := &corev1.Secret{}
-		if err := r.GetClient().Get(r.GetContext(), TunnelNamespacedName(r), secret); err != nil {
-			r.GetLog().Error(err, "Error in getting existing secret, tunnel restart will crash, please recreate tunnel")
-		}
-		r.SetTunnelCreds(string(secret.Data[CredentialsJsonFilename]))
+	// If tunnel already has an ID, it's already created - just load credentials
+	if tunnel.GetStatus().TunnelId != "" {
+		return loadExistingTunnelCredentials(r)
 	}
 
-	// Add finalizer for tunnel
+	// Check current lifecycle state
+	tunnelName := tunnel.GetSpec().NewTunnel.Name
+	lifecycleSvc := tunnelsvc.NewLifecycleService(r.GetClient())
+
+	// Check if we have a pending lifecycle operation
+	result, err := lifecycleSvc.GetLifecycleResult(ctx, tunnelName)
+	if err != nil {
+		log.Error(err, "Failed to check lifecycle result")
+		return err
+	}
+
+	// If we have a result, the tunnel was created - apply it
+	if result != nil {
+		log.Info("Tunnel lifecycle completed, applying result",
+			"tunnelId", result.TunnelID,
+			"tunnelName", result.TunnelName)
+		return applyLifecycleResult(r, result)
+	}
+
+	// Check if there's an error from a previous attempt
+	errMsg, err := lifecycleSvc.GetLifecycleError(ctx, tunnelName)
+	if err != nil {
+		log.Error(err, "Failed to check lifecycle error")
+		return err
+	}
+	if errMsg != "" {
+		log.Error(errors.New(errMsg), "Tunnel lifecycle failed")
+		r.GetRecorder().Event(tunnel.GetObject(), corev1.EventTypeWarning,
+			"LifecycleFailed", fmt.Sprintf("Tunnel creation failed: %s", errMsg))
+		return fmt.Errorf("tunnel lifecycle failed: %s", errMsg)
+	}
+
+	// Check if lifecycle operation is already in progress
+	completed, err := lifecycleSvc.IsLifecycleCompleted(ctx, tunnelName)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+
+	// If not completed but SyncState exists, operation is in progress - wait
+	syncStateName := tunnelsvc.GetSyncStateName(tunnelName)
+	syncState, _ := lifecycleSvc.GetSyncState(ctx, v1alpha2.SyncResourceTunnelLifecycle, syncStateName)
+	if syncState != nil && !completed {
+		log.Info("Tunnel lifecycle operation in progress, waiting",
+			"syncState", syncStateName,
+			"status", syncState.Status.SyncStatus)
+		// Return special error to trigger requeue
+		return &lifecyclePendingError{tunnelName: tunnelName}
+	}
+
+	// No lifecycle operation in progress, request tunnel creation
+	log.Info("Requesting tunnel creation via SyncState", "tunnelName", tunnelName)
+	r.GetRecorder().Event(tunnel.GetObject(), corev1.EventTypeNormal,
+		"Creating", "Tunnel creation requested via SyncState")
+
+	// Determine source kind
+	tunnelKind := kindTunnel
+	if tunnel.GetNamespace() == "" {
+		tunnelKind = kindClusterTunnel
+	}
+
+	// Build credentials reference
+	credRef := getCredentialsReference(r)
+
+	opts := tunnelsvc.CreateTunnelOptions{
+		TunnelName:     tunnelName,
+		AccountID:      "", // Will be resolved by Sync Controller from credentials
+		ConfigSrc:      "cloudflare",
+		Source:         service.Source{Kind: tunnelKind, Namespace: tunnel.GetNamespace(), Name: tunnel.GetName()},
+		CredentialsRef: credRef,
+	}
+
+	if _, err := lifecycleSvc.RequestCreate(ctx, opts); err != nil {
+		log.Error(err, "Failed to request tunnel creation")
+		r.GetRecorder().Event(tunnel.GetObject(), corev1.EventTypeWarning,
+			"CreateFailed", fmt.Sprintf("Failed to request tunnel creation: %v", err))
+		return err
+	}
+
+	// Update status to creating
+	setTunnelState(r, "creating", metav1.ConditionFalse, "Creating", "Tunnel creation in progress")
+
+	// Return special error to trigger requeue
+	return &lifecyclePendingError{tunnelName: tunnelName}
+}
+
+// loadExistingTunnelCredentials loads credentials from the existing secret
+func loadExistingTunnelCredentials(r GenericTunnelReconciler) error {
+	secret := &corev1.Secret{}
+	if err := r.GetClient().Get(r.GetContext(), TunnelNamespacedName(r), secret); err != nil {
+		r.GetLog().Error(err, "Error getting existing secret, tunnel restart will crash")
+		return nil // Don't fail the reconcile, just log
+	}
+	if creds, ok := secret.Data[CredentialsJsonFilename]; ok {
+		r.SetTunnelCreds(string(creds))
+	}
+
+	// Ensure finalizer is set
 	if !controllerutil.ContainsFinalizer(r.GetTunnel().GetObject(), tunnelFinalizer) {
 		controllerutil.AddFinalizer(r.GetTunnel().GetObject(), tunnelFinalizer)
 		if err := r.GetClient().Update(r.GetContext(), r.GetTunnel().GetObject()); err != nil {
-			r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal, "FailedFinalizerSet", "Failed to add Tunnel Finalizer")
+			r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal,
+				"FailedFinalizerSet", "Failed to add Tunnel Finalizer")
 			return err
 		}
-		r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal, "FinalizerSet", "Tunnel Finalizer added")
+		r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal,
+			"FinalizerSet", "Tunnel Finalizer added")
 	}
+
 	return nil
+}
+
+// applyLifecycleResult applies the result from a completed lifecycle operation
+//
+//nolint:revive // cognitive complexity is acceptable for state transition logic
+func applyLifecycleResult(r GenericTunnelReconciler, result *tunnelsvc.LifecycleResult) error {
+	tunnel := r.GetTunnel()
+	log := r.GetLog()
+	ctx := r.GetContext()
+
+	log.Info("Applying tunnel lifecycle result",
+		"tunnelId", result.TunnelID,
+		"tunnelName", result.TunnelName,
+		"hasToken", result.TunnelToken != "",
+		"hasCreds", result.Credentials != "")
+
+	// Decode and store credentials
+	if result.Credentials != "" {
+		creds, err := base64.StdEncoding.DecodeString(result.Credentials)
+		if err != nil {
+			log.Error(err, "Failed to decode tunnel credentials")
+		} else {
+			r.SetTunnelCreds(string(creds))
+		}
+	}
+
+	// Update cfAPI with tunnel details for status update
+	cfAPI := r.GetCfAPI()
+	cfAPI.ValidTunnelId = result.TunnelID
+	cfAPI.ValidTunnelName = result.TunnelName
+	if result.AccountTag != "" {
+		cfAPI.ValidAccountId = result.AccountTag
+	}
+	r.SetCfAPI(cfAPI)
+
+	// Store token for later use
+	if result.TunnelToken != "" {
+		// Token will be used when creating managed resources
+		tunnel.SetAnnotations(mergeAnnotations(tunnel.GetAnnotations(), map[string]string{
+			"cloudflare-operator.io/tunnel-token": result.TunnelToken,
+		}))
+	}
+
+	// Update status with tunnel ID
+	if err := updateTunnelStatusMinimalWithRetry(r); err != nil {
+		log.Error(err, "Failed to update tunnel status after lifecycle completion")
+	}
+
+	// Add finalizer
+	if !controllerutil.ContainsFinalizer(tunnel.GetObject(), tunnelFinalizer) {
+		controllerutil.AddFinalizer(tunnel.GetObject(), tunnelFinalizer)
+		if err := r.GetClient().Update(ctx, tunnel.GetObject()); err != nil {
+			r.GetRecorder().Event(tunnel.GetObject(), corev1.EventTypeNormal,
+				"FailedFinalizerSet", "Failed to add Tunnel Finalizer")
+			return err
+		}
+		r.GetRecorder().Event(tunnel.GetObject(), corev1.EventTypeNormal,
+			"FinalizerSet", "Tunnel Finalizer added")
+	}
+
+	return nil
+}
+
+// lifecyclePendingError indicates a lifecycle operation is pending
+type lifecyclePendingError struct {
+	tunnelName string
+}
+
+func (e *lifecyclePendingError) Error() string {
+	return fmt.Sprintf("tunnel lifecycle pending for %s", e.tunnelName)
+}
+
+// IsLifecyclePendingError checks if the error is a lifecycle pending error
+func IsLifecyclePendingError(err error) bool {
+	_, ok := err.(*lifecyclePendingError)
+	return ok
+}
+
+// mergeAnnotations merges two annotation maps
+func mergeAnnotations(existing, additional map[string]string) map[string]string {
+	if existing == nil {
+		existing = make(map[string]string)
+	}
+	for k, v := range additional {
+		existing[k] = v
+	}
+	return existing
 }
 
 // updateTunnelStatusMinimal updates only the essential tunnel status fields (TunnelId, TunnelName, AccountId)
@@ -402,124 +495,177 @@ func setTunnelState(r GenericTunnelReconciler, state string, conditionStatus met
 	}
 }
 
+// cleanupTunnel handles tunnel deletion using the SyncState-based lifecycle pattern.
+// This follows the six-layer architecture where deletion is performed by L5 Sync Controller.
+//
+//nolint:revive // cognitive complexity is acceptable for deletion state machine
 func cleanupTunnel(r GenericTunnelReconciler) (ctrl.Result, bool, error) {
-	if controllerutil.ContainsFinalizer(r.GetTunnel().GetObject(), tunnelFinalizer) {
-		// Run finalization logic. If the finalization logic fails,
-		// don't remove the finalizer so that we can retry during the next reconciliation.
+	if !controllerutil.ContainsFinalizer(r.GetTunnel().GetObject(), tunnelFinalizer) {
+		return ctrl.Result{}, true, nil
+	}
 
-		r.GetLog().Info("starting deletion cycle")
-		r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal, "Deleting", "Starting Tunnel Deletion")
+	tunnel := r.GetTunnel()
+	ctx := r.GetContext()
+	log := r.GetLog()
 
-		// Set deleting state (best effort, don't block on failure)
-		setTunnelState(r, "deleting", metav1.ConditionFalse, "Deleting", "Tunnel is being deleted")
-		cfDeployment := &appsv1.Deployment{}
-		var bypass bool
-		if err := r.GetClient().Get(r.GetContext(), TunnelNamespacedName(r), cfDeployment); err != nil {
-			r.GetLog().Error(err, "Error in getting deployments, might already be deleted?")
-			bypass = true
+	log.Info("Starting deletion cycle")
+	r.GetRecorder().Event(tunnel.GetObject(), corev1.EventTypeNormal, "Deleting", "Starting Tunnel Deletion")
+
+	// Set deleting state
+	setTunnelState(r, "deleting", metav1.ConditionFalse, "Deleting", "Tunnel is being deleted")
+
+	// Step 1: Scale down deployment
+	cfDeployment := &appsv1.Deployment{}
+	deploymentExists := true
+	if err := r.GetClient().Get(ctx, TunnelNamespacedName(r), cfDeployment); err != nil {
+		if apierrors.IsNotFound(err) {
+			deploymentExists = false
+		} else {
+			log.Error(err, "Error getting deployment")
 		}
-		if !bypass && *cfDeployment.Spec.Replicas != 0 {
-			r.GetLog().Info("Scaling down cloudflared")
-			r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal, "Scaling", "Scaling down cloudflared")
-			var size int32 = 0
-			cfDeployment.Spec.Replicas = &size
-			if err := r.GetClient().Update(r.GetContext(), cfDeployment); err != nil {
-				r.GetLog().Error(err, "Failed to update Deployment", "Deployment.Namespace", cfDeployment.Namespace, "Deployment.Name", cfDeployment.Name)
-				r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning, "FailedScaling", "Failed to scale down cloudflared")
-				return ctrl.Result{}, false, err
-			}
-			r.GetLog().Info("Scaling down successful")
-			r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal, "Scaled", "Scaling down cloudflared successful")
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, false, nil
-		}
-		if bypass || *cfDeployment.Spec.Replicas == 0 {
-			tunnelID := r.GetTunnel().GetStatus().TunnelId
+	}
 
-			// Unregister from SyncState before deleting the tunnel
-			// This removes the Tunnel/ClusterTunnel's contribution to the configuration
-			if tunnelID != "" {
+	if deploymentExists && cfDeployment.Spec.Replicas != nil && *cfDeployment.Spec.Replicas != 0 {
+		log.Info("Scaling down cloudflared")
+		r.GetRecorder().Event(tunnel.GetObject(), corev1.EventTypeNormal, "Scaling", "Scaling down cloudflared")
+		var size int32 = 0
+		cfDeployment.Spec.Replicas = &size
+		if err := r.GetClient().Update(ctx, cfDeployment); err != nil {
+			log.Error(err, "Failed to scale down deployment")
+			r.GetRecorder().Event(tunnel.GetObject(), corev1.EventTypeWarning, "FailedScaling", "Failed to scale down cloudflared")
+			return ctrl.Result{}, false, err
+		}
+		log.Info("Scaling down successful")
+		r.GetRecorder().Event(tunnel.GetObject(), corev1.EventTypeNormal, "Scaled", "Scaling down cloudflared successful")
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, false, nil
+	}
+
+	// Step 2: Deployment is scaled down or deleted, proceed with tunnel deletion
+	tunnelID := tunnel.GetStatus().TunnelId
+	tunnelName := getTunnelNameForDeletion(tunnel)
+
+	// Unregister from TunnelConfig SyncState
+	if tunnelID != "" {
+		tunnelKind := kindTunnel
+		if tunnel.GetNamespace() == "" {
+			tunnelKind = kindClusterTunnel
+		}
+
+		svc := tunnelsvc.NewService(r.GetClient())
+		source := service.Source{
+			Kind:      tunnelKind,
+			Namespace: tunnel.GetNamespace(),
+			Name:      tunnel.GetName(),
+		}
+
+		if err := svc.Unregister(ctx, tunnelID, source); err != nil {
+			log.Error(err, "Failed to unregister from TunnelConfig SyncState", "tunnelId", tunnelID)
+		} else {
+			log.Info("Unregistered from TunnelConfig SyncState", "tunnelId", tunnelID)
+		}
+	}
+
+	// Step 3: Request tunnel deletion via LifecycleService (only for NewTunnel)
+	if tunnel.GetSpec().NewTunnel != nil && tunnelID != "" {
+		lifecycleSvc := tunnelsvc.NewLifecycleService(r.GetClient())
+
+		// Check if deletion is already completed
+		completed, err := lifecycleSvc.IsLifecycleCompleted(ctx, tunnelName)
+		if err != nil && !apierrors.IsNotFound(err) {
+			log.Error(err, "Failed to check lifecycle completion")
+		}
+
+		if !completed {
+			// Check if deletion request already submitted
+			syncStateName := tunnelsvc.GetSyncStateName(tunnelName)
+			syncState, _ := lifecycleSvc.GetSyncState(ctx, v1alpha2.SyncResourceTunnelLifecycle, syncStateName)
+
+			if syncState == nil {
+				// Request deletion via LifecycleService
+				log.Info("Requesting tunnel deletion via SyncState",
+					"tunnelId", tunnelID, "tunnelName", tunnelName)
+
 				tunnelKind := kindTunnel
-				if r.GetTunnel().GetNamespace() == "" {
+				if tunnel.GetNamespace() == "" {
 					tunnelKind = kindClusterTunnel
 				}
 
-				svc := tunnelsvc.NewService(r.GetClient())
-				source := service.Source{
-					Kind:      tunnelKind,
-					Namespace: r.GetTunnel().GetNamespace(),
-					Name:      r.GetTunnel().GetName(),
+				credRef := getCredentialsReference(r)
+				opts := tunnelsvc.DeleteTunnelOptions{
+					TunnelID:       tunnelID,
+					TunnelName:     tunnelName,
+					AccountID:      tunnel.GetStatus().AccountId,
+					Source:         service.Source{Kind: tunnelKind, Namespace: tunnel.GetNamespace(), Name: tunnel.GetName()},
+					CredentialsRef: credRef,
+					CleanupRoutes:  true,
 				}
 
-				if err := svc.Unregister(r.GetContext(), tunnelID, source); err != nil {
-					r.GetLog().Error(err, "Failed to unregister from SyncState", "tunnelId", tunnelID)
-					// Don't block deletion on SyncState cleanup failure
-				} else {
-					r.GetLog().Info("Unregistered from SyncState", "tunnelId", tunnelID)
-				}
-			}
-
-			// P0 FIX: Delete all routes associated with this tunnel BEFORE deleting the tunnel
-			// This prevents the "Cannot delete tunnel because it has Warp routing configured" error
-			if tunnelID != "" {
-				deletedCount, err := r.GetCfAPI().DeleteTunnelRoutesByTunnelID(tunnelID)
-				if err != nil {
-					r.GetLog().Error(err, "Failed to delete tunnel routes", "tunnelId", tunnelID)
-					r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning,
-						"FailedDeletingRoutes", fmt.Sprintf("Failed to delete tunnel routes: %v", cf.SanitizeErrorMessage(err)))
+				if _, err := lifecycleSvc.RequestDelete(ctx, opts); err != nil {
+					log.Error(err, "Failed to request tunnel deletion")
+					r.GetRecorder().Event(tunnel.GetObject(), corev1.EventTypeWarning,
+						"DeleteFailed", fmt.Sprintf("Failed to request tunnel deletion: %v", err))
 					return ctrl.Result{RequeueAfter: 30 * time.Second}, false, err
 				}
-				if deletedCount > 0 {
-					r.GetLog().Info("Deleted tunnel routes before tunnel deletion", "tunnelId", tunnelID, "count", deletedCount)
-					r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal,
-						"RoutesDeleted", fmt.Sprintf("Deleted %d tunnel routes", deletedCount))
-				}
+
+				r.GetRecorder().Event(tunnel.GetObject(), corev1.EventTypeNormal,
+					"DeletionRequested", "Tunnel deletion requested via SyncState")
+				return ctrl.Result{RequeueAfter: tunnelLifecycleCheckInterval}, false, nil
 			}
 
-			// P0 FIX: Improve deletion idempotency
-			// Handle case where tunnel is already deleted from Cloudflare
-			if err := r.GetCfAPI().DeleteTunnel(); err != nil {
-				// P0 FIX: Check if tunnel is already deleted (NotFound error)
-				if !cf.IsNotFoundError(err) {
-					r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning,
-						"FailedDeleting", fmt.Sprintf("Tunnel deletion failed: %v", cf.SanitizeErrorMessage(err)))
-					return ctrl.Result{RequeueAfter: 30 * time.Second}, false, err
-				}
-				r.GetLog().Info("Tunnel already deleted from Cloudflare, continuing with cleanup",
-					"tunnelID", r.GetTunnel().GetStatus().TunnelId)
-				r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal,
-					"AlreadyDeleted", "Tunnel was already deleted from Cloudflare")
-			} else {
-				r.GetLog().Info("Tunnel deleted", "tunnelID", r.GetTunnel().GetStatus().TunnelId)
-				r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal, "Deleted", "Tunnel deletion successful")
+			// Deletion in progress, check status
+			if syncState.Status.SyncStatus == v1alpha2.SyncStatusError {
+				errMsg := syncState.Status.Error
+				log.Error(errors.New(errMsg), "Tunnel deletion failed")
+				r.GetRecorder().Event(tunnel.GetObject(), corev1.EventTypeWarning,
+					"DeleteFailed", fmt.Sprintf("Tunnel deletion failed: %s", errMsg))
+				// Continue anyway to allow cleanup
+			} else if syncState.Status.SyncStatus != v1alpha2.SyncStatusSynced {
+				// Still in progress
+				log.Info("Tunnel deletion in progress, waiting",
+					"status", syncState.Status.SyncStatus)
+				return ctrl.Result{RequeueAfter: tunnelLifecycleCheckInterval}, false, nil
 			}
-
-			// PR #158 fix: Remove Secret finalizer BEFORE tunnel finalizer
-			// This ensures the Secret can be cleaned up properly
-			if err := removeSecretFinalizer(r); err != nil {
-				// Log but don't block - Secret might have been force-deleted
-				r.GetLog().Error(err, "Failed to remove Secret finalizer, continuing with tunnel cleanup")
-			}
-
-			// Remove tunnelFinalizer. Once all finalizers have been
-			// removed, the object will be deleted.
-			// P0 FIX: Use retry for finalizer removal
-			controllerutil.RemoveFinalizer(r.GetTunnel().GetObject(), tunnelFinalizer)
-			err := r.GetClient().Update(r.GetContext(), r.GetTunnel().GetObject())
-			if err != nil {
-				if apierrors.IsConflict(err) {
-					// Conflict - requeue to retry
-					r.GetLog().Info("Finalizer removal conflict, will retry")
-					return ctrl.Result{RequeueAfter: time.Second}, false, nil
-				}
-				r.GetLog().Error(err, "unable to continue with tunnel deletion")
-				r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning, "FailedFinalizerUnset", "Unable to remove Tunnel Finalizer")
-				return ctrl.Result{}, false, err
-			}
-			r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal, "FinalizerUnset", "Tunnel Finalizer removed")
-			return ctrl.Result{}, true, nil
 		}
+
+		// Cleanup lifecycle SyncState
+		if err := lifecycleSvc.CleanupSyncState(ctx, tunnelName); err != nil {
+			log.Error(err, "Failed to cleanup lifecycle SyncState")
+		}
+
+		log.Info("Tunnel deleted via SyncState", "tunnelId", tunnelID)
+		r.GetRecorder().Event(tunnel.GetObject(), corev1.EventTypeNormal, "Deleted", "Tunnel deletion successful")
 	}
+
+	// Step 4: Remove Secret finalizer
+	if err := removeSecretFinalizer(r); err != nil {
+		log.Error(err, "Failed to remove Secret finalizer, continuing with cleanup")
+	}
+
+	// Step 5: Remove tunnel finalizer
+	controllerutil.RemoveFinalizer(tunnel.GetObject(), tunnelFinalizer)
+	if err := r.GetClient().Update(ctx, tunnel.GetObject()); err != nil {
+		if apierrors.IsConflict(err) {
+			log.Info("Finalizer removal conflict, will retry")
+			return ctrl.Result{RequeueAfter: time.Second}, false, nil
+		}
+		log.Error(err, "Unable to remove tunnel finalizer")
+		r.GetRecorder().Event(tunnel.GetObject(), corev1.EventTypeWarning, "FailedFinalizerUnset", "Unable to remove Tunnel Finalizer")
+		return ctrl.Result{}, false, err
+	}
+
+	r.GetRecorder().Event(tunnel.GetObject(), corev1.EventTypeNormal, "FinalizerUnset", "Tunnel Finalizer removed")
 	return ctrl.Result{}, true, nil
+}
+
+// getTunnelNameForDeletion returns the tunnel name for deletion operations
+func getTunnelNameForDeletion(tunnel Tunnel) string {
+	if tunnel.GetSpec().NewTunnel != nil {
+		return tunnel.GetSpec().NewTunnel.Name
+	}
+	if tunnel.GetSpec().ExistingTunnel != nil {
+		return tunnel.GetSpec().ExistingTunnel.Name
+	}
+	return tunnel.GetName()
 }
 
 // removeSecretFinalizer removes the tunnel-specific finalizer from the managed Secret.
@@ -794,11 +940,15 @@ func createManagedResources(r GenericTunnelReconciler) (ctrl.Result, error) {
 
 	// Get tunnel token for remotely-managed mode
 	// Token is used to start cloudflared with --token flag
-	tunnelID := r.GetTunnel().GetStatus().TunnelId
-	token, err := r.GetCfAPI().GetTunnelToken(tunnelID)
+	//
+	// Following six-layer architecture: Token is retrieved from:
+	// 1. Annotation (set by applyLifecycleResult from SyncState)
+	// 2. Existing token Secret (for re-reconciles)
+	// Resource Controller MUST NOT call Cloudflare API directly
+	token, err := getTunnelToken(r)
 	if err != nil {
-		r.GetLog().Error(err, "failed to get tunnel token", "tunnelId", tunnelID)
-		r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning, "FailedGetToken", "Failed to get tunnel token from Cloudflare")
+		r.GetLog().Error(err, "failed to get tunnel token")
+		r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning, "FailedGetToken", "Failed to get tunnel token")
 		return ctrl.Result{}, err
 	}
 
@@ -821,6 +971,67 @@ func createManagedResources(r GenericTunnelReconciler) (ctrl.Result, error) {
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// getTunnelToken retrieves the tunnel token from available sources.
+// Following six-layer architecture, this does NOT call Cloudflare API directly.
+// Token sources (in order of precedence):
+// 1. Annotation cloudflare-operator.io/tunnel-token (set by lifecycle result)
+// 2. Existing token Secret (for re-reconciles after restart)
+// 3. SyncState lifecycle result (if still available)
+//
+//nolint:revive // cyclomatic complexity is acceptable for multi-source lookup logic
+func getTunnelToken(r GenericTunnelReconciler) (string, error) {
+	ctx := r.GetContext()
+	log := r.GetLog()
+	tunnel := r.GetTunnel()
+
+	// Source 1: Check annotation (set by applyLifecycleResult)
+	if annotations := tunnel.GetAnnotations(); annotations != nil {
+		if token, ok := annotations["cloudflare-operator.io/tunnel-token"]; ok && token != "" {
+			log.V(1).Info("Using tunnel token from annotation")
+			return token, nil
+		}
+	}
+
+	// Source 2: Check existing token Secret
+	tokenSecretName := tunnel.GetName() + "-token"
+	tokenSecret := &corev1.Secret{}
+	if err := r.GetClient().Get(ctx, apitypes.NamespacedName{
+		Name:      tokenSecretName,
+		Namespace: tunnel.GetNamespace(),
+	}, tokenSecret); err == nil {
+		if token, ok := tokenSecret.Data["token"]; ok && len(token) > 0 {
+			log.V(1).Info("Using tunnel token from existing Secret")
+			return string(token), nil
+		}
+	}
+
+	// Source 3: Check SyncState lifecycle result
+	tunnelName := ""
+	if tunnel.GetSpec().NewTunnel != nil {
+		tunnelName = tunnel.GetSpec().NewTunnel.Name
+	} else if tunnel.GetSpec().ExistingTunnel != nil {
+		tunnelName = tunnel.GetSpec().ExistingTunnel.Name
+	}
+
+	if tunnelName != "" {
+		lifecycleSvc := tunnelsvc.NewLifecycleService(r.GetClient())
+		result, err := lifecycleSvc.GetLifecycleResult(ctx, tunnelName)
+		if err == nil && result != nil && result.TunnelToken != "" {
+			log.V(1).Info("Using tunnel token from SyncState lifecycle result")
+			// Store in annotation for future use
+			tunnel.SetAnnotations(mergeAnnotations(tunnel.GetAnnotations(), map[string]string{
+				"cloudflare-operator.io/tunnel-token": result.TunnelToken,
+			}))
+			if updateErr := r.GetClient().Update(ctx, tunnel.GetObject()); updateErr != nil {
+				log.V(1).Info("Failed to store token in annotation, continuing", "error", updateErr)
+			}
+			return result.TunnelToken, nil
+		}
+	}
+
+	return "", fmt.Errorf("tunnel token not found: check lifecycle SyncState or annotation")
 }
 
 // tokenSecretForTunnel returns a Secret containing the tunnel token for cloudflared --token mode

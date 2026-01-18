@@ -1787,6 +1787,13 @@ func (in *CloudflareSyncStateStatus) DeepCopyInto(out *CloudflareSyncStateStatus
 		*out = new(runtime.RawExtension)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.ResultData != nil {
+		in, out := &in.ResultData, &out.ResultData
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]v1.Condition, len(*in))

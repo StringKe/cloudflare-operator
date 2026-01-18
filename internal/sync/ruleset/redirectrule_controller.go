@@ -13,9 +13,11 @@ import (
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/StringKe/cloudflare-operator/api/v1alpha2"
+	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	rulesetsvc "github.com/StringKe/cloudflare-operator/internal/service/ruleset"
 	"github.com/StringKe/cloudflare-operator/internal/sync/common"
 )
@@ -23,6 +25,9 @@ import (
 const (
 	// Phase for dynamic redirects
 	redirectPhase = "http_request_dynamic_redirect"
+
+	// RedirectRuleFinalizerName is the finalizer for Redirect Rule SyncState resources.
+	RedirectRuleFinalizerName = "redirectrule.sync.cloudflare-operator.io/finalizer"
 )
 
 // RedirectRuleController is the Sync Controller for Redirect Rule Configuration.
@@ -64,18 +69,29 @@ func (r *RedirectRuleController) Reconcile(ctx context.Context, req ctrl.Request
 		"cloudflareId", syncState.Spec.CloudflareID,
 		"sources", len(syncState.Spec.Sources))
 
+	// Handle deletion - this is the SINGLE point for Cloudflare API delete calls
+	if !syncState.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, syncState)
+	}
+
+	// Check if there are any sources - if none, clear redirect rules from Cloudflare
+	if len(syncState.Spec.Sources) == 0 {
+		logger.Info("No sources in SyncState, clearing redirect rules from Cloudflare")
+		return r.handleDeletion(ctx, syncState)
+	}
+
+	// Add finalizer if not present
+	if !controllerutil.ContainsFinalizer(syncState, RedirectRuleFinalizerName) {
+		controllerutil.AddFinalizer(syncState, RedirectRuleFinalizerName)
+		if err := r.Client.Update(ctx, syncState); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{Requeue: true}, nil
+	}
+
 	// Skip if there's a pending debounced request
 	if r.Debouncer.IsPending(req.Name) {
 		logger.V(1).Info("Skipping reconcile - debounced request pending")
-		return ctrl.Result{}, nil
-	}
-
-	// Check if there are any sources
-	if len(syncState.Spec.Sources) == 0 {
-		logger.Info("No sources in SyncState, marking as synced (no-op)")
-		if err := r.SetSyncStatus(ctx, syncState, v1alpha2.SyncStatusSynced); err != nil {
-			return ctrl.Result{}, err
-		}
 		return ctrl.Result{}, nil
 	}
 
@@ -265,6 +281,73 @@ func (*RedirectRuleController) convertRules(config *rulesetsvc.RedirectRuleConfi
 	}
 
 	return rules
+}
+
+// handleDeletion handles the deletion of Redirect Rule from Cloudflare.
+// This clears the redirect rules by updating with an empty rules array.
+// Following Unified Sync Architecture:
+// Resource Controller unregisters → SyncState updated → Sync Controller deletes from Cloudflare
+//
+//nolint:revive // cognitive complexity unavoidable: deletion logic requires multiple cleanup steps
+func (r *RedirectRuleController) handleDeletion(
+	ctx context.Context,
+	syncState *v1alpha2.CloudflareSyncState,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	// If no finalizer, nothing to do
+	if !controllerutil.ContainsFinalizer(syncState, RedirectRuleFinalizerName) {
+		return ctrl.Result{}, nil
+	}
+
+	// Clear redirect rules from Cloudflare
+	zoneID := syncState.Spec.ZoneID
+	if zoneID != "" {
+		apiClient, apiErr := common.CreateAPIClient(ctx, r.Client, syncState)
+		if apiErr != nil {
+			logger.Error(apiErr, "Failed to create API client for deletion")
+			return ctrl.Result{RequeueAfter: common.RequeueAfterError(apiErr)}, nil
+		}
+
+		logger.Info("Clearing Redirect Rule from Cloudflare",
+			"zoneId", zoneID,
+			"phase", redirectPhase)
+
+		// Update with empty rules to clear the ruleset
+		_, clearErr := apiClient.UpdateEntrypointRuleset(ctx, zoneID, redirectPhase, "", []cloudflare.RulesetRule{})
+		if clearErr != nil {
+			if !cf.IsNotFoundError(clearErr) {
+				logger.Error(clearErr, "Failed to clear Redirect Rule")
+				if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, clearErr); statusErr != nil {
+					logger.Error(statusErr, "Failed to update error status")
+				}
+				return ctrl.Result{RequeueAfter: common.RequeueAfterError(clearErr)}, nil
+			}
+			logger.Info("Redirect ruleset already cleared or not found")
+		} else {
+			logger.Info("Successfully cleared Redirect Rule from Cloudflare")
+		}
+	}
+
+	// Remove finalizer
+	controllerutil.RemoveFinalizer(syncState, RedirectRuleFinalizerName)
+	if err := r.Client.Update(ctx, syncState); err != nil {
+		logger.Error(err, "Failed to remove finalizer")
+		return ctrl.Result{}, err
+	}
+
+	// If sources are empty (not a deletion timestamp trigger), delete the SyncState itself
+	if syncState.DeletionTimestamp.IsZero() && len(syncState.Spec.Sources) == 0 {
+		logger.Info("Deleting orphaned SyncState")
+		if err := r.Client.Delete(ctx, syncState); err != nil {
+			if client.IgnoreNotFound(err) != nil {
+				logger.Error(err, "Failed to delete SyncState")
+				return ctrl.Result{}, err
+			}
+		}
+	}
+
+	return ctrl.Result{}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

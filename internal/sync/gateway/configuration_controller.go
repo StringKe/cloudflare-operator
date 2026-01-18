@@ -11,12 +11,18 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	gatewaysvc "github.com/StringKe/cloudflare-operator/internal/service/gateway"
 	"github.com/StringKe/cloudflare-operator/internal/sync/common"
+)
+
+const (
+	// ConfigurationFinalizerName is the finalizer for Gateway Configuration SyncState resources.
+	ConfigurationFinalizerName = "gatewayconfiguration.sync.cloudflare-operator.io/finalizer"
 )
 
 // ConfigurationController is the Sync Controller for Gateway Configuration.
@@ -56,18 +62,30 @@ func (r *ConfigurationController) Reconcile(ctx context.Context, req ctrl.Reques
 		"cloudflareId", syncState.Spec.CloudflareID,
 		"sources", len(syncState.Spec.Sources))
 
+	// Handle deletion - this is the SINGLE point for cleanup
+	// Note: Gateway Configuration settings are NOT reset on Cloudflare - they persist
+	if !syncState.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, syncState)
+	}
+
+	// Check if there are any sources - if none, clean up
+	if len(syncState.Spec.Sources) == 0 {
+		logger.Info("No sources in SyncState, cleaning up")
+		return r.handleDeletion(ctx, syncState)
+	}
+
+	// Add finalizer if not present
+	if !controllerutil.ContainsFinalizer(syncState, ConfigurationFinalizerName) {
+		controllerutil.AddFinalizer(syncState, ConfigurationFinalizerName)
+		if err := r.Client.Update(ctx, syncState); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{Requeue: true}, nil
+	}
+
 	// Skip if there's a pending debounced request
 	if r.Debouncer.IsPending(req.Name) {
 		logger.V(1).Info("Skipping reconcile - debounced request pending")
-		return ctrl.Result{}, nil
-	}
-
-	// Check if there are any sources
-	if len(syncState.Spec.Sources) == 0 {
-		logger.Info("No sources in SyncState, marking as synced (no-op)")
-		if err := r.SetSyncStatus(ctx, syncState, v1alpha2.SyncStatusSynced); err != nil {
-			return ctrl.Result{}, err
-		}
 		return ctrl.Result{}, nil
 	}
 
@@ -236,6 +254,49 @@ func (r *ConfigurationController) syncToCloudflare(
 	return &gatewaysvc.GatewayConfigurationSyncResult{
 		AccountID: accountID,
 	}, nil
+}
+
+// handleDeletion handles the deletion of Gateway Configuration.
+// Note: Gateway Configuration settings are NOT reset on Cloudflare - they persist.
+// This method only cleans up the SyncState resource.
+// Following Unified Sync Architecture:
+// Resource Controller unregisters → SyncState updated → Sync Controller cleans up SyncState
+func (r *ConfigurationController) handleDeletion(
+	ctx context.Context,
+	syncState *v1alpha2.CloudflareSyncState,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	// If no finalizer, nothing to do
+	if !controllerutil.ContainsFinalizer(syncState, ConfigurationFinalizerName) {
+		return ctrl.Result{}, nil
+	}
+
+	// Note: We intentionally do NOT reset Gateway Configuration on Cloudflare
+	// These are account-level settings that should remain even after
+	// the GatewayConfiguration resource is deleted from Kubernetes.
+	logger.Info("GatewayConfiguration deleted - settings will be preserved on Cloudflare",
+		"accountId", syncState.Spec.AccountID)
+
+	// Remove finalizer
+	controllerutil.RemoveFinalizer(syncState, ConfigurationFinalizerName)
+	if err := r.Client.Update(ctx, syncState); err != nil {
+		logger.Error(err, "Failed to remove finalizer")
+		return ctrl.Result{}, err
+	}
+
+	// If sources are empty (not a deletion timestamp trigger), delete the SyncState itself
+	if syncState.DeletionTimestamp.IsZero() && len(syncState.Spec.Sources) == 0 {
+		logger.Info("Deleting orphaned SyncState")
+		if err := r.Client.Delete(ctx, syncState); err != nil {
+			if client.IgnoreNotFound(err) != nil {
+				logger.Error(err, "Failed to delete SyncState")
+				return ctrl.Result{}, err
+			}
+		}
+	}
+
+	return ctrl.Result{}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

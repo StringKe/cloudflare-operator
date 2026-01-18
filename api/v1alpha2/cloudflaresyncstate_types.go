@@ -9,12 +9,14 @@ import (
 )
 
 // SyncResourceType defines the type of Cloudflare resource being synced
-// +kubebuilder:validation:Enum=TunnelConfiguration;DNSRecord;AccessApplication;AccessGroup;AccessServiceToken;AccessIdentityProvider;VirtualNetwork;NetworkRoute;PrivateService;R2Bucket;R2BucketDomain;R2BucketNotification;ZoneRuleset;TransformRule;RedirectRule;GatewayRule;GatewayList;GatewayConfiguration;OriginCACertificate;CloudflareDomain;DomainRegistration;DevicePostureRule;DeviceSettingsPolicy
+// +kubebuilder:validation:Enum=TunnelConfiguration;TunnelLifecycle;DNSRecord;AccessApplication;AccessGroup;AccessServiceToken;AccessIdentityProvider;VirtualNetwork;NetworkRoute;PrivateService;R2Bucket;R2BucketDomain;R2BucketNotification;ZoneRuleset;TransformRule;RedirectRule;GatewayRule;GatewayList;GatewayConfiguration;OriginCACertificate;CloudflareDomain;DomainRegistration;DevicePostureRule;DeviceSettingsPolicy;WARPConnector
 type SyncResourceType string
 
 const (
 	// SyncResourceTunnelConfiguration represents Cloudflare Tunnel ingress configuration
 	SyncResourceTunnelConfiguration SyncResourceType = "TunnelConfiguration"
+	// SyncResourceTunnelLifecycle represents Cloudflare Tunnel lifecycle (create/delete) operations
+	SyncResourceTunnelLifecycle SyncResourceType = "TunnelLifecycle"
 	// SyncResourceDNSRecord represents a Cloudflare DNS record
 	SyncResourceDNSRecord SyncResourceType = "DNSRecord"
 	// SyncResourceAccessApplication represents a Cloudflare Access application
@@ -59,6 +61,8 @@ const (
 	SyncResourceDevicePostureRule SyncResourceType = "DevicePostureRule"
 	// SyncResourceDeviceSettingsPolicy represents a Cloudflare device settings policy
 	SyncResourceDeviceSettingsPolicy SyncResourceType = "DeviceSettingsPolicy"
+	// SyncResourceWARPConnector represents a Cloudflare WARP connector
+	SyncResourceWARPConnector SyncResourceType = "WARPConnector"
 )
 
 // SyncStatus represents the synchronization status
@@ -176,6 +180,12 @@ type CloudflareSyncStateStatus struct {
 	// Error contains the last error message if SyncStatus is Error
 	// +kubebuilder:validation:Optional
 	Error string `json:"error,omitempty"`
+
+	// ResultData contains resource-specific output data from the sync operation
+	// For TunnelLifecycle: tunnelId, tunnelToken, credentials (base64)
+	// For OriginCACertificate: certificate (PEM)
+	// +kubebuilder:validation:Optional
+	ResultData map[string]string `json:"resultData,omitempty"`
 
 	// Conditions represent the latest available observations
 	// +kubebuilder:validation:Optional

@@ -230,14 +230,61 @@ func (r *Controller) syncToCloudflare(
 	var result *cf.TunnelRouteResult
 
 	if isPending {
-		// Create new NetworkRoute
-		logger.Info("Creating new NetworkRoute",
-			"network", config.Network,
-			"tunnelId", config.TunnelID)
+		// Check if route already exists (e.g., created by another resource or externally)
+		// Use default virtual network ID if not specified
+		vnetID := config.VirtualNetworkID
+		if vnetID == "" {
+			vnetID = "default"
+		}
 
-		result, err = apiClient.CreateTunnelRoute(params)
-		if err != nil {
-			return nil, fmt.Errorf("create NetworkRoute: %w", err)
+		existing, err := apiClient.GetTunnelRoute(config.Network, vnetID)
+		if err == nil && existing != nil {
+			// Route exists, adopt it and update if needed
+			logger.Info("Found existing NetworkRoute, adopting",
+				"network", config.Network,
+				"existingTunnelId", existing.TunnelID)
+			result = existing
+
+			// If the existing route points to a different tunnel, update it
+			if existing.TunnelID != config.TunnelID {
+				logger.Info("Updating adopted NetworkRoute to point to correct tunnel",
+					"network", config.Network,
+					"oldTunnelId", existing.TunnelID,
+					"newTunnelId", config.TunnelID)
+				result, err = apiClient.UpdateTunnelRoute(config.Network, params)
+				if err != nil {
+					return nil, fmt.Errorf("update adopted NetworkRoute: %w", err)
+				}
+			}
+		} else {
+			// Create new NetworkRoute
+			logger.Info("Creating new NetworkRoute",
+				"network", config.Network,
+				"tunnelId", config.TunnelID)
+
+			result, err = apiClient.CreateTunnelRoute(params)
+			if err != nil {
+				// Handle conflict error (route already exists but wasn't found)
+				if cf.IsConflictError(err) {
+					logger.Info("NetworkRoute already exists (conflict), attempting to adopt",
+						"network", config.Network)
+					_, err = apiClient.GetTunnelRoute(config.Network, vnetID)
+					if err != nil {
+						return nil, fmt.Errorf("get existing NetworkRoute after conflict: %w", err)
+					}
+					// Update to ensure consistency
+					result, err = apiClient.UpdateTunnelRoute(config.Network, params)
+					if err != nil {
+						return nil, fmt.Errorf("update NetworkRoute after conflict: %w", err)
+					}
+				} else {
+					return nil, fmt.Errorf("create NetworkRoute: %w", err)
+				}
+			}
+
+			logger.Info("Created NetworkRoute",
+				"network", result.Network,
+				"tunnelId", result.TunnelID)
 		}
 
 		// Update SyncState CloudflareID with the network (since routes don't have a separate ID)
@@ -247,10 +294,6 @@ func (r *Controller) syncToCloudflare(
 				"network", config.Network)
 			// Non-fatal - will be fixed on next reconcile
 		}
-
-		logger.Info("Created NetworkRoute",
-			"network", result.Network,
-			"tunnelId", result.TunnelID)
 	} else {
 		// Update existing NetworkRoute
 		logger.Info("Updating NetworkRoute",
