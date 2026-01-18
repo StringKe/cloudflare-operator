@@ -216,7 +216,7 @@ Operator 根据 CRD 作用域使用不同的 Secret 查找规则：
 - 当前版本：v0.23.x (Alpha)
 - API 版本：`networking.cloudflare-operator.io/v1alpha2`
 - Kubernetes：v1.28+
-- Go：1.25+
+- Go：1.25
 - controller-runtime：v0.22
 - cloudflare-go SDK：v0.116.0
 - gateway-api：v1.4.1

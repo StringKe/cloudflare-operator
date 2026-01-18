@@ -144,14 +144,42 @@ flowchart TB
 
 ### Installation
 
+**Option 1: Full Installation (Recommended for new users)**
+
 ```bash
-# Install CRDs and operator
-kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator.crds.yaml
-kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator.yaml
+# All-in-one: CRDs + Namespace + RBAC + Operator (without webhook)
+kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator-full-no-webhook.yaml
 
 # Verify installation
 kubectl get pods -n cloudflare-operator-system
 ```
+
+**Option 2: Modular Installation (Recommended for production)**
+
+```bash
+# Step 1: Install CRDs (cluster-admin required)
+kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator-crds.yaml
+
+# Step 2: Create namespace
+kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator-namespace.yaml
+
+# Step 3: Install operator (RBAC + Deployment)
+kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator-no-webhook.yaml
+
+# Verify installation
+kubectl get pods -n cloudflare-operator-system
+```
+
+**Available Installation Files**
+
+| File | Contents | Use Case |
+|------|----------|----------|
+| `cloudflare-operator-full.yaml` | CRDs + Namespace + RBAC + Operator + Webhook | Full installation with cert-manager |
+| `cloudflare-operator-full-no-webhook.yaml` | CRDs + Namespace + RBAC + Operator | Full installation without webhook |
+| `cloudflare-operator-crds.yaml` | CRDs only | Modular: install CRDs separately |
+| `cloudflare-operator-namespace.yaml` | Namespace only | Modular: create namespace |
+| `cloudflare-operator.yaml` | RBAC + Operator + Webhook | Modular: operator with webhook |
+| `cloudflare-operator-no-webhook.yaml` | RBAC + Operator | Modular: operator without webhook |
 
 ### Create a Tunnel
 

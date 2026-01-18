@@ -1,0 +1,11 @@
+# =============================================================================
+# Cloudflare Operator Namespace
+# =============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cloudflare-operator-system
+  labels:
+    app.kubernetes.io/name: cloudflare-operator
+    app.kubernetes.io/component: namespace
+    control-plane: controller-manager

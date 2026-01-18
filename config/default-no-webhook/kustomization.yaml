@@ -1,0 +1,31 @@
+# =============================================================================
+# Default No-Webhook Kustomization (Operator only, no CRDs, no Namespace, no Webhook)
+# =============================================================================
+# Output: cloudflare-operator-no-webhook.yaml
+# Contains: RBAC + Deployment
+# Does NOT contain: CRDs, Namespace, Webhook, CertManager
+# Use case: Environments without cert-manager
+# =============================================================================
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Adds namespace to all resources.
+namespace: cloudflare-operator-system
+
+# Value of this field is prepended to the names of all resources.
+namePrefix: cloudflare-operator-
+
+resources:
+  # NOTE: CRDs are NOT included here - use cloudflare-operator-crds.yaml separately
+  # NOTE: Namespace is NOT included here - use cloudflare-operator-namespace.yaml separately
+  # NOTE: Webhook is NOT included - this is for environments without cert-manager
+  - ../rbac
+  - ../manager
+  # [METRICS] Expose the controller manager metrics service.
+  - metrics_service.yaml
+
+patches:
+  # [METRICS] The following patch will enable the metrics endpoint using HTTPS and the port :8443.
+  - path: manager_metrics_patch.yaml
+    target:
+      kind: Deployment

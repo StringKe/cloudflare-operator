@@ -121,14 +121,42 @@ flowchart TB
 
 ### 安装
 
+**方式 1：完整安装（推荐新用户使用）**
+
 ```bash
-# 安装 CRD 和 operator
-kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator.crds.yaml
-kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator.yaml
+# 一键安装：CRDs + Namespace + RBAC + Operator
+kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator-full-no-webhook.yaml
 
 # 验证安装
 kubectl get pods -n cloudflare-operator-system
 ```
+
+**方式 2：模块化安装（推荐生产环境使用）**
+
+```bash
+# 步骤 1：安装 CRD（需要 cluster-admin 权限）
+kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator-crds.yaml
+
+# 步骤 2：创建命名空间
+kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator-namespace.yaml
+
+# 步骤 3：安装 Operator（RBAC + Deployment）
+kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator-no-webhook.yaml
+
+# 验证安装
+kubectl get pods -n cloudflare-operator-system
+```
+
+**可用安装文件**
+
+| 文件 | 内容 | 使用场景 |
+|------|------|----------|
+| `cloudflare-operator-full.yaml` | CRDs + Namespace + RBAC + Operator + Webhook | 完整安装（需要 cert-manager）|
+| `cloudflare-operator-full-no-webhook.yaml` | CRDs + Namespace + RBAC + Operator | 完整安装（无 webhook）|
+| `cloudflare-operator-crds.yaml` | 仅 CRDs | 模块化安装 |
+| `cloudflare-operator-namespace.yaml` | 仅 Namespace | 模块化安装 |
+| `cloudflare-operator.yaml` | RBAC + Operator + Webhook | 升级现有安装 |
+| `cloudflare-operator-no-webhook.yaml` | RBAC + Operator | 升级（无 webhook）|
 
 ### 创建隧道
 

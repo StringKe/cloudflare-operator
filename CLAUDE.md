@@ -325,51 +325,75 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 ---
 
-## 统一同步架构 (必须遵守)
+## 统一同步架构 (必须遵守) ⚠️
 
-### 架构概述
-
-本项目采用六层统一同步架构，解决多控制器并发调用 Cloudflare API 导致的竞态条件问题。
+### 核心数据流 (六层架构)
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                     Kubernetes Resources (Layer 1)                  │
-│  DNSRecord, Ingress, AccessApplication, TunnelBinding, etc.         │
-└─────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                   Resource Controllers (Layer 2)                    │
-│  轻量级: 验证 spec、解析引用、构建配置、调用 Core Service           │
-│  internal/controller/{resource}/controller.go                       │
-└─────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                     Core Services (Layer 3)                         │
-│  业务逻辑: GetOrCreateSyncState、UpdateSource (乐观锁)              │
-│  internal/service/{resource}/service.go                             │
-└─────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                  CloudflareSyncState CRD (Layer 4)                  │
-│  共享状态存储: sources[]、configHash、syncStatus                    │
-│  api/v1alpha2/cloudflaresyncstate_types.go                          │
-└─────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                    Sync Controllers (Layer 5)                       │
-│  防抖 (500ms)、聚合配置、Hash 比较、调用 Cloudflare API             │
-│  internal/sync/{resource}/controller.go                             │
-└─────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                      Cloudflare API (Layer 6)                       │
-│  唯一的 API 调用点，由 Sync Controller 统一管理                     │
-└─────────────────────────────────────────────────────────────────────┘
+K8s Resources → Resource Controllers → Core Services → SyncState CRD → Sync Controllers → Cloudflare API
+```
+
+**所有代码必须遵循此数据流**。禁止 Resource Controller 直接调用 Cloudflare API。
+
+### 架构图
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        统一六层同步架构                                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ╔═══════════════════════════════════════════════════════════════════════╗ │
+│  ║ Layer 1: K8s Resources (用户创建和管理)                                ║ │
+│  ║  Tunnel, ClusterTunnel, TunnelBinding, Ingress, HTTPRoute, DNSRecord   ║ │
+│  ║  VirtualNetwork, NetworkRoute, AccessApplication, R2Bucket, etc.       ║ │
+│  ╚═══════════════════════════════════════════════════════════════════════╝ │
+│                                    │                                        │
+│                                    ▼                                        │
+│  ╔═══════════════════════════════════════════════════════════════════════╗ │
+│  ║ Layer 2: Resource Controllers (轻量级，100-150 行)                     ║ │
+│  ║  职责: ✓ 验证 Spec  ✓ 解析引用  ✓ 构建配置  ✓ 调用 Core Service       ║ │
+│  ║  禁止: ✗ 直接调用 Cloudflare API  ✗ 持有 cfAPI 字段                   ║ │
+│  ║  位置: internal/controller/{resource}/controller.go                    ║ │
+│  ╚═══════════════════════════════════════════════════════════════════════╝ │
+│                                    │                                        │
+│                                    ▼                                        │
+│  ╔═══════════════════════════════════════════════════════════════════════╗ │
+│  ║ Layer 3: Core Services (业务逻辑层，150-200 行)                        ║ │
+│  ║  职责: ✓ 验证业务规则  ✓ GetOrCreateSyncState  ✓ UpdateSource (乐观锁)║ │
+│  ║  位置: internal/service/{resource}/service.go                          ║ │
+│  ╚═══════════════════════════════════════════════════════════════════════╝ │
+│                                    │                                        │
+│                                    ▼                                        │
+│  ╔═══════════════════════════════════════════════════════════════════════╗ │
+│  ║ Layer 4: CloudflareSyncState CRD (共享状态存储)                        ║ │
+│  ║  功能: ✓ K8s 原生存储 (etcd)  ✓ resourceVersion 乐观锁                 ║ │
+│  ║        ✓ 多实例安全  ✓ kubectl 可观测  ✓ 状态持久化                    ║ │
+│  ║  字段: spec.sources[], status.configHash, status.syncStatus            ║ │
+│  ║  位置: api/v1alpha2/cloudflaresyncstate_types.go                       ║ │
+│  ╚═══════════════════════════════════════════════════════════════════════╝ │
+│                                    │                                        │
+│                                    ▼                                        │
+│  ╔═══════════════════════════════════════════════════════════════════════╗ │
+│  ║ Layer 5: Sync Controllers (同步控制器，200-300 行)                     ║ │
+│  ║  职责: ✓ Watch SyncState  ✓ 防抖 (500ms)  ✓ 聚合配置  ✓ Hash 比较     ║ │
+│  ║        ✓ 调用 Cloudflare API  ✓ 更新 SyncState Status                  ║ │
+│  ║  位置: internal/sync/{resource}/controller.go                          ║ │
+│  ╚═══════════════════════════════════════════════════════════════════════╝ │
+│                                    │                                        │
+│                                    │ ✅ 唯一 API 调用点                     │
+│                                    ▼                                        │
+│  ╔═══════════════════════════════════════════════════════════════════════╗ │
+│  ║ Layer 6: Cloudflare API Client                                        ║ │
+│  ║  功能: ✓ 连接池  ✓ 速率限制  ✓ 自动重试  ✓ 错误分类  ✓ Metrics        ║ │
+│  ║  位置: internal/clients/cf/                                            ║ │
+│  ╚═══════════════════════════════════════════════════════════════════════╝ │
+│                                    │                                        │
+│                                    ▼                                        │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │                         Cloudflare API                                │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### 资源分类
@@ -451,74 +475,137 @@ T3: Sync Controller    → Aggregate all sources → PUT (all rules)
 
 ---
 
-## 代码结构
+## 代码结构 (按六层架构组织)
 
 ```
-api/
-├── v1alpha1/                 # 旧版 API (deprecated)
-└── v1alpha2/                 # 当前存储版本
-    ├── cloudflaresyncstate_types.go  # 共享同步状态 CRD
-    ├── tunnel_types.go
-    ├── clustertunnel_types.go
-    ├── virtualnetwork_types.go
-    ├── networkroute_types.go
-    ├── privateservice_types.go
-    ├── accessapplication_types.go
-    ├── tunnelingressclassconfig_types.go   # Ingress 集成
-    ├── tunnelgatewayclassconfig_types.go   # Gateway API 集成
+cloudflare-operator/
+├── api/                                     # Layer 1 & 4: CRD 类型定义
+│   ├── v1alpha1/                            # 旧版 API (deprecated)
+│   └── v1alpha2/                            # 当前存储版本
+│       ├── cloudflaresyncstate_types.go     # [Layer 4] 共享同步状态 CRD ⭐
+│       ├── tunnel_types.go                  # [Layer 1] 用户资源
+│       ├── clustertunnel_types.go
+│       ├── tunnelbinding_types.go
+│       ├── dnsrecord_types.go
+│       ├── virtualnetwork_types.go
+│       ├── networkroute_types.go
+│       ├── accessapplication_types.go
+│       ├── r2bucket_types.go
+│       └── ...
+│
+├── internal/
+│   │
+│   ├── controller/                          # [Layer 2] Resource Controllers ⭐
+│   │   │                                    # 职责: 验证、解析引用、调用 Service
+│   │   │                                    # 禁止: 直接调用 Cloudflare API
+│   │   ├── status.go                        # 状态更新辅助函数
+│   │   ├── constants.go                     # 常量定义
+│   │   ├── utils.go                         # 凭证解析辅助 (CredentialsInfo)
+│   │   ├── finalizer.go                     # Finalizer 管理辅助
+│   │   ├── event.go                         # 事件记录辅助
+│   │   ├── generic_tunnel_reconciler.go     # Tunnel/ClusterTunnel 共享逻辑
+│   │   ├── dnsrecord/controller.go          # → 调用 dnsService
+│   │   ├── virtualnetwork/controller.go     # → 调用 virtualnetworkService
+│   │   ├── networkroute/controller.go       # → 调用 networkrouteService
+│   │   ├── accessapplication/controller.go  # → 调用 accessService
+│   │   ├── accessgroup/controller.go
+│   │   ├── accessservicetoken/controller.go
+│   │   ├── r2bucket/controller.go           # → 调用 r2Service
+│   │   ├── zoneruleset/controller.go        # → 调用 rulesetService
+│   │   ├── ingress/controller.go            # → 调用 tunnelService
+│   │   ├── gateway/gateway_controller.go    # Gateway API 控制器
+│   │   └── ...
+│   │
+│   ├── service/                             # [Layer 3] Core Services ⭐
+│   │   │                                    # 职责: 业务逻辑、管理 SyncState
+│   │   ├── interface.go                     # Source, RegisterOptions 定义
+│   │   ├── base.go                          # BaseService (乐观锁、重试)
+│   │   ├── tunnel/
+│   │   │   ├── types.go                     # IngressRule, TunnelSettings
+│   │   │   └── service.go                   # RegisterRules, Unregister
+│   │   ├── dns/
+│   │   │   ├── types.go                     # DNSRecordConfig
+│   │   │   └── service.go                   # Register, Unregister
+│   │   ├── virtualnetwork/
+│   │   │   ├── types.go
+│   │   │   └── service.go
+│   │   ├── networkroute/
+│   │   │   ├── types.go
+│   │   │   └── service.go
+│   │   ├── access/
+│   │   │   ├── types.go
+│   │   │   ├── application_service.go
+│   │   │   ├── group_service.go
+│   │   │   ├── servicetoken_service.go
+│   │   │   └── identityprovider_service.go
+│   │   ├── r2/
+│   │   │   ├── types.go
+│   │   │   ├── bucket_service.go
+│   │   │   ├── domain_service.go
+│   │   │   └── notification_service.go
+│   │   ├── ruleset/
+│   │   │   ├── types.go
+│   │   │   ├── zoneruleset_service.go
+│   │   │   ├── transformrule_service.go
+│   │   │   └── redirectrule_service.go
+│   │   ├── device/
+│   │   ├── gateway/
+│   │   └── domain/
+│   │
+│   ├── sync/                                # [Layer 5] Sync Controllers ⭐
+│   │   │                                    # 职责: 聚合配置、调用 Cloudflare API
+│   │   │                                    # 这是唯一调用 Cloudflare API 的地方！
+│   │   ├── common/
+│   │   │   ├── base.go                      # BaseSyncController
+│   │   │   ├── debouncer.go                 # 防抖器 (500ms)
+│   │   │   ├── hash.go                      # 配置 Hash 计算
+│   │   │   ├── predicate.go                 # SyncResourceType 过滤
+│   │   │   └── helpers.go                   # 通用辅助函数
+│   │   ├── tunnel/
+│   │   │   ├── aggregator.go                # 聚合多个 sources 的规则
+│   │   │   └── controller.go                # → 调用 cfAPI.PutTunnelConfiguration
+│   │   ├── dns/controller.go                # → 调用 cfAPI.CreateDNSRecord
+│   │   ├── virtualnetwork/controller.go     # → 调用 cfAPI.CreateVirtualNetwork
+│   │   ├── networkroute/controller.go       # → 调用 cfAPI.CreateTunnelRoute
+│   │   ├── access/
+│   │   │   ├── application_controller.go
+│   │   │   ├── group_controller.go
+│   │   │   ├── servicetoken_controller.go
+│   │   │   └── identityprovider_controller.go
+│   │   ├── r2/
+│   │   │   ├── bucket_controller.go
+│   │   │   ├── domain_controller.go
+│   │   │   └── notification_controller.go
+│   │   ├── ruleset/
+│   │   │   ├── zoneruleset_controller.go
+│   │   │   ├── transformrule_controller.go
+│   │   │   └── redirectrule_controller.go
+│   │   ├── device/
+│   │   ├── gateway/
+│   │   └── privateservice/
+│   │
+│   ├── clients/                             # [Layer 6] Cloudflare API Client
+│   │   └── cf/
+│   │       ├── api.go                       # 统一客户端入口
+│   │       ├── tunnel_config.go             # Tunnel Configuration API
+│   │       ├── dns.go                       # DNS API
+│   │       ├── network.go                   # VirtualNetwork, TunnelRoute API
+│   │       ├── access.go                    # Access API
+│   │       ├── r2.go                        # R2 API
+│   │       ├── errors.go                    # 错误处理、敏感信息清理
+│   │       └── ...
+│   │
+│   └── credentials/                         # 凭证加载逻辑
+│       └── loader.go
+│
+├── cmd/
+│   └── main.go                              # 注册所有 Controllers 和 Services
+│
+└── config/
+    ├── crd/bases/                           # CRD YAML
+    │   ├── networking...cloudflaresyncstates.yaml  # SyncState CRD
+    │   └── ...
     └── ...
-
-internal/
-├── controller/               # Layer 2: Resource Controllers (轻量级)
-│   ├── status.go             # 状态更新辅助函数
-│   ├── constants.go          # 常量定义
-│   ├── finalizer.go          # Finalizer 管理辅助
-│   ├── event.go              # 事件记录辅助
-│   ├── deletion.go           # 删除处理模板
-│   ├── management.go         # 资源管理标记
-│   ├── adoption.go           # 资源采用逻辑
-│   ├── generic_tunnel_reconciler.go  # Tunnel 共享逻辑
-│   ├── dnsrecord/            # 调用 dnsService
-│   ├── accessservicetoken/   # 调用 accessService
-│   ├── ingress/              # 调用 tunnelService
-│   ├── gateway/              # Gateway API 控制器
-│   ├── route/                # 路由构建辅助
-│   ├── tunnel/               # Tunnel 解析辅助
-│   └── ...
-├── service/                  # Layer 3: Core Services (业务逻辑)
-│   ├── interface.go          # 通用接口定义
-│   ├── base.go               # BaseService (乐观锁、SyncState 管理)
-│   ├── tunnel/service.go     # TunnelConfigService
-│   ├── dns/service.go        # DNSService
-│   ├── access/               # AccessApplication/Group/Token/IdP Services
-│   ├── virtualnetwork/       # VirtualNetworkService
-│   ├── networkroute/         # NetworkRouteService
-│   ├── r2/                   # R2Bucket/Domain/Notification Services
-│   ├── ruleset/              # ZoneRuleset/Transform/Redirect Services
-│   ├── device/               # DevicePosture/Settings Services
-│   └── gateway/              # Gateway Rule/List/Config Services
-├── sync/                     # Layer 5: Sync Controllers (API 调用)
-│   ├── common/               # 通用工具
-│   │   ├── base.go           # BaseSyncController
-│   │   ├── debouncer.go      # 防抖器 (500ms)
-│   │   ├── hash.go           # 配置 Hash 计算
-│   │   └── predicate.go      # 事件过滤
-│   ├── tunnel/controller.go  # TunnelConfigSyncController
-│   ├── dns/controller.go     # DNSSyncController
-│   ├── access/               # Access*SyncControllers
-│   ├── virtualnetwork/       # VirtualNetworkSyncController
-│   ├── networkroute/         # NetworkRouteSyncController
-│   ├── r2/                   # R2*SyncControllers
-│   ├── ruleset/              # Ruleset*SyncControllers
-│   ├── device/               # Device*SyncControllers
-│   └── gateway/              # Gateway*SyncControllers
-├── clients/
-│   └── cf/                   # Cloudflare API 客户端
-│       ├── api.go
-│       ├── network.go        # VirtualNetwork, TunnelRoute
-│       ├── device.go         # Device 设置
-│       └── errors.go         # 错误处理辅助
-└── credentials/              # 凭证加载逻辑
 ```
 
 ---
@@ -587,7 +674,7 @@ make test-e2e           # Kind 集群 E2E 测试
 6. **验证构建输出**
    ```bash
    make build-installer VERSION=x.x.x
-   grep "myresources" dist/cloudflare-operator.crds.yaml  # 必须有输出
+   grep "myresources" dist/cloudflare-operator-crds.yaml  # 必须有输出
    ```
 
 ### 验证脚本
@@ -773,49 +860,49 @@ if err = (&myresourcesync.SyncController{
 - [ ] Sync Controller 使用 Hash 检测变化
 - [ ] 资源类型已添加到 `SyncResourceType` 枚举
 
-### 当前迁移状态
+### 当前架构实施状态
 
-| 资源 | Service | Sync Controller | resolveCredentials | 删除处理 | 状态 |
-|------|---------|-----------------|-------------------|----------|------|
-| **Tunnel** | ✅ | ✅ | ⚠️ 直接 API | ⚠️ 直接 API | 待迁移 |
-| **ClusterTunnel** | ✅ | ✅ | ⚠️ 直接 API | ⚠️ 直接 API | 待迁移 |
-| **TunnelBinding** | ✅ | ✅ | ✅ 临时客户端 | ✅ 临时客户端 | 部分完成 |
-| **DNSRecord** | ✅ | ✅ | ⚠️ 直接 API | ⚠️ 直接 API | 待迁移 |
-| **VirtualNetwork** | ✅ | ✅ | ✅ CredentialsInfo | ⚠️ 直接 API | 部分完成 |
-| **NetworkRoute** | ✅ | ✅ | ✅ CredentialsInfo | ⚠️ 直接 API | 部分完成 |
-| **PrivateService** | ✅ | ❌ | ✅ CredentialsInfo | ⚠️ 直接 API | 部分完成 |
-| **WARPConnector** | ❌ | ❌ | ✅ CredentialsInfo | ⚠️ 直接 API | 框架完成 |
-| **AccessApplication** | ✅ | ✅ | ✅ CredentialsInfo | ⚠️ 直接 API | 部分完成 |
-| **AccessGroup** | ✅ | ✅ | ✅ CredentialsInfo | ⚠️ 直接 API | 部分完成 |
-| **AccessServiceToken** | ✅ | ✅ | ✅ CredentialsInfo | ⚠️ 直接 API | 部分完成 |
-| **AccessIdentityProvider** | ✅ | ✅ | ✅ CredentialsInfo | ⚠️ 直接 API | 部分完成 |
-| **DevicePostureRule** | ✅ | ✅ | ✅ CredentialsInfo | ⚠️ 直接 API | 部分完成 |
-| **DeviceSettingsPolicy** | ✅ | ✅ | ✅ CredentialsInfo | ⚠️ 直接 API | 部分完成 |
-| **GatewayRule** | ✅ | ✅ | ✅ CredentialsInfo | ⚠️ 直接 API | 部分完成 |
-| **GatewayList** | ✅ | ✅ | ✅ CredentialsInfo | ⚠️ 直接 API | 部分完成 |
-| **GatewayConfiguration** | ✅ | ✅ | ✅ CredentialsInfo | ⚠️ 直接 API | 部分完成 |
-| **R2Bucket** | ✅ | ✅ | ✅ CredentialsFromRef | ⚠️ 直接 API | 部分完成 |
-| **R2BucketDomain** | ✅ | ✅ | ✅ CredentialsFromRef | ⚠️ 直接 API | 部分完成 |
-| **R2BucketNotification** | ✅ | ✅ | ✅ CredentialsFromRef | ⚠️ 直接 API | 部分完成 |
-| **ZoneRuleset** | ✅ | ✅ | ✅ CredentialsFromRef | ⚠️ 直接 API | 部分完成 |
-| **TransformRule** | ✅ | ✅ | ✅ CredentialsFromRef | ⚠️ 直接 API | 部分完成 |
-| **RedirectRule** | ✅ | ✅ | ✅ CredentialsFromRef | ⚠️ 直接 API | 部分完成 |
-| **CloudflareDomain** | ✅ | ❌ | ⚠️ 直接 API | ⚠️ 直接 API | 待迁移 |
-| **OriginCACertificate** | ✅ | ❌ | ⚠️ 例外 (需直接API) | ⚠️ 例外 | 例外 |
-| **DomainRegistration** | ❌ | ❌ | ⚠️ 例外 (需直接API) | ⚠️ 例外 | 例外 |
-| **Ingress** | ✅ | ✅ | ⚠️ 混合模式 | ⚠️ 混合模式 | 部分迁移 |
+六层架构实施状态一览 (按数据流顺序):
+
+| 资源 | L2 Controller | L3 Service | L4 SyncState | L5 Sync Ctrl | 完成度 |
+|------|:-------------:|:----------:|:------------:|:------------:|:------:|
+| **Tunnel** | ⚠️ 待迁移 | ✅ | ✅ | ✅ | 75% |
+| **ClusterTunnel** | ⚠️ 待迁移 | ✅ | ✅ | ✅ | 75% |
+| **TunnelBinding** | ✅ | ✅ | ✅ | ✅ | 100% |
+| **DNSRecord** | ⚠️ 待迁移 | ✅ | ✅ | ✅ | 75% |
+| **VirtualNetwork** | ✅ | ✅ | ✅ | ✅ | 100% |
+| **NetworkRoute** | ✅ | ✅ | ✅ | ✅ | 100% |
+| **PrivateService** | ✅ | ✅ | ✅ | ✅ | 100% |
+| **AccessApplication** | ✅ | ✅ | ✅ | ✅ | 100% |
+| **AccessGroup** | ✅ | ✅ | ✅ | ✅ | 100% |
+| **AccessServiceToken** | ✅ | ✅ | ✅ | ✅ | 100% |
+| **AccessIdentityProvider** | ✅ | ✅ | ✅ | ✅ | 100% |
+| **DevicePostureRule** | ✅ | ✅ | ✅ | ✅ | 100% |
+| **DeviceSettingsPolicy** | ✅ | ✅ | ✅ | ✅ | 100% |
+| **GatewayRule** | ✅ | ✅ | ✅ | ✅ | 100% |
+| **GatewayList** | ✅ | ✅ | ✅ | ✅ | 100% |
+| **GatewayConfiguration** | ✅ | ✅ | ✅ | ✅ | 100% |
+| **R2Bucket** | ✅ | ✅ | ✅ | ✅ | 100% |
+| **R2BucketDomain** | ✅ | ✅ | ✅ | ✅ | 100% |
+| **R2BucketNotification** | ✅ | ✅ | ✅ | ✅ | 100% |
+| **ZoneRuleset** | ✅ | ✅ | ✅ | ✅ | 100% |
+| **TransformRule** | ✅ | ✅ | ✅ | ✅ | 100% |
+| **RedirectRule** | ✅ | ✅ | ✅ | ✅ | 100% |
+| **CloudflareDomain** | ⚠️ 待迁移 | ✅ | ❌ | ❌ | 25% |
+| **OriginCACertificate** | 🔒 例外 | ✅ | ❌ | ❌ | N/A |
+| **DomainRegistration** | 🔒 例外 | ❌ | ❌ | ❌ | N/A |
+| **Ingress** | ⚠️ 混合 | ✅ | ✅ | ✅ | 75% |
+| **Gateway** | ⚠️ 混合 | ✅ | ✅ | ✅ | 75% |
 
 **图例**:
-- ✅ CredentialsInfo: 使用 `ResolveCredentialsForService` 获取凭证元数据
-- ✅ CredentialsFromRef: 使用 `ResolveCredentialsFromRef` 获取凭证元数据
-- ✅ 临时客户端: 每次操作创建临时 API 客户端，不存储在 struct 中
-- ⚠️ 直接 API: 仍在控制器中直接创建/存储 API 客户端
-- ⚠️ 例外: 资源类型需要直接 API 调用（证书颁发、域名注册等）
+- ✅ 已按六层架构实现
+- ⚠️ 待迁移: Resource Controller 仍直接调用 Cloudflare API
+- 🔒 例外: 资源类型需要直接 API 调用 (证书颁发、域名注册等)
 
 **迁移优先级**:
-1. **P0 (高)**: Tunnel 相关 (Tunnel, ClusterTunnel) - 解决竞态条件
-2. **P1 (中)**: DNSRecord, Ingress - 高频使用
-3. **P2 (低)**: 删除操作迁移到 SyncState
+1. **P0 (完成)**: Core Services 和 Sync Controllers 全部实现
+2. **P1 (进行中)**: Resource Controllers 迁移至只调用 Service
+3. **P2 (待定)**: 删除操作完全通过 SyncState 处理
 
 ---
 

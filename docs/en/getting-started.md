@@ -11,19 +11,44 @@ This guide will help you install the Cloudflare Operator and create your first t
 
 ## Installation
 
-### Step 1: Install CRDs
+Choose one of the following installation methods:
+
+### Option A: Full Installation (Recommended for new users)
+
+Single command to install everything:
 
 ```bash
-kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator.crds.yaml
+# All-in-one: CRDs + Namespace + RBAC + Operator
+kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator-full-no-webhook.yaml
 ```
 
-### Step 2: Install Operator
+### Option B: Modular Installation (Recommended for production)
+
+For fine-grained control over installation:
 
 ```bash
-kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator.yaml
+# Step 1: Install CRDs (requires cluster-admin)
+kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator-crds.yaml
+
+# Step 2: Create namespace
+kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator-namespace.yaml
+
+# Step 3: Install operator (RBAC + Deployment)
+kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator-no-webhook.yaml
 ```
 
-### Step 3: Verify Installation
+### Available Installation Files
+
+| File | Contents | Use Case |
+|------|----------|----------|
+| `cloudflare-operator-full.yaml` | CRDs + Namespace + RBAC + Operator + Webhook | Full with cert-manager |
+| `cloudflare-operator-full-no-webhook.yaml` | CRDs + Namespace + RBAC + Operator | Full without webhook |
+| `cloudflare-operator-crds.yaml` | CRDs only | Modular installation |
+| `cloudflare-operator-namespace.yaml` | Namespace only | Modular installation |
+| `cloudflare-operator.yaml` | RBAC + Operator + Webhook | Upgrade existing installation |
+| `cloudflare-operator-no-webhook.yaml` | RBAC + Operator | Upgrade without webhook |
+
+### Verify Installation
 
 ```bash
 # Check operator pod

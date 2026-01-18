@@ -62,7 +62,11 @@ v1alpha2 uses standard Kubernetes condition types:
 Ensure you're running the latest operator version:
 
 ```bash
-kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator.yaml
+# Update CRDs first
+kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator-crds.yaml
+
+# Then update operator
+kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator-no-webhook.yaml
 ```
 
 ### Step 2: Verify Conversion Webhook
@@ -137,7 +141,7 @@ kubectl describe tunnel <name> -n <namespace>
 
 If you see version mismatch errors:
 
-1. Ensure CRDs are updated: `kubectl apply -f cloudflare-operator.crds.yaml`
+1. Ensure CRDs are updated: `kubectl apply -f cloudflare-operator-crds.yaml`
 2. Restart the operator: `kubectl rollout restart deployment -n cloudflare-operator-system`
 
 ## FAQ

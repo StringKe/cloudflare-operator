@@ -223,11 +223,25 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 	rm Dockerfile.cross
 
 .PHONY: build-installer
-build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
+build-installer: manifests generate kustomize ## Generate modular YAML installers for different deployment scenarios.
+	@echo "Building installer manifests..."
 	mkdir -p dist
 	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
+	@echo "Building base modules..."
+	# Base modules
+	$(KUSTOMIZE) build config/crd > dist/cloudflare-operator-crds.yaml
+	$(KUSTOMIZE) build config/namespace > dist/cloudflare-operator-namespace.yaml
+	$(KUSTOMIZE) build config/rbac > dist/cloudflare-operator-rbac.yaml
+	$(KUSTOMIZE) build config/manager > dist/cloudflare-operator-deployment.yaml
+	$(KUSTOMIZE) build config/webhook > dist/cloudflare-operator-webhook.yaml
+	@echo "Building composed installers..."
+	# Composed installers
 	$(KUSTOMIZE) build config/default > dist/cloudflare-operator.yaml
-	$(KUSTOMIZE) build config/crd > dist/cloudflare-operator.crds.yaml
+	$(KUSTOMIZE) build config/default-no-webhook > dist/cloudflare-operator-no-webhook.yaml
+	$(KUSTOMIZE) build config/full > dist/cloudflare-operator-full.yaml
+	$(KUSTOMIZE) build config/full-no-webhook > dist/cloudflare-operator-full-no-webhook.yaml
+	@echo "Build complete! Generated files:"
+	@ls -la dist/cloudflare-operator*.yaml
 
 ##@ Deployment
 

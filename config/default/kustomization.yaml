@@ -1,3 +1,11 @@
+# =============================================================================
+# Default Kustomization (Operator only, no CRDs, no Namespace)
+# =============================================================================
+# Output: cloudflare-operator.yaml
+# Contains: RBAC + Deployment + Webhook + CertManager
+# Does NOT contain: CRDs, Namespace
+# =============================================================================
+
 # Adds namespace to all resources.
 namespace: cloudflare-operator-system
 
@@ -15,7 +23,8 @@ namePrefix: cloudflare-operator-
 #    someName: someValue
 
 resources:
-  - ../crd
+  # NOTE: CRDs are NOT included here - use cloudflare-operator-crds.yaml separately
+  # NOTE: Namespace is NOT included here - use cloudflare-operator-namespace.yaml separately
   - ../rbac
   - ../manager
   # [WEBHOOK] To enable webhook, uncomment all the sections with [WEBHOOK] prefix including the one in
@@ -54,8 +63,10 @@ patches:
 
 # [CERTMANAGER] To enable cert-manager, uncomment all sections with 'CERTMANAGER' prefix.
 # Uncomment the following replacements to add the cert-manager CA injection annotations
+# NOTE: CRD CA injection is handled separately in config/full/kustomization.yaml
+# This file only handles Webhook CA injection (no CRDs included)
 replacements:
- - source: # Add cert-manager annotation to ValidatingWebhookConfiguration, MutatingWebhookConfiguration and CRDs
+ - source: # Add cert-manager annotation to ValidatingWebhookConfiguration and MutatingWebhookConfiguration
      kind: Certificate
      group: cert-manager.io
      version: v1
@@ -72,14 +83,6 @@ replacements:
          create: true
      - select:
          kind: MutatingWebhookConfiguration
-       fieldPaths:
-         - .metadata.annotations.[cert-manager.io/inject-ca-from]
-       options:
-         delimiter: '/'
-         index: 0
-         create: true
-     - select:
-         kind: CustomResourceDefinition
        fieldPaths:
          - .metadata.annotations.[cert-manager.io/inject-ca-from]
        options:
@@ -103,14 +106,6 @@ replacements:
          create: true
      - select:
          kind: MutatingWebhookConfiguration
-       fieldPaths:
-         - .metadata.annotations.[cert-manager.io/inject-ca-from]
-       options:
-         delimiter: '/'
-         index: 1
-         create: true
-     - select:
-         kind: CustomResourceDefinition
        fieldPaths:
          - .metadata.annotations.[cert-manager.io/inject-ca-from]
        options:

@@ -62,7 +62,11 @@ v1alpha2 使用标准 Kubernetes 条件类型：
 确保运行最新版本的 operator：
 
 ```bash
-kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator.yaml
+# 首先更新 CRDs
+kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator-crds.yaml
+
+# 然后更新 operator
+kubectl apply -f https://github.com/StringKe/cloudflare-operator/releases/latest/download/cloudflare-operator-no-webhook.yaml
 ```
 
 ### 步骤 2：验证转换 Webhook
@@ -137,7 +141,7 @@ kubectl describe tunnel <name> -n <namespace>
 
 如果看到版本不匹配错误：
 
-1. 确保 CRD 已更新：`kubectl apply -f cloudflare-operator.crds.yaml`
+1. 确保 CRD 已更新：`kubectl apply -f cloudflare-operator-crds.yaml`
 2. 重启 operator：`kubectl rollout restart deployment -n cloudflare-operator-system`
 
 ## 常见问题

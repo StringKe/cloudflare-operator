@@ -1,12 +1,5 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  labels:
-    control-plane: controller-manager
-    app.kubernetes.io/name: cloudflare-operator
-    app.kubernetes.io/managed-by: kustomize
-  name: system
----
+# NOTE: Namespace is defined separately in config/namespace/
+# Use cloudflare-operator-namespace.yaml or cloudflare-operator-full.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
