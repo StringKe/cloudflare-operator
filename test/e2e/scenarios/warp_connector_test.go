@@ -53,7 +53,7 @@ func TestWARPConnectorLifecycle(t *testing.T) {
 			},
 			Spec: v1alpha2.WARPConnectorSpec{
 				Name: "e2e-test-connector",
-				Routes: []v1alpha2.WARPRoute{
+				Routes: []v1alpha2.WARPConnectorRoute{
 					{
 						Network: "10.0.0.0/24",
 						Comment: "E2E test route",
@@ -94,7 +94,7 @@ func TestWARPConnectorLifecycle(t *testing.T) {
 		require.NoError(t, err)
 
 		// Update routes
-		connector.Spec.Routes = append(connector.Spec.Routes, v1alpha2.WARPRoute{
+		connector.Spec.Routes = append(connector.Spec.Routes, v1alpha2.WARPConnectorRoute{
 			Network: "192.168.0.0/16",
 			Comment: "Additional E2E test route",
 		})
@@ -161,9 +161,9 @@ func TestWARPConnectorWithVirtualNetwork(t *testing.T) {
 			Name: "e2e-test-vnet-for-warp",
 		},
 		Spec: v1alpha2.VirtualNetworkSpec{
-			Name:      "e2e-test-vnet-for-warp",
-			Comment:   "E2E test virtual network for WARP connector",
-			IsDefault: false,
+			Name:             "e2e-test-vnet-for-warp",
+			Comment:          "E2E test virtual network for WARP connector",
+			IsDefaultNetwork: false,
 			Cloudflare: v1alpha2.CloudflareDetails{
 				CredentialsRef: &v1alpha2.CloudflareCredentialsRef{
 					Name: testCredentialsName,
@@ -196,7 +196,7 @@ func TestWARPConnectorWithVirtualNetwork(t *testing.T) {
 			VirtualNetworkRef: &v1alpha2.VirtualNetworkRef{
 				Name: vnet.Name,
 			},
-			Routes: []v1alpha2.WARPRoute{
+			Routes: []v1alpha2.WARPConnectorRoute{
 				{
 					Network: "172.16.0.0/12",
 					Comment: "Test route with VNet",
@@ -261,7 +261,7 @@ func TestWARPConnectorMultipleRoutes(t *testing.T) {
 		},
 		Spec: v1alpha2.WARPConnectorSpec{
 			Name: "e2e-multi-route-connector",
-			Routes: []v1alpha2.WARPRoute{
+			Routes: []v1alpha2.WARPConnectorRoute{
 				{Network: "10.0.0.0/8", Comment: "Class A private network"},
 				{Network: "172.16.0.0/12", Comment: "Class B private network"},
 				{Network: "192.168.0.0/16", Comment: "Class C private network"},

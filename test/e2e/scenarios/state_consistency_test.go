@@ -58,7 +58,7 @@ func TestStateConsistencyAfterDeletion(t *testing.T) {
 					CredentialsRef: &v1alpha2.CloudflareCredentialsRef{
 						Name: testCredentialsName,
 					},
-					Zone: "example.com",
+					Domain: "example.com",
 				},
 			},
 		}
@@ -112,7 +112,7 @@ func TestStateConsistencyAfterDeletion(t *testing.T) {
 			Spec: v1alpha2.VirtualNetworkSpec{
 				Name:      "state-test-vnet",
 				Comment:   "E2E state consistency test",
-				IsDefault: false,
+				IsDefaultNetwork: false,
 				Cloudflare: v1alpha2.CloudflareDetails{
 					CredentialsRef: &v1alpha2.CloudflareCredentialsRef{
 						Name: testCredentialsName,
@@ -134,7 +134,7 @@ func TestStateConsistencyAfterDeletion(t *testing.T) {
 		var createdVNet v1alpha2.VirtualNetwork
 		err = f.Client.Get(ctx, types.NamespacedName{Name: vnet.Name}, &createdVNet)
 		require.NoError(t, err)
-		vnetID := createdVNet.Status.VirtualNetworkID
+		vnetID := createdVNet.Status.VirtualNetworkId
 
 		// Delete the VirtualNetwork
 		err = f.Client.Delete(ctx, &createdVNet)
@@ -198,7 +198,7 @@ func TestNoOrphanSyncStates(t *testing.T) {
 					CredentialsRef: &v1alpha2.CloudflareCredentialsRef{
 						Name: testCredentialsName,
 					},
-					Zone: "example.com",
+					Domain: "example.com",
 				},
 			},
 		}
@@ -278,7 +278,9 @@ func TestSyncStateSourceTracking(t *testing.T) {
 			Namespace: testNS,
 		},
 		Spec: v1alpha2.TunnelSpec{
-			Name: "source-tracking-tunnel",
+			NewTunnel: &v1alpha2.NewTunnel{
+				Name: "source-tracking-tunnel",
+			},
 			Cloudflare: v1alpha2.CloudflareDetails{
 				CredentialsRef: &v1alpha2.CloudflareCredentialsRef{
 					Name: testCredentialsName,
@@ -385,7 +387,7 @@ func TestConcurrentResourceOperations(t *testing.T) {
 						CredentialsRef: &v1alpha2.CloudflareCredentialsRef{
 							Name: testCredentialsName,
 						},
-						Zone: "example.com",
+						Domain: "example.com",
 					},
 				},
 			}
