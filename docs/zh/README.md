@@ -223,9 +223,19 @@ Operator 根据 CRD 作用域使用不同的 Secret 查找规则：
 
 ## 版本变更
 
-### v0.23.x - 统一同步架构与 E2E 测试
-- **统一同步架构**：六层架构与 CloudflareSyncState CRD
+### v0.23.x - 统一同步架构与全面测试
+- **统一同步架构**：六层架构与 CloudflareSyncState CRD（100% CRD 覆盖）
 - **E2E 测试框架**：完整的 Mock 服务器和测试基础设施
+  - WARP Connector 生命周期测试
+  - 删除处理的状态一致性测试
+  - Tunnel 生命周期 E2E 测试
+- **单元测试扩展**：L5 同步控制器和 L3 服务的新测试覆盖
+  - `lifecycle_controller_test.go` - Tunnel 生命周期同步测试
+  - `connector_controller_test.go` - WARP Connector 同步测试
+  - `lifecycle_service_test.go` - Tunnel 服务测试
+  - `connector_service_test.go` - WARP 服务测试
+  - `origincacertificate_controller_test.go` - 证书同步测试
+  - `domainregistration_controller_test.go` - 域名注册同步测试
 - **竞态条件修复**：单一同步点消除并发 API 冲突
 - **防抖机制**：500ms 聚合减少 API 调用
 

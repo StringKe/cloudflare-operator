@@ -35,7 +35,7 @@
 
 </div>
 
-> **注意**: 此项目目前处于 Alpha 阶段 (v0.18.x)。这**不是** Cloudflare 官方产品，它使用 [Cloudflare API](https://api.cloudflare.com/) 和 [cloudflared](https://github.com/cloudflare/cloudflared) 在 Kubernetes 上自动化 Zero Trust 配置。
+> **注意**: 此项目目前处于 Alpha 阶段 (v0.23.x)。这**不是** Cloudflare 官方产品，它使用 [Cloudflare API](https://api.cloudflare.com/) 和 [cloudflared](https://github.com/cloudflare/cloudflared) 在 Kubernetes 上自动化 Zero Trust 配置。
 >
 > 本项目 Fork 自 [adyanth/cloudflare-operator](https://github.com/adyanth/cloudflare-operator)，在原项目基础上扩展了完整的 Zero Trust 功能。
 
@@ -61,6 +61,8 @@ Cloudflare Zero Trust Operator 提供 Kubernetes 原生的 Cloudflare Zero Trust
 
 ## 架构
 
+本 Operator 采用**统一同步架构**，包含六层设计以确保并发安全并消除竞态条件：
+
 ```mermaid
 flowchart TB
     subgraph Internet["互联网"]
@@ -73,26 +75,29 @@ flowchart TB
     end
 
     subgraph K8s["Kubernetes 集群"]
-        subgraph CRDs["自定义资源"]
-            Tunnel["Tunnel / ClusterTunnel"]
-            TB["TunnelBinding"]
-            VNet["VirtualNetwork"]
-            Route["NetworkRoute"]
+        subgraph Layer1["Layer 1: K8s 资源"]
+            CRDs["自定义资源<br/>(Tunnel, DNSRecord, AccessApp 等)"]
+            K8sNative["Kubernetes 原生<br/>(Ingress, Gateway API)"]
         end
 
-        subgraph K8sNative["Kubernetes 原生"]
-            Ingress["Ingress"]
-            Gateway["Gateway API"]
+        subgraph Layer2["Layer 2: 资源控制器"]
+            RC["资源控制器<br/>(轻量级，每个 100-150 行)"]
         end
 
-        subgraph Operator["Cloudflare Operator"]
-            Controller["控制器管理器"]
+        subgraph Layer3["Layer 3: 核心服务"]
+            SVC["核心服务<br/>(TunnelConfigService, DNSService 等)"]
+        end
+
+        subgraph Layer4["Layer 4: SyncState CRD"]
+            SyncState["CloudflareSyncState<br/>(乐观锁共享状态)"]
+        end
+
+        subgraph Layer5["Layer 5: 同步控制器"]
+            SC["同步控制器<br/>(防抖、聚合、Hash 检测)"]
         end
 
         subgraph Managed["托管资源"]
-            ConfigMap["ConfigMap"]
-            Secret["Secret"]
-            Deployment["cloudflared"]
+            Deployment["cloudflared 部署"]
         end
 
         subgraph App["应用"]
@@ -101,15 +106,33 @@ flowchart TB
         end
     end
 
-    CRDs -.->|监听| Controller
-    K8sNative -.->|监听| Controller
-    Controller -->|创建| Managed
-    Controller -->|API 调用| API
+    CRDs -.->|监听| RC
+    K8sNative -.->|监听| RC
+    RC -->|注册配置| SVC
+    SVC -->|更新| SyncState
+    SyncState -.->|监听| SC
+    SC -->|"API 调用<br/>(唯一同步点)"| API
+    SC -->|创建| Managed
     Managed -->|代理| Service
     Service --> Pod
     Users -->|HTTPS/WARP| Edge
     Edge <-->|隧道| Deployment
+
+    style Layer4 fill:#f9f,stroke:#333,stroke-width:2px
+    style SC fill:#9f9,stroke:#333,stroke-width:2px
 ```
+
+### 架构优势
+
+| 特性 | 优势 |
+|------|------|
+| **单一同步点** | 只有同步控制器调用 Cloudflare API，消除竞态条件 |
+| **乐观锁** | SyncState CRD 使用 K8s resourceVersion 实现多实例安全 |
+| **防抖** | 500ms 延迟将多次变更聚合为单次 API 调用 |
+| **Hash 检测** | 配置无变化时跳过同步，减少 API 调用 |
+| **关注点分离** | 每层有明确的单一职责 |
+
+> **说明**: 详细架构设计请参阅 [统一同步架构设计](docs/design/UNIFIED_SYNC_ARCHITECTURE.md)。
 
 ## 快速开始
 
@@ -256,7 +279,8 @@ tunnelRef:
 | CRD | API 版本 | 作用域 | 说明 |
 |-----|---------|--------|------|
 | DNSRecord | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | DNS 记录管理 |
-| WARPConnector | `networking.cloudflare-operator.io/v1alpha2` | Cluster | WARP Connector 部署 |
+| WARPConnector | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | WARP Connector 部署 |
+| AccessTunnel | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | Access 隧道配置 |
 
 ### SSL/TLS 与证书
 

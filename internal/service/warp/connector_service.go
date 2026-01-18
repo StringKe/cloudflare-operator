@@ -183,12 +183,13 @@ func (s *ConnectorService) Unregister(ctx context.Context, connectorName string,
 	// Get the SyncState first
 	syncState, err := s.BaseService.GetSyncState(ctx, ConnectorResourceType, syncStateName)
 	if err != nil {
-		// If not found, nothing to unregister
-		if client.IgnoreNotFound(err) == nil {
-			logger.V(1).Info("SyncState not found, nothing to unregister")
-			return nil
-		}
 		return fmt.Errorf("get syncstate: %w", err)
+	}
+
+	// If SyncState doesn't exist, nothing to unregister
+	if syncState == nil {
+		logger.V(1).Info("SyncState not found, nothing to unregister")
+		return nil
 	}
 
 	// Remove the source

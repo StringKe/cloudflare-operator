@@ -223,9 +223,19 @@ See [Namespace Restrictions](namespace-restrictions.md) for detailed information
 
 ## Recent Changes
 
-### v0.23.x - Unified Sync Architecture & E2E Testing
-- **Unified Sync Architecture**: Six-layer architecture with CloudflareSyncState CRD
+### v0.23.x - Unified Sync Architecture & Comprehensive Testing
+- **Unified Sync Architecture**: Six-layer architecture with CloudflareSyncState CRD (100% CRD coverage)
 - **E2E Test Framework**: Comprehensive mock server and test infrastructure
+  - WARP Connector lifecycle tests
+  - State consistency tests for deletion handling
+  - Tunnel lifecycle E2E tests
+- **Unit Test Expansion**: New test coverage for L5 Sync Controllers and L3 Services
+  - `lifecycle_controller_test.go` - Tunnel lifecycle sync tests
+  - `connector_controller_test.go` - WARP Connector sync tests
+  - `lifecycle_service_test.go` - Tunnel service tests
+  - `connector_service_test.go` - WARP service tests
+  - `origincacertificate_controller_test.go` - Certificate sync tests
+  - `domainregistration_controller_test.go` - Domain registration sync tests
 - **Race Condition Fix**: Single sync point eliminates concurrent API conflicts
 - **Debouncing**: 500ms aggregation reduces API calls
 
