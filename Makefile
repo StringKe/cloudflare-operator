@@ -140,17 +140,40 @@ test-e2e-setup: kind ## Set up Kind cluster for E2E tests
 	$(MAKE) docker-build IMG=$(IMAGE_TAG_BASE):e2e
 	@echo "Loading image to Kind cluster..."
 	$(KIND) load docker-image $(IMAGE_TAG_BASE):e2e --name $(KIND_CLUSTER_NAME)
+	@echo "Building mock server image..."
+	$(MAKE) docker-build-mockserver
+	@echo "Loading mock server image to Kind cluster..."
+	$(KIND) load docker-image $(IMAGE_TAG_BASE)-mockserver:e2e --name $(KIND_CLUSTER_NAME)
 	@echo "Installing CRDs..."
 	$(MAKE) install
 	@echo "Deploying operator..."
 	$(MAKE) deploy IMG=$(IMAGE_TAG_BASE):e2e
 	@echo "Waiting for operator to be ready..."
 	$(KUBECTL) wait --for=condition=available --timeout=120s deployment/cloudflare-operator-controller-manager -n cloudflare-operator-system
+	@echo "Deploying mock server..."
+	$(MAKE) deploy-mockserver
+	@echo "Patching operator to use mock server..."
+	$(MAKE) patch-operator-mockserver
 	@echo "E2E cluster setup complete"
 
 .PHONY: docker-build-mockserver
 docker-build-mockserver: ## Build mockserver docker image for E2E tests
 	$(CONTAINER_TOOL) build -t $(IMAGE_TAG_BASE)-mockserver:e2e -f test/mockserver/Dockerfile .
+
+.PHONY: deploy-mockserver
+deploy-mockserver: ## Deploy mock server to cluster for E2E tests
+	@echo "Creating mock server namespace..."
+	-$(KUBECTL) create namespace cloudflare-mock 2>/dev/null || true
+	@echo "Deploying mock server..."
+	$(KUBECTL) apply -f test/e2e/config/mockserver.yaml
+
+.PHONY: patch-operator-mockserver
+patch-operator-mockserver: ## Patch operator to use mock server URL
+	@echo "Patching operator deployment to use mock server..."
+	$(KUBECTL) set env deployment/cloudflare-operator-controller-manager -n cloudflare-operator-system \
+		CLOUDFLARE_API_BASE_URL=http://mockserver.cloudflare-mock.svc.cluster.local:8787/client/v4
+	@echo "Waiting for operator rollout..."
+	$(KUBECTL) rollout status deployment/cloudflare-operator-controller-manager -n cloudflare-operator-system --timeout=120s
 
 .PHONY: test-e2e-cleanup
 test-e2e-cleanup: kind ## Clean up Kind cluster after E2E tests

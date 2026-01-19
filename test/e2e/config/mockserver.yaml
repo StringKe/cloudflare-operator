@@ -28,7 +28,7 @@ spec:
     spec:
       containers:
       - name: mockserver
-        image: cloudflare-mockserver:e2e-test
+        image: ghcr.io/stringke/cloudflare-operator-mockserver:e2e
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8787

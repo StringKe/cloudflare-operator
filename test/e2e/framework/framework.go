@@ -47,7 +47,7 @@ const (
 	// MockServerName is the name of the mock server deployment/service
 	MockServerName = "mockserver"
 	// MockServerImage is the Docker image for the mock server
-	MockServerImage = "cloudflare-mockserver:e2e-test"
+	MockServerImage = "ghcr.io/stringke/cloudflare-operator-mockserver:e2e"
 	// MockServerPort is the port the mock server listens on
 	MockServerPort = 8787
 )
