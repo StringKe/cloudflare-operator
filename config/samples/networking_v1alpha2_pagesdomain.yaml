@@ -1,0 +1,33 @@
+# PagesDomain - Cloudflare Pages Custom Domain
+# Pages 自定义域名配置示例
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDomain
+metadata:
+  name: my-app-domain
+  namespace: default
+spec:
+  # Custom domain name
+  # 自定义域名
+  domain: app.example.com
+
+  # Reference to the PagesProject
+  # 引用 PagesProject
+  projectRef:
+    # Option 1: Reference by K8s resource name
+    # 方式 1：通过 K8s 资源名引用
+    name: my-app
+
+    # Option 2: Reference by Cloudflare project name directly
+    # 方式 2：直接指定 Cloudflare 项目名
+    # cloudflareId: my-app
+    # cloudflareName: my-app
+
+  # Cloudflare credentials
+  # Cloudflare 凭证配置
+  cloudflare:
+    accountId: "<your-account-id>"  # Replace with your Cloudflare account ID
+    secret: cloudflare-credentials   # Secret containing API token
+
+  # Deletion policy: Delete or Orphan (default: Delete)
+  # 删除策略：Delete 或 Orphan（默认：Delete）
+  deletionPolicy: Delete

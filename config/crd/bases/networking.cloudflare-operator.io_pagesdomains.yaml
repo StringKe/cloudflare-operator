@@ -1,0 +1,303 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  name: pagesdomains.networking.cloudflare-operator.io
+spec:
+  group: networking.cloudflare-operator.io
+  names:
+    kind: PagesDomain
+    listKind: PagesDomainList
+    plural: pagesdomains
+    shortNames:
+    - cfpdom
+    - pagesdomain
+    singular: pagesdomain
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.domain
+      name: Domain
+      type: string
+    - jsonPath: .status.projectName
+      name: Project
+      type: string
+    - jsonPath: .status.status
+      name: Status
+      type: string
+    - jsonPath: .status.state
+      name: State
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          PagesDomain manages a custom domain for a Cloudflare Pages project.
+          Custom domains allow you to serve your Pages project from your own domain
+          instead of the default *.pages.dev subdomain.
+
+          The controller adds and manages custom domains for Pages projects,
+          including SSL certificate provisioning and DNS validation.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: PagesDomainSpec defines the desired state of PagesDomain
+            properties:
+              cloudflare:
+                description: Cloudflare contains Cloudflare-specific configuration.
+                properties:
+                  CLOUDFLARE_API_KEY:
+                    default: CLOUDFLARE_API_KEY
+                    description: |-
+                      Key in the secret to use for Cloudflare API Key, defaults to CLOUDFLARE_API_KEY. Needs Email also to be provided.
+                      For Delete operations for new tunnels only, or as an alternate to API Token
+                    type: string
+                  CLOUDFLARE_API_TOKEN:
+                    default: CLOUDFLARE_API_TOKEN
+                    description: Key in the secret to use for Cloudflare API token,
+                      defaults to CLOUDFLARE_API_TOKEN
+                    type: string
+                  CLOUDFLARE_TUNNEL_CREDENTIAL_FILE:
+                    default: CLOUDFLARE_TUNNEL_CREDENTIAL_FILE
+                    description: Key in the secret to use as credentials.json for
+                      an existing tunnel, defaults to CLOUDFLARE_TUNNEL_CREDENTIAL_FILE
+                    type: string
+                  CLOUDFLARE_TUNNEL_CREDENTIAL_SECRET:
+                    default: CLOUDFLARE_TUNNEL_CREDENTIAL_SECRET
+                    description: Key in the secret to use as tunnel secret for an
+                      existing tunnel, defaults to CLOUDFLARE_TUNNEL_CREDENTIAL_SECRET
+                    type: string
+                  accountId:
+                    description: Account ID in Cloudflare. AccountId and AccountName
+                      cannot be both empty. If both are provided, Account ID is used
+                      if valid, else falls back to Account Name.
+                    type: string
+                  accountName:
+                    description: Account Name in Cloudflare. AccountName and AccountId
+                      cannot be both empty. If both are provided, Account ID is used
+                      if valid, else falls back to Account Name.
+                    type: string
+                  credentialsRef:
+                    description: |-
+                      CredentialsRef references a CloudflareCredentials resource for API authentication.
+                      When specified, this takes precedence over inline credential fields.
+                      This is the recommended way to configure credentials.
+                    properties:
+                      name:
+                        description: Name of the CloudflareCredentials resource to
+                          use
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  domain:
+                    description: |-
+                      Cloudflare Domain to which this tunnel belongs to.
+                      Required if not using credentialsRef with a defaultDomain.
+                    type: string
+                  email:
+                    description: Email to use along with API Key for Delete operations
+                      for new tunnels only, or as an alternate to API Token
+                    type: string
+                  secret:
+                    description: Secret containing Cloudflare API key/token (legacy,
+                      use credentialsRef instead)
+                    type: string
+                  zoneId:
+                    description: |-
+                      ZoneId is the Cloudflare Zone ID for DNS operations.
+                      If not specified, it will be looked up via CloudflareDomain or the domain field.
+                      Specifying this directly is useful for multi-zone scenarios.
+                    type: string
+                type: object
+              deletionPolicy:
+                default: Delete
+                description: |-
+                  DeletionPolicy specifies what happens when the Kubernetes resource is deleted.
+                  Delete: The custom domain will be removed from the Pages project.
+                  Orphan: The custom domain will be left in Cloudflare.
+                enum:
+                - Delete
+                - Orphan
+                type: string
+              domain:
+                description: Domain is the custom domain name.
+                pattern: ^[a-zA-Z0-9][a-zA-Z0-9-\.]*[a-zA-Z0-9]$
+                type: string
+              projectRef:
+                description: |-
+                  ProjectRef references the PagesProject.
+                  Either Name or CloudflareID/CloudflareName must be specified.
+                properties:
+                  cloudflareId:
+                    description: |-
+                      CloudflareID is the Cloudflare project name (same as ID for Pages).
+                      Use this to reference a project that is not managed by the operator.
+                    type: string
+                  cloudflareName:
+                    description: |-
+                      CloudflareName is an alias for CloudflareID (same as ID for Pages).
+                      Provided for clarity and consistency.
+                    type: string
+                  name:
+                    description: |-
+                      Name is the K8s PagesProject resource name.
+                      The controller will look up the Cloudflare project name from this resource.
+                    type: string
+                type: object
+            required:
+            - cloudflare
+            - domain
+            - projectRef
+            type: object
+          status:
+            description: PagesDomainStatus defines the observed state of PagesDomain
+            properties:
+              accountId:
+                description: AccountID is the Cloudflare account ID.
+                type: string
+              certificateAuthority:
+                description: CertificateAuthority is the Certificate Authority used
+                  for SSL.
+                type: string
+              conditions:
+                description: Conditions represent the latest available observations.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              domainId:
+                description: DomainID is the Cloudflare domain identifier.
+                type: string
+              message:
+                description: Message provides additional information about the current
+                  state.
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the last observed generation.
+                format: int64
+                type: integer
+              projectName:
+                description: ProjectName is the Cloudflare project name.
+                type: string
+              state:
+                description: State is the current state of the domain.
+                enum:
+                - Pending
+                - Verifying
+                - Active
+                - Moved
+                - Deleting
+                - Error
+                type: string
+              status:
+                description: Status is the domain status from Cloudflare (active,
+                  pending, moved, etc.).
+                type: string
+              validationMethod:
+                description: ValidationMethod is the validation method (txt, http,
+                  cname).
+                type: string
+              validationStatus:
+                description: ValidationStatus is the validation status.
+                type: string
+              verificationData:
+                description: VerificationData contains DNS verification records if
+                  needed.
+                properties:
+                  recordName:
+                    description: RecordName is the DNS record name to create.
+                    type: string
+                  recordType:
+                    description: RecordType is the DNS record type required (TXT,
+                      CNAME, etc.).
+                    type: string
+                  recordValue:
+                    description: RecordValue is the DNS record value to set.
+                    type: string
+                type: object
+              zoneId:
+                description: ZoneID is the zone ID if the domain is in the same Cloudflare
+                  account.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

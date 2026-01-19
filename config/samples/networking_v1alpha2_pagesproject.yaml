@@ -1,0 +1,70 @@
+# PagesProject - Cloudflare Pages Project Configuration
+# Pages 项目配置示例
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesProject
+metadata:
+  name: my-app
+  namespace: default
+spec:
+  # Project name in Cloudflare (must be unique per account)
+  # 项目名称（在账户内必须唯一）
+  name: my-app
+
+  # Production branch
+  # 生产分支
+  productionBranch: main
+
+  # Source configuration (optional, for Git-connected projects)
+  # 源码配置（可选，用于 Git 连接的项目）
+  source:
+    type: github
+    github:
+      owner: your-github-username
+      repo: your-repo-name
+      productionDeploymentsEnabled: true
+      previewDeploymentsEnabled: true
+      prCommentsEnabled: true
+      deploymentsEnabled: true
+
+  # Build configuration
+  # 构建配置
+  buildConfig:
+    buildCommand: npm run build
+    destinationDir: dist
+    rootDir: ""
+    buildCaching: true
+
+  # Deployment environment configurations
+  # 部署环境配置
+  deploymentConfigs:
+    # Preview environment
+    # 预览环境
+    preview:
+      compatibilityDate: "2024-01-01"
+      compatibilityFlags:
+        - nodejs_compat
+      environmentVariables:
+        NODE_ENV:
+          value: development
+          type: plain_text
+
+    # Production environment
+    # 生产环境
+    production:
+      compatibilityDate: "2024-01-01"
+      compatibilityFlags:
+        - nodejs_compat
+      environmentVariables:
+        NODE_ENV:
+          value: production
+          type: plain_text
+
+  # Cloudflare credentials
+  # Cloudflare 凭证配置
+  cloudflare:
+    accountId: "<your-account-id>"  # Replace with your Cloudflare account ID
+    secret: cloudflare-credentials   # Secret containing API token
+
+  # Deletion policy: Delete or Orphan (default: Delete)
+  # 删除策略：Delete 或 Orphan（默认：Delete）
+  deletionPolicy: Delete

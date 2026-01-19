@@ -121,6 +121,30 @@ type CloudflareClient interface {
 
 	// Gateway Configuration operations
 	UpdateGatewayConfiguration(ctx context.Context, params GatewayConfigurationParams) (*GatewayConfigurationResult, error)
+
+	// Pages Project operations
+	CreatePagesProject(ctx context.Context, params PagesProjectParams) (*PagesProjectResult, error)
+	GetPagesProject(ctx context.Context, projectName string) (*PagesProjectResult, error)
+	UpdatePagesProject(ctx context.Context, projectName string, params PagesProjectParams) (*PagesProjectResult, error)
+	DeletePagesProject(ctx context.Context, projectName string) error
+	ListPagesProjects(ctx context.Context) ([]PagesProjectResult, error)
+	PurgePagesProjectBuildCache(ctx context.Context, projectName string) error
+
+	// Pages Domain operations
+	AddPagesDomain(ctx context.Context, projectName, domain string) (*PagesDomainResult, error)
+	GetPagesDomain(ctx context.Context, projectName, domain string) (*PagesDomainResult, error)
+	DeletePagesDomain(ctx context.Context, projectName, domain string) error
+	PatchPagesDomain(ctx context.Context, projectName, domain string) (*PagesDomainResult, error)
+	ListPagesDomains(ctx context.Context, projectName string) ([]PagesDomainResult, error)
+
+	// Pages Deployment operations
+	CreatePagesDeployment(ctx context.Context, projectName, branch string) (*PagesDeploymentResult, error)
+	GetPagesDeployment(ctx context.Context, projectName, deploymentID string) (*PagesDeploymentResult, error)
+	DeletePagesDeployment(ctx context.Context, projectName, deploymentID string) error
+	ListPagesDeployments(ctx context.Context, projectName string) ([]PagesDeploymentResult, error)
+	RetryPagesDeployment(ctx context.Context, projectName, deploymentID string) (*PagesDeploymentResult, error)
+	RollbackPagesDeployment(ctx context.Context, projectName, deploymentID string) (*PagesDeploymentResult, error)
+	GetPagesDeploymentLogs(ctx context.Context, projectName, deploymentID string) (*PagesDeploymentLogsResult, error)
 }
 
 // Ensure API implements CloudflareClient

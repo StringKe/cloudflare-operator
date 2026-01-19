@@ -46,6 +46,10 @@ resources:
 - bases/networking.cloudflare-operator.io_redirectrules.yaml
 # Registrar CRDs (Enterprise)
 - bases/networking.cloudflare-operator.io_domainregistrations.yaml
+# Pages CRDs
+- bases/networking.cloudflare-operator.io_pagesprojects.yaml
+- bases/networking.cloudflare-operator.io_pagesdomains.yaml
+- bases/networking.cloudflare-operator.io_pagesdeployments.yaml
 # Internal Sync State CRD (used for multi-controller coordination)
 - bases/networking.cloudflare-operator.io_cloudflaresyncstates.yaml
 #+kubebuilder:scaffold:crdkustomizeresource

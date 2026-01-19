@@ -105,6 +105,9 @@ rules:
   - gatewayrules
   - networkroutes
   - origincacertificates
+  - pagesdeployments
+  - pagesdomains
+  - pagesprojects
   - privateservices
   - r2bucketdomains
   - r2bucketnotifications
@@ -145,6 +148,9 @@ rules:
   - gatewayrules/finalizers
   - networkroutes/finalizers
   - origincacertificates/finalizers
+  - pagesdeployments/finalizers
+  - pagesdomains/finalizers
+  - pagesprojects/finalizers
   - privateservices/finalizers
   - r2bucketdomains/finalizers
   - r2bucketnotifications/finalizers
@@ -180,6 +186,9 @@ rules:
   - gatewayrules/status
   - networkroutes/status
   - origincacertificates/status
+  - pagesdeployments/status
+  - pagesdomains/status
+  - pagesprojects/status
   - privateservices/status
   - r2bucketdomains/status
   - r2bucketnotifications/status

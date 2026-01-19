@@ -1,0 +1,75 @@
+# PagesDeployment - Cloudflare Pages Deployment Management
+# Pages 部署管理配置示例
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDeployment
+metadata:
+  name: my-app-deployment
+  namespace: default
+spec:
+  # Reference to the PagesProject
+  # 引用 PagesProject
+  projectRef:
+    # Option 1: Reference by K8s resource name
+    # 方式 1：通过 K8s 资源名引用
+    name: my-app
+
+    # Option 2: Reference by Cloudflare project name directly
+    # 方式 2：直接指定 Cloudflare 项目名
+    # cloudflareId: my-app
+    # cloudflareName: my-app
+
+  # Branch to deploy (optional for Git-connected projects)
+  # 部署分支（用于 Git 连接的项目）
+  branch: main
+
+  # Deployment action: create, retry, or rollback
+  # 部署操作：create（创建）、retry（重试）或 rollback（回滚）
+  action: create
+
+  # Target deployment ID (required for retry and rollback actions)
+  # 目标部署 ID（retry 和 rollback 操作需要）
+  # targetDeploymentId: "<deployment-id>"
+
+  # Purge build cache before deployment
+  # 部署前清除构建缓存
+  purgeBuildCache: false
+
+  # Cloudflare credentials
+  # Cloudflare 凭证配置
+  cloudflare:
+    accountId: "<your-account-id>"  # Replace with your Cloudflare account ID
+    secret: cloudflare-credentials   # Secret containing API token
+
+---
+# Example: Retry a failed deployment
+# 示例：重试失败的部署
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDeployment
+metadata:
+  name: my-app-deployment-retry
+  namespace: default
+spec:
+  projectRef:
+    name: my-app
+  action: retry
+  targetDeploymentId: "<failed-deployment-id>"
+  cloudflare:
+    accountId: "<your-account-id>"
+    secret: cloudflare-credentials
+
+---
+# Example: Rollback to a previous deployment
+# 示例：回滚到之前的部署
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDeployment
+metadata:
+  name: my-app-deployment-rollback
+  namespace: default
+spec:
+  projectRef:
+    name: my-app
+  action: rollback
+  targetDeploymentId: "<previous-deployment-id>"
+  cloudflare:
+    accountId: "<your-account-id>"
+    secret: cloudflare-credentials

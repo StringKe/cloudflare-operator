@@ -29,6 +29,9 @@ import (
 	"github.com/StringKe/cloudflare-operator/internal/controller/ingress"
 	"github.com/StringKe/cloudflare-operator/internal/controller/networkroute"
 	"github.com/StringKe/cloudflare-operator/internal/controller/origincacertificate"
+	"github.com/StringKe/cloudflare-operator/internal/controller/pagesdeployment"
+	"github.com/StringKe/cloudflare-operator/internal/controller/pagesdomain"
+	"github.com/StringKe/cloudflare-operator/internal/controller/pagesproject"
 	"github.com/StringKe/cloudflare-operator/internal/controller/privateservice"
 	"github.com/StringKe/cloudflare-operator/internal/controller/r2bucket"
 	"github.com/StringKe/cloudflare-operator/internal/controller/r2bucketdomain"
@@ -46,6 +49,7 @@ import (
 	domainsync "github.com/StringKe/cloudflare-operator/internal/sync/domain"
 	gatewaysync "github.com/StringKe/cloudflare-operator/internal/sync/gateway"
 	networkroutesync "github.com/StringKe/cloudflare-operator/internal/sync/networkroute"
+	pagessync "github.com/StringKe/cloudflare-operator/internal/sync/pages"
 	privateservicesync "github.com/StringKe/cloudflare-operator/internal/sync/privateservice"
 	r2sync "github.com/StringKe/cloudflare-operator/internal/sync/r2"
 	rulesetsync "github.com/StringKe/cloudflare-operator/internal/sync/ruleset"
@@ -478,6 +482,31 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "RedirectRule")
 		os.Exit(1)
 	}
+	// Pages Project controller (L2)
+	if err = (&pagesproject.PagesProjectReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "PagesProject")
+		os.Exit(1)
+	}
+	// Pages Domain controller (L2)
+	if err = (&pagesdomain.PagesDomainReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "PagesDomain")
+		os.Exit(1)
+	}
+	// Pages Deployment controller (L2)
+	if err = (&pagesdeployment.PagesDeploymentReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "PagesDeployment")
+		os.Exit(1)
+	}
+
 	// DomainRegistration service for SyncState management
 	domainRegSvc := domainsvc.NewDomainRegistrationService(mgr.GetClient())
 
@@ -695,6 +724,24 @@ func main() {
 	// WARPConnectorSyncController handles WARP connector lifecycle via Cloudflare API
 	if err = warpsync.NewConnectorController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WARPConnectorSync")
+		os.Exit(1)
+	}
+
+	// PagesProjectSyncController syncs PagesProject configuration to Cloudflare API
+	if err = pagessync.NewProjectSyncController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "PagesProjectSync")
+		os.Exit(1)
+	}
+
+	// PagesDomainSyncController syncs PagesDomain configuration to Cloudflare API
+	if err = pagessync.NewDomainSyncController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "PagesDomainSync")
+		os.Exit(1)
+	}
+
+	// PagesDeploymentSyncController syncs PagesDeployment configuration to Cloudflare API
+	if err = pagessync.NewDeploymentSyncController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "PagesDeploymentSync")
 		os.Exit(1)
 	}
 

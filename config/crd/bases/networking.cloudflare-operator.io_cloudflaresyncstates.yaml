@@ -120,6 +120,9 @@ spec:
                 - DevicePostureRule
                 - DeviceSettingsPolicy
                 - WARPConnector
+                - PagesProject
+                - PagesDomain
+                - PagesDeployment
                 type: string
               sources:
                 description: |-

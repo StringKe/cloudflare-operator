@@ -41,6 +41,21 @@ func (m *MockCloudflareClient) EXPECT() *MockCloudflareClientMockRecorder {
 	return m.recorder
 }
 
+// AddPagesDomain mocks base method.
+func (m *MockCloudflareClient) AddPagesDomain(ctx context.Context, projectName, domain string) (*cf.PagesDomainResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AddPagesDomain", ctx, projectName, domain)
+	ret0, _ := ret[0].(*cf.PagesDomainResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// AddPagesDomain indicates an expected call of AddPagesDomain.
+func (mr *MockCloudflareClientMockRecorder) AddPagesDomain(ctx, projectName, domain any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddPagesDomain", reflect.TypeOf((*MockCloudflareClient)(nil).AddPagesDomain), ctx, projectName, domain)
+}
+
 // CreateAccessApplication mocks base method.
 func (m *MockCloudflareClient) CreateAccessApplication(ctx context.Context, params cf.AccessApplicationParams) (*cf.AccessApplicationResult, error) {
 	m.ctrl.T.Helper()
@@ -174,6 +189,36 @@ func (m *MockCloudflareClient) CreateGatewayRule(ctx context.Context, params cf.
 func (mr *MockCloudflareClientMockRecorder) CreateGatewayRule(ctx, params any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateGatewayRule", reflect.TypeOf((*MockCloudflareClient)(nil).CreateGatewayRule), ctx, params)
+}
+
+// CreatePagesDeployment mocks base method.
+func (m *MockCloudflareClient) CreatePagesDeployment(ctx context.Context, projectName, branch string) (*cf.PagesDeploymentResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CreatePagesDeployment", ctx, projectName, branch)
+	ret0, _ := ret[0].(*cf.PagesDeploymentResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CreatePagesDeployment indicates an expected call of CreatePagesDeployment.
+func (mr *MockCloudflareClientMockRecorder) CreatePagesDeployment(ctx, projectName, branch any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreatePagesDeployment", reflect.TypeOf((*MockCloudflareClient)(nil).CreatePagesDeployment), ctx, projectName, branch)
+}
+
+// CreatePagesProject mocks base method.
+func (m *MockCloudflareClient) CreatePagesProject(ctx context.Context, params cf.PagesProjectParams) (*cf.PagesProjectResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CreatePagesProject", ctx, params)
+	ret0, _ := ret[0].(*cf.PagesProjectResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CreatePagesProject indicates an expected call of CreatePagesProject.
+func (mr *MockCloudflareClientMockRecorder) CreatePagesProject(ctx, params any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreatePagesProject", reflect.TypeOf((*MockCloudflareClient)(nil).CreatePagesProject), ctx, params)
 }
 
 // CreateTunnel mocks base method.
@@ -375,6 +420,48 @@ func (m *MockCloudflareClient) DeleteGatewayRule(ctx context.Context, ruleID str
 func (mr *MockCloudflareClientMockRecorder) DeleteGatewayRule(ctx, ruleID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteGatewayRule", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteGatewayRule), ctx, ruleID)
+}
+
+// DeletePagesDeployment mocks base method.
+func (m *MockCloudflareClient) DeletePagesDeployment(ctx context.Context, projectName, deploymentID string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeletePagesDeployment", ctx, projectName, deploymentID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// DeletePagesDeployment indicates an expected call of DeletePagesDeployment.
+func (mr *MockCloudflareClientMockRecorder) DeletePagesDeployment(ctx, projectName, deploymentID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeletePagesDeployment", reflect.TypeOf((*MockCloudflareClient)(nil).DeletePagesDeployment), ctx, projectName, deploymentID)
+}
+
+// DeletePagesDomain mocks base method.
+func (m *MockCloudflareClient) DeletePagesDomain(ctx context.Context, projectName, domain string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeletePagesDomain", ctx, projectName, domain)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// DeletePagesDomain indicates an expected call of DeletePagesDomain.
+func (mr *MockCloudflareClientMockRecorder) DeletePagesDomain(ctx, projectName, domain any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeletePagesDomain", reflect.TypeOf((*MockCloudflareClient)(nil).DeletePagesDomain), ctx, projectName, domain)
+}
+
+// DeletePagesProject mocks base method.
+func (m *MockCloudflareClient) DeletePagesProject(ctx context.Context, projectName string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeletePagesProject", ctx, projectName)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// DeletePagesProject indicates an expected call of DeletePagesProject.
+func (mr *MockCloudflareClientMockRecorder) DeletePagesProject(ctx, projectName any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeletePagesProject", reflect.TypeOf((*MockCloudflareClient)(nil).DeletePagesProject), ctx, projectName)
 }
 
 // DeleteTunnel mocks base method.
@@ -628,6 +715,66 @@ func (m *MockCloudflareClient) GetManagedDnsTxt(ctx context.Context, fqdn string
 func (mr *MockCloudflareClientMockRecorder) GetManagedDnsTxt(ctx, fqdn any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetManagedDnsTxt", reflect.TypeOf((*MockCloudflareClient)(nil).GetManagedDnsTxt), ctx, fqdn)
+}
+
+// GetPagesDeployment mocks base method.
+func (m *MockCloudflareClient) GetPagesDeployment(ctx context.Context, projectName, deploymentID string) (*cf.PagesDeploymentResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetPagesDeployment", ctx, projectName, deploymentID)
+	ret0, _ := ret[0].(*cf.PagesDeploymentResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetPagesDeployment indicates an expected call of GetPagesDeployment.
+func (mr *MockCloudflareClientMockRecorder) GetPagesDeployment(ctx, projectName, deploymentID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPagesDeployment", reflect.TypeOf((*MockCloudflareClient)(nil).GetPagesDeployment), ctx, projectName, deploymentID)
+}
+
+// GetPagesDeploymentLogs mocks base method.
+func (m *MockCloudflareClient) GetPagesDeploymentLogs(ctx context.Context, projectName, deploymentID string) (*cf.PagesDeploymentLogsResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetPagesDeploymentLogs", ctx, projectName, deploymentID)
+	ret0, _ := ret[0].(*cf.PagesDeploymentLogsResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetPagesDeploymentLogs indicates an expected call of GetPagesDeploymentLogs.
+func (mr *MockCloudflareClientMockRecorder) GetPagesDeploymentLogs(ctx, projectName, deploymentID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPagesDeploymentLogs", reflect.TypeOf((*MockCloudflareClient)(nil).GetPagesDeploymentLogs), ctx, projectName, deploymentID)
+}
+
+// GetPagesDomain mocks base method.
+func (m *MockCloudflareClient) GetPagesDomain(ctx context.Context, projectName, domain string) (*cf.PagesDomainResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetPagesDomain", ctx, projectName, domain)
+	ret0, _ := ret[0].(*cf.PagesDomainResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetPagesDomain indicates an expected call of GetPagesDomain.
+func (mr *MockCloudflareClientMockRecorder) GetPagesDomain(ctx, projectName, domain any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPagesDomain", reflect.TypeOf((*MockCloudflareClient)(nil).GetPagesDomain), ctx, projectName, domain)
+}
+
+// GetPagesProject mocks base method.
+func (m *MockCloudflareClient) GetPagesProject(ctx context.Context, projectName string) (*cf.PagesProjectResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetPagesProject", ctx, projectName)
+	ret0, _ := ret[0].(*cf.PagesProjectResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetPagesProject indicates an expected call of GetPagesProject.
+func (mr *MockCloudflareClientMockRecorder) GetPagesProject(ctx, projectName any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPagesProject", reflect.TypeOf((*MockCloudflareClient)(nil).GetPagesProject), ctx, projectName)
 }
 
 // GetSplitTunnelExclude mocks base method.
@@ -899,6 +1046,80 @@ func (mr *MockCloudflareClientMockRecorder) ListGatewayRulesByName(ctx, name any
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListGatewayRulesByName", reflect.TypeOf((*MockCloudflareClient)(nil).ListGatewayRulesByName), ctx, name)
 }
 
+// ListPagesDeployments mocks base method.
+func (m *MockCloudflareClient) ListPagesDeployments(ctx context.Context, projectName string) ([]cf.PagesDeploymentResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListPagesDeployments", ctx, projectName)
+	ret0, _ := ret[0].([]cf.PagesDeploymentResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListPagesDeployments indicates an expected call of ListPagesDeployments.
+func (mr *MockCloudflareClientMockRecorder) ListPagesDeployments(ctx, projectName any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListPagesDeployments", reflect.TypeOf((*MockCloudflareClient)(nil).ListPagesDeployments), ctx, projectName)
+}
+
+// ListPagesDomains mocks base method.
+func (m *MockCloudflareClient) ListPagesDomains(ctx context.Context, projectName string) ([]cf.PagesDomainResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListPagesDomains", ctx, projectName)
+	ret0, _ := ret[0].([]cf.PagesDomainResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListPagesDomains indicates an expected call of ListPagesDomains.
+func (mr *MockCloudflareClientMockRecorder) ListPagesDomains(ctx, projectName any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListPagesDomains", reflect.TypeOf((*MockCloudflareClient)(nil).ListPagesDomains), ctx, projectName)
+}
+
+// ListPagesProjects mocks base method.
+func (m *MockCloudflareClient) ListPagesProjects(ctx context.Context) ([]cf.PagesProjectResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListPagesProjects", ctx)
+	ret0, _ := ret[0].([]cf.PagesProjectResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListPagesProjects indicates an expected call of ListPagesProjects.
+func (mr *MockCloudflareClientMockRecorder) ListPagesProjects(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListPagesProjects", reflect.TypeOf((*MockCloudflareClient)(nil).ListPagesProjects), ctx)
+}
+
+// PatchPagesDomain mocks base method.
+func (m *MockCloudflareClient) PatchPagesDomain(ctx context.Context, projectName, domain string) (*cf.PagesDomainResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PatchPagesDomain", ctx, projectName, domain)
+	ret0, _ := ret[0].(*cf.PagesDomainResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// PatchPagesDomain indicates an expected call of PatchPagesDomain.
+func (mr *MockCloudflareClientMockRecorder) PatchPagesDomain(ctx, projectName, domain any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PatchPagesDomain", reflect.TypeOf((*MockCloudflareClient)(nil).PatchPagesDomain), ctx, projectName, domain)
+}
+
+// PurgePagesProjectBuildCache mocks base method.
+func (m *MockCloudflareClient) PurgePagesProjectBuildCache(ctx context.Context, projectName string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PurgePagesProjectBuildCache", ctx, projectName)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// PurgePagesProjectBuildCache indicates an expected call of PurgePagesProjectBuildCache.
+func (mr *MockCloudflareClientMockRecorder) PurgePagesProjectBuildCache(ctx, projectName any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PurgePagesProjectBuildCache", reflect.TypeOf((*MockCloudflareClient)(nil).PurgePagesProjectBuildCache), ctx, projectName)
+}
+
 // RefreshAccessServiceToken mocks base method.
 func (m *MockCloudflareClient) RefreshAccessServiceToken(ctx context.Context, tokenID string) (*cf.AccessServiceTokenResult, error) {
 	m.ctrl.T.Helper()
@@ -912,6 +1133,36 @@ func (m *MockCloudflareClient) RefreshAccessServiceToken(ctx context.Context, to
 func (mr *MockCloudflareClientMockRecorder) RefreshAccessServiceToken(ctx, tokenID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RefreshAccessServiceToken", reflect.TypeOf((*MockCloudflareClient)(nil).RefreshAccessServiceToken), ctx, tokenID)
+}
+
+// RetryPagesDeployment mocks base method.
+func (m *MockCloudflareClient) RetryPagesDeployment(ctx context.Context, projectName, deploymentID string) (*cf.PagesDeploymentResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RetryPagesDeployment", ctx, projectName, deploymentID)
+	ret0, _ := ret[0].(*cf.PagesDeploymentResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// RetryPagesDeployment indicates an expected call of RetryPagesDeployment.
+func (mr *MockCloudflareClientMockRecorder) RetryPagesDeployment(ctx, projectName, deploymentID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RetryPagesDeployment", reflect.TypeOf((*MockCloudflareClient)(nil).RetryPagesDeployment), ctx, projectName, deploymentID)
+}
+
+// RollbackPagesDeployment mocks base method.
+func (m *MockCloudflareClient) RollbackPagesDeployment(ctx context.Context, projectName, deploymentID string) (*cf.PagesDeploymentResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RollbackPagesDeployment", ctx, projectName, deploymentID)
+	ret0, _ := ret[0].(*cf.PagesDeploymentResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// RollbackPagesDeployment indicates an expected call of RollbackPagesDeployment.
+func (mr *MockCloudflareClientMockRecorder) RollbackPagesDeployment(ctx, projectName, deploymentID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RollbackPagesDeployment", reflect.TypeOf((*MockCloudflareClient)(nil).RollbackPagesDeployment), ctx, projectName, deploymentID)
 }
 
 // UpdateAccessApplication mocks base method.
@@ -1076,6 +1327,21 @@ func (m *MockCloudflareClient) UpdateGatewayRule(ctx context.Context, ruleID str
 func (mr *MockCloudflareClientMockRecorder) UpdateGatewayRule(ctx, ruleID, params any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateGatewayRule", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateGatewayRule), ctx, ruleID, params)
+}
+
+// UpdatePagesProject mocks base method.
+func (m *MockCloudflareClient) UpdatePagesProject(ctx context.Context, projectName string, params cf.PagesProjectParams) (*cf.PagesProjectResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdatePagesProject", ctx, projectName, params)
+	ret0, _ := ret[0].(*cf.PagesProjectResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UpdatePagesProject indicates an expected call of UpdatePagesProject.
+func (mr *MockCloudflareClientMockRecorder) UpdatePagesProject(ctx, projectName, params any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdatePagesProject", reflect.TypeOf((*MockCloudflareClient)(nil).UpdatePagesProject), ctx, projectName, params)
 }
 
 // UpdateSplitTunnelExclude mocks base method.

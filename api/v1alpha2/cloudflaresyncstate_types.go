@@ -9,7 +9,7 @@ import (
 )
 
 // SyncResourceType defines the type of Cloudflare resource being synced
-// +kubebuilder:validation:Enum=TunnelConfiguration;TunnelLifecycle;DNSRecord;AccessApplication;AccessGroup;AccessPolicy;AccessServiceToken;AccessIdentityProvider;VirtualNetwork;NetworkRoute;PrivateService;R2Bucket;R2BucketDomain;R2BucketNotification;ZoneRuleset;TransformRule;RedirectRule;GatewayRule;GatewayList;GatewayConfiguration;OriginCACertificate;CloudflareDomain;DomainRegistration;DevicePostureRule;DeviceSettingsPolicy;WARPConnector
+// +kubebuilder:validation:Enum=TunnelConfiguration;TunnelLifecycle;DNSRecord;AccessApplication;AccessGroup;AccessPolicy;AccessServiceToken;AccessIdentityProvider;VirtualNetwork;NetworkRoute;PrivateService;R2Bucket;R2BucketDomain;R2BucketNotification;ZoneRuleset;TransformRule;RedirectRule;GatewayRule;GatewayList;GatewayConfiguration;OriginCACertificate;CloudflareDomain;DomainRegistration;DevicePostureRule;DeviceSettingsPolicy;WARPConnector;PagesProject;PagesDomain;PagesDeployment
 type SyncResourceType string
 
 const (
@@ -65,6 +65,12 @@ const (
 	SyncResourceDeviceSettingsPolicy SyncResourceType = "DeviceSettingsPolicy"
 	// SyncResourceWARPConnector represents a Cloudflare WARP connector
 	SyncResourceWARPConnector SyncResourceType = "WARPConnector"
+	// SyncResourcePagesProject represents a Cloudflare Pages project
+	SyncResourcePagesProject SyncResourceType = "PagesProject"
+	// SyncResourcePagesDomain represents a Cloudflare Pages custom domain
+	SyncResourcePagesDomain SyncResourceType = "PagesDomain"
+	// SyncResourcePagesDeployment represents a Cloudflare Pages deployment
+	SyncResourcePagesDeployment SyncResourceType = "PagesDeployment"
 )
 
 // SyncStatus represents the synchronization status
