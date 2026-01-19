@@ -42,9 +42,15 @@ type CloudflareClient interface {
 	UpdateVirtualNetwork(ctx context.Context, virtualNetworkID string, params VirtualNetworkParams) (*VirtualNetworkResult, error)
 	DeleteVirtualNetwork(ctx context.Context, virtualNetworkID string) error
 
+	// Virtual Network operations (additional)
+	GetDefaultVirtualNetwork(ctx context.Context) (*VirtualNetworkResult, error)
+	ListVirtualNetworks(ctx context.Context) ([]VirtualNetworkResult, error)
+
 	// Tunnel Route operations
 	CreateTunnelRoute(ctx context.Context, params TunnelRouteParams) (*TunnelRouteResult, error)
 	GetTunnelRoute(ctx context.Context, network, virtualNetworkID string) (*TunnelRouteResult, error)
+	GetTunnelRouteByNetwork(ctx context.Context, network string) (*TunnelRouteResult, error)
+	ListTunnelRoutesByNetwork(ctx context.Context, network string) ([]TunnelRouteResult, error)
 	UpdateTunnelRoute(ctx context.Context, network string, params TunnelRouteParams) (*TunnelRouteResult, error)
 	DeleteTunnelRoute(ctx context.Context, network, virtualNetworkID string) error
 

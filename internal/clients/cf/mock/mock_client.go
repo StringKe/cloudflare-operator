@@ -640,6 +640,21 @@ func (mr *MockCloudflareClientMockRecorder) GetDNSRecord(ctx, zoneID, recordID a
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDNSRecord", reflect.TypeOf((*MockCloudflareClient)(nil).GetDNSRecord), ctx, zoneID, recordID)
 }
 
+// GetDefaultVirtualNetwork mocks base method.
+func (m *MockCloudflareClient) GetDefaultVirtualNetwork(ctx context.Context) (*cf.VirtualNetworkResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetDefaultVirtualNetwork", ctx)
+	ret0, _ := ret[0].(*cf.VirtualNetworkResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetDefaultVirtualNetwork indicates an expected call of GetDefaultVirtualNetwork.
+func (mr *MockCloudflareClientMockRecorder) GetDefaultVirtualNetwork(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDefaultVirtualNetwork", reflect.TypeOf((*MockCloudflareClient)(nil).GetDefaultVirtualNetwork), ctx)
+}
+
 // GetDevicePostureRule mocks base method.
 func (m *MockCloudflareClient) GetDevicePostureRule(ctx context.Context, ruleID string) (*cf.DevicePostureRuleResult, error) {
 	m.ctrl.T.Helper()
@@ -850,6 +865,21 @@ func (m *MockCloudflareClient) GetTunnelRoute(ctx context.Context, network, virt
 func (mr *MockCloudflareClientMockRecorder) GetTunnelRoute(ctx, network, virtualNetworkID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTunnelRoute", reflect.TypeOf((*MockCloudflareClient)(nil).GetTunnelRoute), ctx, network, virtualNetworkID)
+}
+
+// GetTunnelRouteByNetwork mocks base method.
+func (m *MockCloudflareClient) GetTunnelRouteByNetwork(ctx context.Context, network string) (*cf.TunnelRouteResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetTunnelRouteByNetwork", ctx, network)
+	ret0, _ := ret[0].(*cf.TunnelRouteResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetTunnelRouteByNetwork indicates an expected call of GetTunnelRouteByNetwork.
+func (mr *MockCloudflareClientMockRecorder) GetTunnelRouteByNetwork(ctx, network any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTunnelRouteByNetwork", reflect.TypeOf((*MockCloudflareClient)(nil).GetTunnelRouteByNetwork), ctx, network)
 }
 
 // GetVirtualNetwork mocks base method.
@@ -1089,6 +1119,36 @@ func (m *MockCloudflareClient) ListPagesProjects(ctx context.Context) ([]cf.Page
 func (mr *MockCloudflareClientMockRecorder) ListPagesProjects(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListPagesProjects", reflect.TypeOf((*MockCloudflareClient)(nil).ListPagesProjects), ctx)
+}
+
+// ListTunnelRoutesByNetwork mocks base method.
+func (m *MockCloudflareClient) ListTunnelRoutesByNetwork(ctx context.Context, network string) ([]cf.TunnelRouteResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListTunnelRoutesByNetwork", ctx, network)
+	ret0, _ := ret[0].([]cf.TunnelRouteResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListTunnelRoutesByNetwork indicates an expected call of ListTunnelRoutesByNetwork.
+func (mr *MockCloudflareClientMockRecorder) ListTunnelRoutesByNetwork(ctx, network any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListTunnelRoutesByNetwork", reflect.TypeOf((*MockCloudflareClient)(nil).ListTunnelRoutesByNetwork), ctx, network)
+}
+
+// ListVirtualNetworks mocks base method.
+func (m *MockCloudflareClient) ListVirtualNetworks(ctx context.Context) ([]cf.VirtualNetworkResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListVirtualNetworks", ctx)
+	ret0, _ := ret[0].([]cf.VirtualNetworkResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListVirtualNetworks indicates an expected call of ListVirtualNetworks.
+func (mr *MockCloudflareClientMockRecorder) ListVirtualNetworks(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListVirtualNetworks", reflect.TypeOf((*MockCloudflareClient)(nil).ListVirtualNetworks), ctx)
 }
 
 // PatchPagesDomain mocks base method.

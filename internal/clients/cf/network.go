@@ -202,6 +202,73 @@ func (c *API) DeleteVirtualNetwork(ctx context.Context, virtualNetworkID string)
 	return nil
 }
 
+// GetDefaultVirtualNetwork retrieves the default Virtual Network for the account.
+// Every Cloudflare Zero Trust account has a default Virtual Network.
+func (c *API) GetDefaultVirtualNetwork(ctx context.Context) (*VirtualNetworkResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
+		c.Log.Error(err, "error getting account ID")
+		return nil, err
+	}
+
+	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
+
+	// List all virtual networks and find the default one
+	isDefault := true
+	params := cloudflare.TunnelVirtualNetworksListParams{
+		IsDefault: &isDefault,
+	}
+
+	vnets, err := c.CloudflareClient.ListTunnelVirtualNetworks(ctx, rc, params)
+	if err != nil {
+		c.Log.Error(err, "error listing virtual networks for default")
+		return nil, err
+	}
+
+	for _, vnet := range vnets {
+		if vnet.IsDefaultNetwork {
+			return &VirtualNetworkResult{
+				ID:               vnet.ID,
+				Name:             vnet.Name,
+				Comment:          vnet.Comment,
+				IsDefaultNetwork: true,
+			}, nil
+		}
+	}
+
+	return nil, fmt.Errorf("no default virtual network found for account %s", c.ValidAccountId)
+}
+
+// ListVirtualNetworks lists all Virtual Networks for the account.
+func (c *API) ListVirtualNetworks(ctx context.Context) ([]VirtualNetworkResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
+		c.Log.Error(err, "error getting account ID")
+		return nil, err
+	}
+
+	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
+
+	vnets, err := c.CloudflareClient.ListTunnelVirtualNetworks(ctx, rc, cloudflare.TunnelVirtualNetworksListParams{})
+	if err != nil {
+		c.Log.Error(err, "error listing virtual networks")
+		return nil, err
+	}
+
+	results := make([]VirtualNetworkResult, 0, len(vnets))
+	for _, vnet := range vnets {
+		if vnet.DeletedAt != nil {
+			continue // Skip deleted VNets
+		}
+		results = append(results, VirtualNetworkResult{
+			ID:               vnet.ID,
+			Name:             vnet.Name,
+			Comment:          vnet.Comment,
+			IsDefaultNetwork: vnet.IsDefaultNetwork,
+		})
+	}
+
+	return results, nil
+}
+
 // CreateTunnelRoute creates a new Tunnel Route for private network access.
 func (c *API) CreateTunnelRoute(ctx context.Context, params TunnelRouteParams) (*TunnelRouteResult, error) {
 	if _, err := c.GetAccountId(ctx); err != nil {
@@ -267,6 +334,58 @@ func (c *API) GetTunnelRoute(ctx context.Context, network, virtualNetworkID stri
 	}
 
 	return nil, fmt.Errorf("tunnel route not found for network %s in virtual network %s", network, virtualNetworkID)
+}
+
+// GetTunnelRouteByNetwork retrieves a Tunnel Route by network CIDR across all Virtual Networks.
+// This is useful when you don't know which VNet the route is in.
+// Returns the first matching route found.
+func (c *API) GetTunnelRouteByNetwork(ctx context.Context, network string) (*TunnelRouteResult, error) {
+	routes, err := c.ListTunnelRoutesByNetwork(ctx, network)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(routes) == 0 {
+		return nil, fmt.Errorf("tunnel route not found for network %s", network)
+	}
+
+	return &routes[0], nil
+}
+
+// ListTunnelRoutesByNetwork lists all Tunnel Routes for a given network CIDR across all Virtual Networks.
+// This searches all VNets and returns all routes matching the network CIDR.
+func (c *API) ListTunnelRoutesByNetwork(ctx context.Context, network string) ([]TunnelRouteResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
+		c.Log.Error(err, "error getting account ID")
+		return nil, err
+	}
+
+	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
+
+	// Use NetworkSubset to find exact match or containing routes
+	// Empty VirtualNetworkID means search across all VNets
+	params := cloudflare.TunnelRoutesListParams{}
+
+	routes, err := c.CloudflareClient.ListTunnelRoutes(ctx, rc, params)
+	if err != nil {
+		c.Log.Error(err, "error listing tunnel routes for network search", "network", network)
+		return nil, err
+	}
+
+	results := make([]TunnelRouteResult, 0)
+	for _, route := range routes {
+		if route.Network == network {
+			results = append(results, TunnelRouteResult{
+				Network:          route.Network,
+				TunnelID:         route.TunnelID,
+				TunnelName:       route.TunnelName,
+				VirtualNetworkID: route.VirtualNetworkID,
+				Comment:          route.Comment,
+			})
+		}
+	}
+
+	return results, nil
 }
 
 // UpdateTunnelRoute updates an existing Tunnel Route.

@@ -229,20 +229,41 @@ func (r *Controller) syncToCloudflare(
 	var result *cf.TunnelRouteResult
 
 	if isPending {
-		// Check if route already exists (e.g., created by another resource or externally)
-		// Use default virtual network ID if not specified
-		vnetID := config.VirtualNetworkID
-		if vnetID == "" {
-			vnetID = "default"
+		// Search for existing route across all Virtual Networks
+		// This allows adopting routes that were created externally or by other resources.
+		// Note: Empty VirtualNetworkID in ListTunnelRoutesByNetwork searches all VNets.
+		existingRoutes, searchErr := apiClient.ListTunnelRoutesByNetwork(ctx, config.Network)
+
+		var existing *cf.TunnelRouteResult
+		if searchErr == nil && len(existingRoutes) > 0 {
+			// Found existing route(s). If VNetID specified, find matching one.
+			// Otherwise, use the first one (typically on default VNet).
+			if config.VirtualNetworkID != "" {
+				for i := range existingRoutes {
+					if existingRoutes[i].VirtualNetworkID == config.VirtualNetworkID {
+						existing = &existingRoutes[i]
+						break
+					}
+				}
+			}
+			// If no VNetID specified or no match found, use first result
+			if existing == nil {
+				existing = &existingRoutes[0]
+			}
 		}
 
-		existing, err := apiClient.GetTunnelRoute(ctx, config.Network, vnetID)
-		if err == nil && existing != nil {
+		if existing != nil {
 			// Route exists, adopt it and update if needed
 			logger.Info("Found existing NetworkRoute, adopting",
 				"network", config.Network,
-				"existingTunnelId", existing.TunnelID)
+				"existingTunnelId", existing.TunnelID,
+				"existingVNetId", existing.VirtualNetworkID)
 			result = existing
+
+			// Preserve the existing VirtualNetworkID if not explicitly specified
+			if config.VirtualNetworkID == "" && existing.VirtualNetworkID != "" {
+				params.VirtualNetworkID = existing.VirtualNetworkID
+			}
 
 			// If the existing route points to a different tunnel, update it
 			if existing.TunnelID != config.TunnelID {
@@ -257,9 +278,11 @@ func (r *Controller) syncToCloudflare(
 			}
 		} else {
 			// Create new NetworkRoute
+			// If VirtualNetworkID not specified, Cloudflare will use the default VNet
 			logger.Info("Creating new NetworkRoute",
 				"network", config.Network,
-				"tunnelId", config.TunnelID)
+				"tunnelId", config.TunnelID,
+				"virtualNetworkId", config.VirtualNetworkID)
 
 			result, err = apiClient.CreateTunnelRoute(ctx, params)
 			if err != nil {
@@ -267,9 +290,16 @@ func (r *Controller) syncToCloudflare(
 				if cf.IsConflictError(err) {
 					logger.Info("NetworkRoute already exists (conflict), attempting to adopt",
 						"network", config.Network)
-					_, err = apiClient.GetTunnelRoute(ctx, config.Network, vnetID)
-					if err != nil {
-						return nil, fmt.Errorf("get existing NetworkRoute after conflict: %w", err)
+					// Search again to find the conflicting route
+					conflictRoutes, searchErr := apiClient.ListTunnelRoutesByNetwork(ctx, config.Network)
+					if searchErr != nil || len(conflictRoutes) == 0 {
+						return nil, fmt.Errorf("get existing NetworkRoute after conflict: %w", searchErr)
+					}
+					// Use the first matching route
+					conflicting := &conflictRoutes[0]
+					// Preserve VNetID for update
+					if config.VirtualNetworkID == "" && conflicting.VirtualNetworkID != "" {
+						params.VirtualNetworkID = conflicting.VirtualNetworkID
 					}
 					// Update to ensure consistency
 					result, err = apiClient.UpdateTunnelRoute(ctx, config.Network, params)
@@ -283,7 +313,8 @@ func (r *Controller) syncToCloudflare(
 
 			logger.Info("Created NetworkRoute",
 				"network", result.Network,
-				"tunnelId", result.TunnelID)
+				"tunnelId", result.TunnelID,
+				"virtualNetworkId", result.VirtualNetworkID)
 		}
 
 		// Update SyncState CloudflareID with the network (since routes don't have a separate ID)
@@ -377,13 +408,25 @@ func (r *Controller) handleDeletion(
 			apiClient.ValidAccountId = syncState.Spec.AccountID
 		}
 
-		// Get virtual network ID from the config (if sources exist) or default
-		virtualNetworkID := "default"
+		// Determine the VirtualNetworkID for deletion
+		// First try to get from config, then search for the route to find its actual VNetID
+		var virtualNetworkID string
 		if len(syncState.Spec.Sources) > 0 {
 			// Try to extract from first source's config
 			config, err := r.extractConfig(syncState)
 			if err == nil && config.VirtualNetworkID != "" {
 				virtualNetworkID = config.VirtualNetworkID
+			}
+		}
+
+		// If VNetID still empty, search for the route to find its actual VNetID
+		if virtualNetworkID == "" {
+			existingRoutes, searchErr := apiClient.ListTunnelRoutesByNetwork(ctx, cloudflareID)
+			if searchErr == nil && len(existingRoutes) > 0 {
+				virtualNetworkID = existingRoutes[0].VirtualNetworkID
+				logger.V(1).Info("Found route's VirtualNetworkID for deletion",
+					"network", cloudflareID,
+					"virtualNetworkId", virtualNetworkID)
 			}
 		}
 
