@@ -464,7 +464,7 @@ func TestResolvePoliciesGroupReferenceMode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Prepare runtime objects
-			var objs []runtime.Object
+			objs := make([]runtime.Object, 0, len(tt.accessGroups))
 			for _, ag := range tt.accessGroups {
 				objs = append(objs, ag)
 			}
