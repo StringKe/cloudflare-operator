@@ -1,0 +1,53 @@
+# PagesDeployment - Trigger deployment for Pages project
+# Pages 项目部署触发
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDeployment
+metadata:
+  name: my-app-deploy-v1
+  namespace: default
+spec:
+  # Reference to the PagesProject
+  # 引用 PagesProject
+  projectRef:
+    name: my-app                        # PagesProject name / PagesProject 名称
+
+  # Branch to deploy
+  # 要部署的分支
+  branch: main
+
+  # Deployment action: create, retry, or rollback
+  # 部署操作：create（创建）、retry（重试）、rollback（回滚）
+  action: create
+
+  # Optional: Purge build cache before deployment
+  # 可选：部署前清除构建缓存
+  purgeBuildCache: false
+
+  # Cloudflare configuration
+  # Cloudflare 配置
+  cloudflare:
+    accountId: "<your-account-id>"      # Replace with actual value / 替换为实际值
+    credentialsRef:
+      name: cloudflare-credentials      # Secret name / Secret 名称
+
+---
+# PagesDeployment - Rollback to previous deployment
+# Pages 项目回滚到之前的部署
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDeployment
+metadata:
+  name: my-app-rollback
+  namespace: default
+spec:
+  projectRef:
+    name: my-app
+
+  # Rollback action requires targetDeploymentId
+  # 回滚操作需要指定 targetDeploymentId
+  action: rollback
+  targetDeploymentId: "<deployment-id-to-rollback-to>"
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    credentialsRef:
+      name: cloudflare-credentials

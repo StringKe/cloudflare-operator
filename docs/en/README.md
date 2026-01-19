@@ -100,7 +100,7 @@ flowchart TB
 
 > See [Unified Sync Architecture](../design/UNIFIED_SYNC_ARCHITECTURE.md) for details.
 
-## CRD Summary (30 Total)
+## CRD Summary (34 Total)
 
 ### Credentials & Configuration
 
@@ -132,6 +132,7 @@ flowchart TB
 |-----|-------|-------------|
 | `AccessApplication` | Namespaced | Zero Trust application |
 | `AccessGroup` | Cluster | Reusable access policy group |
+| `AccessPolicy` | Cluster | Reusable access policy template |
 | `AccessIdentityProvider` | Cluster | Identity provider configuration |
 | `AccessServiceToken` | Namespaced | M2M authentication token |
 | `AccessTunnel` | Namespaced | Access-protected tunnel endpoint |
@@ -179,6 +180,14 @@ flowchart TB
 | `TransformRule` | Namespaced | URL rewrite & header modification |
 | `RedirectRule` | Namespaced | URL redirect rules |
 
+### Cloudflare Pages
+
+| CRD | Scope | Description |
+|-----|-------|-------------|
+| `PagesProject` | Namespaced | Pages project with build config and resource bindings |
+| `PagesDomain` | Namespaced | Custom domain for Pages project |
+| `PagesDeployment` | Namespaced | Pages deployment (create, retry, rollback) |
+
 ### Registrar (Enterprise)
 
 | CRD | Scope | Description |
@@ -213,7 +222,7 @@ See [Namespace Restrictions](namespace-restrictions.md) for detailed information
 
 ## Version Information
 
-- Current Version: v0.23.x (Alpha)
+- Current Version: v0.26.x (Alpha)
 - API Version: `networking.cloudflare-operator.io/v1alpha2`
 - Kubernetes: v1.28+
 - Go: 1.25
@@ -222,6 +231,23 @@ See [Namespace Restrictions](namespace-restrictions.md) for detailed information
 - gateway-api: v1.4.1
 
 ## Recent Changes
+
+### v0.26.0 - Cloudflare Pages Support
+- **PagesProject CRD**: Full Pages project management with build config, environment variables, and resource bindings (KV, R2, D1, Durable Objects, Queues, AI, Vectorize, Hyperdrive)
+- **PagesDomain CRD**: Custom domain management for Pages projects with validation status tracking
+- **PagesDeployment CRD**: Deployment operations (create, retry, rollback) with stage history tracking
+- Complete six-layer architecture implementation for Pages CRDs
+- Unit tests and E2E tests for all Pages controllers
+
+### v0.25.0 - Unified Aggregation Pattern
+- **L5 Sync Controllers**: Unified aggregation pattern for consistent state management
+- Improved config hash computation for change detection
+- Enhanced debouncing for reduced API calls
+
+### v0.24.0 - AccessPolicy CRD
+- **AccessPolicy CRD**: Reusable access policy templates for Zero Trust applications
+- Supports all policy rule types: include, exclude, require
+- Can be referenced by multiple AccessApplication resources
 
 ### v0.23.x - Unified Sync Architecture & Comprehensive Testing
 - **Unified Sync Architecture**: Six-layer architecture with CloudflareSyncState CRD (100% CRD coverage)

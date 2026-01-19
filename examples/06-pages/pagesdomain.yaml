@@ -1,0 +1,26 @@
+# PagesDomain - Custom domain for Pages project
+# Pages 项目自定义域名
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDomain
+metadata:
+  name: my-app-domain
+  namespace: default
+spec:
+  # Custom domain name
+  # 自定义域名
+  domain: app.example.com
+
+  # Reference to the PagesProject
+  # 引用 PagesProject
+  projectRef:
+    name: my-app                        # PagesProject name / PagesProject 名称
+    # Or use cloudflareId for external project:
+    # 或使用 cloudflareId 引用外部项目：
+    # cloudflareId: external-project-name
+
+  # Cloudflare configuration
+  # Cloudflare 配置
+  cloudflare:
+    accountId: "<your-account-id>"      # Replace with actual value / 替换为实际值
+    credentialsRef:
+      name: cloudflare-credentials      # Secret name / Secret 名称

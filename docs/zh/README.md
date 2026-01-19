@@ -100,7 +100,7 @@ flowchart TB
 
 > 详见[统一同步架构](../design/UNIFIED_SYNC_ARCHITECTURE.md)。
 
-## CRD 摘要 (共 30 个)
+## CRD 摘要 (共 34 个)
 
 ### 凭证与配置
 
@@ -132,6 +132,7 @@ flowchart TB
 |-----|--------|------|
 | `AccessApplication` | Namespaced | Zero Trust 应用 |
 | `AccessGroup` | Cluster | 可复用的访问策略组 |
+| `AccessPolicy` | Cluster | 可复用的访问策略模板 |
 | `AccessIdentityProvider` | Cluster | 身份提供商配置 |
 | `AccessServiceToken` | Namespaced | M2M 认证令牌 |
 | `AccessTunnel` | Namespaced | Access 保护的隧道端点 |
@@ -179,6 +180,14 @@ flowchart TB
 | `TransformRule` | Namespaced | URL 重写与请求头修改 |
 | `RedirectRule` | Namespaced | URL 重定向规则 |
 
+### Cloudflare Pages
+
+| CRD | 作用域 | 说明 |
+|-----|--------|------|
+| `PagesProject` | Namespaced | Pages 项目（构建配置、资源绑定）|
+| `PagesDomain` | Namespaced | Pages 项目自定义域名 |
+| `PagesDeployment` | Namespaced | Pages 部署（创建、重试、回滚）|
+
 ### 域名注册 (企业版)
 
 | CRD | 作用域 | 说明 |
@@ -213,7 +222,7 @@ Operator 根据 CRD 作用域使用不同的 Secret 查找规则：
 
 ## 版本信息
 
-- 当前版本：v0.23.x (Alpha)
+- 当前版本：v0.26.x (Alpha)
 - API 版本：`networking.cloudflare-operator.io/v1alpha2`
 - Kubernetes：v1.28+
 - Go：1.25
@@ -222,6 +231,23 @@ Operator 根据 CRD 作用域使用不同的 Secret 查找规则：
 - gateway-api：v1.4.1
 
 ## 版本变更
+
+### v0.26.0 - Cloudflare Pages 支持
+- **PagesProject CRD**：完整 Pages 项目管理，支持构建配置、环境变量、资源绑定（KV、R2、D1、Durable Objects、Queues、AI、Vectorize、Hyperdrive）
+- **PagesDomain CRD**：Pages 项目自定义域名管理，跟踪验证状态
+- **PagesDeployment CRD**：部署操作（创建、重试、回滚），跟踪阶段历史
+- Pages CRD 完整六层架构实现
+- 所有 Pages 控制器的单元测试和 E2E 测试
+
+### v0.25.0 - 统一聚合模式
+- **L5 同步控制器**：统一聚合模式实现一致的状态管理
+- 改进配置 Hash 计算以检测变更
+- 增强防抖机制减少 API 调用
+
+### v0.24.0 - AccessPolicy CRD
+- **AccessPolicy CRD**：Zero Trust 应用的可复用访问策略模板
+- 支持所有策略规则类型：include、exclude、require
+- 可被多个 AccessApplication 资源引用
 
 ### v0.23.x - 统一同步架构与全面测试
 - **统一同步架构**：六层架构与 CloudflareSyncState CRD（100% CRD 覆盖）

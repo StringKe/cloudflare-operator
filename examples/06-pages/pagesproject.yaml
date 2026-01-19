@@ -1,0 +1,49 @@
+# PagesProject - Basic Pages project
+# 基础 Pages 项目
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesProject
+metadata:
+  name: my-app
+  namespace: default
+spec:
+  # Project name in Cloudflare Pages (must be unique)
+  # Cloudflare Pages 中的项目名称（必须唯一）
+  name: my-app
+
+  # Production branch for deployments
+  # 生产部署的分支
+  productionBranch: main
+
+  # Build configuration
+  # 构建配置
+  buildConfig:
+    buildCommand: npm run build
+    destinationDir: dist
+    rootDir: /
+    buildCaching: true
+
+  # Deployment configs for different environments
+  # 不同环境的部署配置
+  deploymentConfigs:
+    production:
+      compatibilityDate: "2024-01-01"
+      compatibilityFlags:
+        - nodejs_compat
+      environmentVariables:
+        NODE_ENV:
+          value: production
+          type: plain_text
+
+    preview:
+      compatibilityDate: "2024-01-01"
+      environmentVariables:
+        NODE_ENV:
+          value: development
+          type: plain_text
+
+  # Cloudflare configuration
+  # Cloudflare 配置
+  cloudflare:
+    accountId: "<your-account-id>"      # Replace with actual value / 替换为实际值
+    credentialsRef:
+      name: cloudflare-credentials      # Secret name / Secret 名称
