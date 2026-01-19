@@ -24,6 +24,7 @@ const (
 )
 
 // SettingsPolicyController is the Sync Controller for Device Settings Policy Configuration.
+// It uses the unified aggregation pattern to merge configurations from multiple sources.
 type SettingsPolicyController struct {
 	*common.BaseSyncController
 }
@@ -36,6 +37,7 @@ func NewSettingsPolicyController(c client.Client) *SettingsPolicyController {
 }
 
 // Reconcile processes a CloudflareSyncState resource for Device Settings Policy.
+// It aggregates configurations from all sources and syncs to Cloudflare.
 //
 //nolint:revive // cognitive complexity is acceptable for sync controller reconciliation
 func (r *SettingsPolicyController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -60,14 +62,14 @@ func (r *SettingsPolicyController) Reconcile(ctx context.Context, req ctrl.Reque
 		"cloudflareId", syncState.Spec.CloudflareID,
 		"sources", len(syncState.Spec.Sources))
 
-	// Handle deletion - this is the SINGLE point for Cloudflare API delete calls
+	// Handle deletion - aggregate remaining sources and sync
 	if !syncState.DeletionTimestamp.IsZero() {
 		return r.handleDeletion(ctx, syncState)
 	}
 
-	// Check if there are any sources - if none, clear settings on Cloudflare
+	// Check if there are any sources - if none, sync empty config to Cloudflare
 	if len(syncState.Spec.Sources) == 0 {
-		logger.Info("No sources in SyncState, clearing settings from Cloudflare")
+		logger.Info("No sources in SyncState, syncing empty configuration")
 		return r.handleDeletion(ctx, syncState)
 	}
 
@@ -86,10 +88,10 @@ func (r *SettingsPolicyController) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, nil
 	}
 
-	// Extract Device Settings Policy configuration from first source
-	config, err := r.extractConfig(syncState)
+	// Aggregate all sources using unified aggregation pattern
+	aggregated, err := r.aggregateAllSources(syncState)
 	if err != nil {
-		logger.Error(err, "Failed to extract Device Settings Policy configuration")
+		logger.Error(err, "Failed to aggregate Device Settings Policy configuration")
 		if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
 			logger.Error(statusErr, "Failed to update error status")
 		}
@@ -97,7 +99,7 @@ func (r *SettingsPolicyController) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	// Compute hash for change detection
-	newHash, hashErr := common.ComputeConfigHash(config)
+	newHash, hashErr := common.ComputeConfigHash(aggregated)
 	if hashErr != nil {
 		logger.Error(hashErr, "Failed to compute config hash")
 		newHash = ""
@@ -114,8 +116,8 @@ func (r *SettingsPolicyController) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
-	// Sync to Cloudflare API
-	result, err := r.syncToCloudflare(ctx, syncState, config)
+	// Sync aggregated configuration to Cloudflare API
+	result, err := r.syncToCloudflare(ctx, syncState, aggregated)
 	if err != nil {
 		logger.Error(err, "Failed to sync Device Settings Policy to Cloudflare")
 		if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
@@ -136,24 +138,136 @@ func (r *SettingsPolicyController) Reconcile(ctx context.Context, req ctrl.Reque
 		"accountId", result.AccountID,
 		"excludeCount", result.SplitTunnelExcludeCount,
 		"includeCount", result.SplitTunnelIncludeCount,
-		"fallbackDomainsCount", result.FallbackDomainsCount)
+		"fallbackDomainsCount", result.FallbackDomainsCount,
+		"sourceCount", len(syncState.Spec.Sources))
 
 	return ctrl.Result{RequeueAfter: common.RequeueAfterSuccess()}, nil
 }
 
-// extractConfig extracts Device Settings Policy configuration from SyncState sources.
-// Device Settings Policies have 1:1 mapping, so we use the ExtractFirstSourceConfig helper.
-func (*SettingsPolicyController) extractConfig(syncState *v1alpha2.CloudflareSyncState) (*devicesvc.DeviceSettingsPolicyConfig, error) {
-	return common.ExtractFirstSourceConfig[devicesvc.DeviceSettingsPolicyConfig](syncState)
+// AggregatedSettingsPolicy contains the merged configuration from all sources
+type AggregatedSettingsPolicy struct {
+	// SplitTunnelMode from highest priority source
+	SplitTunnelMode string
+	// SplitTunnelExclude merged from all sources
+	SplitTunnelExclude []devicesvc.SplitTunnelEntry
+	// SplitTunnelInclude merged from all sources
+	SplitTunnelInclude []devicesvc.SplitTunnelEntry
+	// FallbackDomains merged from all sources
+	FallbackDomains []devicesvc.FallbackDomainEntry
+	// SourceCount is the number of sources that contributed
+	SourceCount int
 }
 
-// syncToCloudflare syncs the Device Settings Policy configuration to Cloudflare API.
+// aggregateAllSources aggregates configurations from all sources in the SyncState.
+// It merges split tunnel entries and fallback domains, tracking ownership via description.
 //
-//nolint:revive // cognitive complexity is acceptable for API sync logic
+//nolint:revive,unparam // cognitive complexity acceptable; error return for future use
+func (r *SettingsPolicyController) aggregateAllSources(syncState *v1alpha2.CloudflareSyncState) (*AggregatedSettingsPolicy, error) {
+	result := &AggregatedSettingsPolicy{
+		SplitTunnelExclude: make([]devicesvc.SplitTunnelEntry, 0),
+		SplitTunnelInclude: make([]devicesvc.SplitTunnelEntry, 0),
+		FallbackDomains:    make([]devicesvc.FallbackDomainEntry, 0),
+	}
+
+	if len(syncState.Spec.Sources) == 0 {
+		return result, nil
+	}
+
+	// Track seen keys for deduplication
+	seenExclude := make(map[string]bool)
+	seenInclude := make(map[string]bool)
+	seenFallback := make(map[string]bool)
+
+	// Process each source (already sorted by priority in SyncState)
+	for _, source := range syncState.Spec.Sources {
+		config, err := common.ParseSourceConfig[devicesvc.DeviceSettingsPolicyConfig](&source)
+		if err != nil || config == nil {
+			continue
+		}
+
+		result.SourceCount++
+
+		// Create ownership marker for this source
+		marker := common.NewOwnershipMarker(source.Ref)
+
+		// Take SplitTunnelMode from first source (highest priority)
+		if result.SplitTunnelMode == "" && config.SplitTunnelMode != "" {
+			result.SplitTunnelMode = config.SplitTunnelMode
+		}
+
+		// Merge exclude entries with ownership tracking
+		for _, entry := range config.SplitTunnelExclude {
+			key := entry.Address + "|" + entry.Host
+			if !seenExclude[key] {
+				seenExclude[key] = true
+				result.SplitTunnelExclude = append(result.SplitTunnelExclude, devicesvc.SplitTunnelEntry{
+					Address:     entry.Address,
+					Host:        entry.Host,
+					Description: marker.AppendToDescription(entry.Description),
+				})
+			}
+		}
+
+		// Merge include entries with ownership tracking
+		for _, entry := range config.SplitTunnelInclude {
+			key := entry.Address + "|" + entry.Host
+			if !seenInclude[key] {
+				seenInclude[key] = true
+				result.SplitTunnelInclude = append(result.SplitTunnelInclude, devicesvc.SplitTunnelEntry{
+					Address:     entry.Address,
+					Host:        entry.Host,
+					Description: marker.AppendToDescription(entry.Description),
+				})
+			}
+		}
+
+		// Merge auto-populated routes based on mode
+		for _, entry := range config.AutoPopulatedRoutes {
+			if config.SplitTunnelMode == "include" {
+				key := entry.Address + "|" + entry.Host
+				if !seenInclude[key] {
+					seenInclude[key] = true
+					result.SplitTunnelInclude = append(result.SplitTunnelInclude, devicesvc.SplitTunnelEntry{
+						Address:     entry.Address,
+						Host:        entry.Host,
+						Description: marker.AppendToDescription(entry.Description),
+					})
+				}
+			} else {
+				key := entry.Address + "|" + entry.Host
+				if !seenExclude[key] {
+					seenExclude[key] = true
+					result.SplitTunnelExclude = append(result.SplitTunnelExclude, devicesvc.SplitTunnelEntry{
+						Address:     entry.Address,
+						Host:        entry.Host,
+						Description: marker.AppendToDescription(entry.Description),
+					})
+				}
+			}
+		}
+
+		// Merge fallback domains with ownership tracking
+		for _, entry := range config.FallbackDomains {
+			key := entry.Suffix
+			if !seenFallback[key] {
+				seenFallback[key] = true
+				result.FallbackDomains = append(result.FallbackDomains, devicesvc.FallbackDomainEntry{
+					Suffix:      entry.Suffix,
+					Description: marker.AppendToDescription(entry.Description),
+					DNSServer:   entry.DNSServer,
+				})
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// syncToCloudflare syncs the aggregated Device Settings Policy configuration to Cloudflare API.
 func (r *SettingsPolicyController) syncToCloudflare(
 	ctx context.Context,
 	syncState *v1alpha2.CloudflareSyncState,
-	config *devicesvc.DeviceSettingsPolicyConfig,
+	config *AggregatedSettingsPolicy,
 ) (*devicesvc.DeviceSettingsPolicySyncResult, error) {
 	logger := log.FromContext(ctx)
 
@@ -173,98 +287,74 @@ func (r *SettingsPolicyController) syncToCloudflare(
 		AccountID: accountID,
 	}
 
-	// Merge auto-populated routes with manual entries based on mode
-	allExcludeEntries := config.SplitTunnelExclude
-	allIncludeEntries := config.SplitTunnelInclude
-
-	// Add auto-populated routes to the appropriate list based on split tunnel mode
-	if len(config.AutoPopulatedRoutes) > 0 {
-		if config.SplitTunnelMode == "include" {
-			allIncludeEntries = append(allIncludeEntries, config.AutoPopulatedRoutes...)
-		} else {
-			// Default to exclude mode
-			allExcludeEntries = append(allExcludeEntries, config.AutoPopulatedRoutes...)
-		}
-	}
-
 	// Sync split tunnel exclude entries
-	if len(allExcludeEntries) > 0 {
-		excludeEntries := make([]cf.SplitTunnelEntry, len(allExcludeEntries))
-		for i, e := range allExcludeEntries {
-			excludeEntries[i] = cf.SplitTunnelEntry{
-				Address:     e.Address,
-				Host:        e.Host,
-				Description: e.Description,
-			}
+	excludeEntries := make([]cf.SplitTunnelEntry, len(config.SplitTunnelExclude))
+	for i, e := range config.SplitTunnelExclude {
+		excludeEntries[i] = cf.SplitTunnelEntry{
+			Address:     e.Address,
+			Host:        e.Host,
+			Description: e.Description,
 		}
-
-		logger.Info("Updating split tunnel exclude entries",
-			"count", len(excludeEntries))
-
-		if err := apiClient.UpdateSplitTunnelExclude(excludeEntries); err != nil {
-			return nil, fmt.Errorf("update split tunnel exclude: %w", err)
-		}
-		result.SplitTunnelExcludeCount = len(excludeEntries)
 	}
+
+	logger.Info("Updating split tunnel exclude entries",
+		"count", len(excludeEntries))
+
+	if err := apiClient.UpdateSplitTunnelExclude(excludeEntries); err != nil {
+		return nil, fmt.Errorf("update split tunnel exclude: %w", err)
+	}
+	result.SplitTunnelExcludeCount = len(excludeEntries)
 
 	// Sync split tunnel include entries
-	if len(allIncludeEntries) > 0 {
-		includeEntries := make([]cf.SplitTunnelEntry, len(allIncludeEntries))
-		for i, e := range allIncludeEntries {
-			includeEntries[i] = cf.SplitTunnelEntry{
-				Address:     e.Address,
-				Host:        e.Host,
-				Description: e.Description,
-			}
+	includeEntries := make([]cf.SplitTunnelEntry, len(config.SplitTunnelInclude))
+	for i, e := range config.SplitTunnelInclude {
+		includeEntries[i] = cf.SplitTunnelEntry{
+			Address:     e.Address,
+			Host:        e.Host,
+			Description: e.Description,
 		}
-
-		logger.Info("Updating split tunnel include entries",
-			"count", len(includeEntries))
-
-		if err := apiClient.UpdateSplitTunnelInclude(includeEntries); err != nil {
-			return nil, fmt.Errorf("update split tunnel include: %w", err)
-		}
-		result.SplitTunnelIncludeCount = len(includeEntries)
 	}
+
+	logger.Info("Updating split tunnel include entries",
+		"count", len(includeEntries))
+
+	if err := apiClient.UpdateSplitTunnelInclude(includeEntries); err != nil {
+		return nil, fmt.Errorf("update split tunnel include: %w", err)
+	}
+	result.SplitTunnelIncludeCount = len(includeEntries)
 
 	// Sync fallback domains
-	if len(config.FallbackDomains) > 0 {
-		fallbackDomains := make([]cf.FallbackDomainEntry, len(config.FallbackDomains))
-		for i, e := range config.FallbackDomains {
-			fallbackDomains[i] = cf.FallbackDomainEntry{
-				Suffix:      e.Suffix,
-				Description: e.Description,
-				DNSServer:   e.DNSServer,
-			}
+	fallbackDomains := make([]cf.FallbackDomainEntry, len(config.FallbackDomains))
+	for i, e := range config.FallbackDomains {
+		fallbackDomains[i] = cf.FallbackDomainEntry{
+			Suffix:      e.Suffix,
+			Description: e.Description,
+			DNSServer:   e.DNSServer,
 		}
-
-		logger.Info("Updating fallback domains",
-			"count", len(fallbackDomains))
-
-		if err := apiClient.UpdateFallbackDomains(fallbackDomains); err != nil {
-			return nil, fmt.Errorf("update fallback domains: %w", err)
-		}
-		result.FallbackDomainsCount = len(fallbackDomains)
 	}
 
-	result.AutoPopulatedRoutesCount = len(config.AutoPopulatedRoutes)
+	logger.Info("Updating fallback domains",
+		"count", len(fallbackDomains))
+
+	if err := apiClient.UpdateFallbackDomains(fallbackDomains); err != nil {
+		return nil, fmt.Errorf("update fallback domains: %w", err)
+	}
+	result.FallbackDomainsCount = len(fallbackDomains)
 
 	logger.Info("Updated Device Settings Policy",
 		"accountId", accountID,
 		"excludeCount", result.SplitTunnelExcludeCount,
 		"includeCount", result.SplitTunnelIncludeCount,
-		"fallbackDomainsCount", result.FallbackDomainsCount,
-		"autoPopulatedRoutesCount", result.AutoPopulatedRoutesCount)
+		"fallbackDomainsCount", result.FallbackDomainsCount)
 
 	return result, nil
 }
 
 // handleDeletion handles the deletion of Device Settings Policy from Cloudflare.
-// This clears split tunnel entries and fallback domains by setting them to empty arrays.
-// Following Unified Sync Architecture:
-// Resource Controller unregisters → SyncState updated → Sync Controller deletes from Cloudflare
+// It re-aggregates remaining sources and syncs to Cloudflare.
+// If no sources remain, it syncs empty configuration (but does NOT clear external entries).
 //
-//nolint:revive // cognitive complexity unavoidable: deletion logic requires multiple cleanup steps
+//nolint:revive // cognitive complexity is acceptable for deletion handling
 func (r *SettingsPolicyController) handleDeletion(
 	ctx context.Context,
 	syncState *v1alpha2.CloudflareSyncState,
@@ -276,50 +366,90 @@ func (r *SettingsPolicyController) handleDeletion(
 		return ctrl.Result{}, nil
 	}
 
-	// Clear settings from Cloudflare by setting empty arrays
+	// Create API client
 	apiClient, err := common.CreateAPIClient(ctx, r.Client, syncState)
 	if err != nil {
 		logger.Error(err, "Failed to create API client for deletion")
-		return ctrl.Result{RequeueAfter: common.RequeueAfterError(err)}, nil
+		// Continue with finalizer removal - don't block on API client creation failure
+		goto removeFinalizer
 	}
 
-	logger.Info("Clearing Device Settings Policy from Cloudflare")
-
-	// Clear split tunnel exclude entries
-	if err := apiClient.UpdateSplitTunnelExclude([]cf.SplitTunnelEntry{}); err != nil {
-		if !cf.IsNotFoundError(err) {
-			logger.Error(err, "Failed to clear split tunnel exclude entries")
-			if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
-				logger.Error(statusErr, "Failed to update error status")
-			}
-			return ctrl.Result{RequeueAfter: common.RequeueAfterError(err)}, nil
+	// Re-aggregate remaining sources (if any)
+	{
+		aggregated, err := r.aggregateAllSources(syncState)
+		if err != nil {
+			logger.Error(err, "Failed to aggregate remaining sources")
+			goto removeFinalizer
 		}
-	}
 
-	// Clear split tunnel include entries
-	if err := apiClient.UpdateSplitTunnelInclude([]cf.SplitTunnelEntry{}); err != nil {
-		if !cf.IsNotFoundError(err) {
-			logger.Error(err, "Failed to clear split tunnel include entries")
-			if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
-				logger.Error(statusErr, "Failed to update error status")
-			}
-			return ctrl.Result{RequeueAfter: common.RequeueAfterError(err)}, nil
+		// Get current entries from Cloudflare to preserve external (non-operator-managed) entries
+		existingExclude, err := apiClient.GetSplitTunnelExclude()
+		if err != nil {
+			logger.Error(err, "Failed to get existing exclude entries")
+			// Continue anyway - will just use aggregated entries
 		}
-	}
 
-	// Clear fallback domains
-	if err := apiClient.UpdateFallbackDomains([]cf.FallbackDomainEntry{}); err != nil {
-		if !cf.IsNotFoundError(err) {
-			logger.Error(err, "Failed to clear fallback domains")
-			if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
-				logger.Error(statusErr, "Failed to update error status")
-			}
-			return ctrl.Result{RequeueAfter: common.RequeueAfterError(err)}, nil
+		existingInclude, err := apiClient.GetSplitTunnelInclude()
+		if err != nil {
+			logger.Error(err, "Failed to get existing include entries")
 		}
+
+		existingFallback, err := apiClient.GetFallbackDomains()
+		if err != nil {
+			logger.Error(err, "Failed to get existing fallback domains")
+		}
+
+		// Filter out operator-managed entries, keep external entries
+		externalExclude := filterExternalEntries(existingExclude)
+		externalInclude := filterExternalEntries(existingInclude)
+		externalFallback := filterExternalFallbackDomains(existingFallback)
+
+		// Merge external entries with remaining aggregated entries
+		finalExclude := mergeWithExternal(aggregated.SplitTunnelExclude, externalExclude)
+		finalInclude := mergeWithExternal(aggregated.SplitTunnelInclude, externalInclude)
+		finalFallback := mergeWithExternalFallback(aggregated.FallbackDomains, externalFallback)
+
+		// Sync merged configuration to Cloudflare
+		logger.Info("Syncing merged configuration after source removal",
+			"excludeCount", len(finalExclude),
+			"includeCount", len(finalInclude),
+			"fallbackCount", len(finalFallback),
+			"remainingSources", len(syncState.Spec.Sources))
+
+		if err := apiClient.UpdateSplitTunnelExclude(finalExclude); err != nil {
+			if !cf.IsNotFoundError(err) {
+				logger.Error(err, "Failed to update split tunnel exclude entries")
+				if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
+					logger.Error(statusErr, "Failed to update error status")
+				}
+				return ctrl.Result{RequeueAfter: common.RequeueAfterError(err)}, nil
+			}
+		}
+
+		if err := apiClient.UpdateSplitTunnelInclude(finalInclude); err != nil {
+			if !cf.IsNotFoundError(err) {
+				logger.Error(err, "Failed to update split tunnel include entries")
+				if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
+					logger.Error(statusErr, "Failed to update error status")
+				}
+				return ctrl.Result{RequeueAfter: common.RequeueAfterError(err)}, nil
+			}
+		}
+
+		if err := apiClient.UpdateFallbackDomains(finalFallback); err != nil {
+			if !cf.IsNotFoundError(err) {
+				logger.Error(err, "Failed to update fallback domains")
+				if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
+					logger.Error(statusErr, "Failed to update error status")
+				}
+				return ctrl.Result{RequeueAfter: common.RequeueAfterError(err)}, nil
+			}
+		}
+
+		logger.Info("Successfully synced Device Settings Policy after source removal")
 	}
 
-	logger.Info("Successfully cleared Device Settings Policy from Cloudflare")
-
+removeFinalizer:
 	// Remove finalizer
 	controllerutil.RemoveFinalizer(syncState, SettingsPolicyFinalizerName)
 	if err := r.Client.Update(ctx, syncState); err != nil {
@@ -339,6 +469,88 @@ func (r *SettingsPolicyController) handleDeletion(
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// filterExternalEntries returns entries NOT managed by the operator.
+// External entries don't have the "managed-by:" marker in their description.
+func filterExternalEntries(entries []cf.SplitTunnelEntry) []cf.SplitTunnelEntry {
+	var external []cf.SplitTunnelEntry
+	for _, entry := range entries {
+		if !common.IsManagedByOperator(entry.Description) {
+			external = append(external, entry)
+		}
+	}
+	return external
+}
+
+// filterExternalFallbackDomains returns fallback domains NOT managed by the operator.
+func filterExternalFallbackDomains(entries []cf.FallbackDomainEntry) []cf.FallbackDomainEntry {
+	var external []cf.FallbackDomainEntry
+	for _, entry := range entries {
+		if !common.IsManagedByOperator(entry.Description) {
+			external = append(external, entry)
+		}
+	}
+	return external
+}
+
+// mergeWithExternal merges aggregated entries with external entries.
+// External entries are added at the end, duplicates are skipped.
+func mergeWithExternal(aggregated []devicesvc.SplitTunnelEntry, external []cf.SplitTunnelEntry) []cf.SplitTunnelEntry {
+	seen := make(map[string]bool)
+	result := make([]cf.SplitTunnelEntry, 0, len(aggregated)+len(external))
+
+	// Add aggregated entries first
+	for _, e := range aggregated {
+		key := e.Address + "|" + e.Host
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, cf.SplitTunnelEntry{
+				Address:     e.Address,
+				Host:        e.Host,
+				Description: e.Description,
+			})
+		}
+	}
+
+	// Add external entries
+	for _, e := range external {
+		key := e.Address + "|" + e.Host
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, e)
+		}
+	}
+
+	return result
+}
+
+// mergeWithExternalFallback merges aggregated fallback domains with external entries.
+func mergeWithExternalFallback(aggregated []devicesvc.FallbackDomainEntry, external []cf.FallbackDomainEntry) []cf.FallbackDomainEntry {
+	seen := make(map[string]bool)
+	result := make([]cf.FallbackDomainEntry, 0, len(aggregated)+len(external))
+
+	// Add aggregated entries first
+	for _, e := range aggregated {
+		if !seen[e.Suffix] {
+			seen[e.Suffix] = true
+			result = append(result, cf.FallbackDomainEntry{
+				Suffix:      e.Suffix,
+				Description: e.Description,
+				DNSServer:   e.DNSServer,
+			})
+		}
+	}
+
+	// Add external entries
+	for _, e := range external {
+		if !seen[e.Suffix] {
+			seen[e.Suffix] = true
+			result = append(result, e)
+		}
+	}
+
+	return result
 }
 
 // SetupWithManager sets up the controller with the Manager.

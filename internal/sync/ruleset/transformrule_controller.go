@@ -7,7 +7,9 @@ package ruleset
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"sort"
 
 	"github.com/cloudflare/cloudflare-go"
 	"k8s.io/utils/ptr"
@@ -26,6 +28,26 @@ const (
 	// TransformRuleFinalizerName is the finalizer for Transform Rule SyncState resources.
 	TransformRuleFinalizerName = "transformrule.sync.cloudflare-operator.io/finalizer"
 )
+
+// AggregatedTransformRule contains merged rules from all sources.
+type AggregatedTransformRule struct {
+	// Zone is the domain name
+	Zone string
+	// Type is the transform rule type (url_rewrite, request_header, response_header)
+	Type string
+	// Description is the ruleset description
+	Description string
+	// Rules is the aggregated list of rules with ownership tracking
+	Rules []TransformRuleWithOwner
+	// SourceCount is the number of sources that contributed
+	SourceCount int
+}
+
+// TransformRuleWithOwner contains a transform rule with its owner information.
+type TransformRuleWithOwner struct {
+	Rule  rulesetsvc.TransformRuleDefinitionConfig
+	Owner v1alpha2.SourceReference
+}
 
 // TransformRuleController is the Sync Controller for Transform Rule Configuration.
 // It watches CloudflareSyncState resources of type TransformRule,
@@ -92,10 +114,10 @@ func (r *TransformRuleController) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, nil
 	}
 
-	// Extract transform rule configuration from first source (1:1 mapping)
-	config, err := r.extractConfig(syncState)
+	// Aggregate rules from ALL sources (unified aggregation pattern)
+	aggregated, err := r.aggregateAllSources(syncState)
 	if err != nil {
-		logger.Error(err, "Failed to extract transform rule configuration")
+		logger.Error(err, "Failed to aggregate transform rule configuration")
 		if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
 			logger.Error(statusErr, "Failed to update error status")
 		}
@@ -103,7 +125,7 @@ func (r *TransformRuleController) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	// Compute hash for change detection
-	newHash, hashErr := common.ComputeConfigHash(config)
+	newHash, hashErr := common.ComputeConfigHash(aggregated)
 	if hashErr != nil {
 		logger.Error(hashErr, "Failed to compute config hash")
 		newHash = "" // Force sync if hash fails
@@ -119,8 +141,8 @@ func (r *TransformRuleController) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, err
 	}
 
-	// Sync to Cloudflare API
-	result, err := r.syncToCloudflare(ctx, syncState, config)
+	// Sync to Cloudflare API with aggregated rules
+	result, err := r.syncToCloudflare(ctx, syncState, aggregated)
 	if err != nil {
 		logger.Error(err, "Failed to sync transform rule to Cloudflare")
 		if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
@@ -139,15 +161,69 @@ func (r *TransformRuleController) Reconcile(ctx context.Context, req ctrl.Reques
 
 	logger.Info("Successfully synced transform rule to Cloudflare",
 		"rulesetId", result.RulesetID,
-		"ruleCount", result.RuleCount)
+		"ruleCount", result.RuleCount,
+		"sourceCount", aggregated.SourceCount)
 
 	return ctrl.Result{RequeueAfter: common.RequeueAfterSuccess()}, nil
 }
 
-// extractConfig extracts transform rule configuration from SyncState sources.
-// Transform rules have 1:1 mapping, so we use the ExtractFirstSourceConfig helper.
-func (*TransformRuleController) extractConfig(syncState *v1alpha2.CloudflareSyncState) (*rulesetsvc.TransformRuleConfig, error) {
-	return common.ExtractFirstSourceConfig[rulesetsvc.TransformRuleConfig](syncState)
+// aggregateAllSources aggregates rules from ALL sources using unified aggregation pattern.
+//
+//nolint:revive,unparam // cognitive complexity is acceptable for aggregation logic; error return for future use
+func (r *TransformRuleController) aggregateAllSources(syncState *v1alpha2.CloudflareSyncState) (*AggregatedTransformRule, error) {
+	if len(syncState.Spec.Sources) == 0 {
+		return &AggregatedTransformRule{
+			Rules:       []TransformRuleWithOwner{},
+			SourceCount: 0,
+		}, nil
+	}
+
+	// Sort sources by priority (lower number = higher priority)
+	sources := make([]v1alpha2.ConfigSource, len(syncState.Spec.Sources))
+	copy(sources, syncState.Spec.Sources)
+	sort.Slice(sources, func(i, j int) bool {
+		return sources[i].Priority < sources[j].Priority
+	})
+
+	result := &AggregatedTransformRule{
+		Rules: make([]TransformRuleWithOwner, 0),
+	}
+
+	// Process each source
+	for _, source := range sources {
+		if source.Config.Raw == nil {
+			continue
+		}
+
+		// Parse source config
+		var config rulesetsvc.TransformRuleConfig
+		if err := json.Unmarshal(source.Config.Raw, &config); err != nil {
+			continue // Skip invalid configs
+		}
+
+		// Use first source's zone, type, and description
+		if result.Zone == "" {
+			result.Zone = config.Zone
+		}
+		if result.Type == "" {
+			result.Type = config.Type
+		}
+		if result.Description == "" {
+			result.Description = config.Description
+		}
+
+		// Add rules from this source with ownership tracking
+		for _, rule := range config.Rules {
+			result.Rules = append(result.Rules, TransformRuleWithOwner{
+				Rule:  rule,
+				Owner: source.Ref,
+			})
+		}
+
+		result.SourceCount++
+	}
+
+	return result, nil
 }
 
 // getPhase returns the Cloudflare ruleset phase based on transform rule type.
@@ -162,13 +238,13 @@ func (*TransformRuleController) getPhase(ruleType string) string {
 	}
 }
 
-// syncToCloudflare syncs the transform rule configuration to Cloudflare API.
+// syncToCloudflare syncs the aggregated transform rule configuration to Cloudflare API.
 //
 //nolint:revive // cognitive complexity is acceptable for API sync logic
 func (r *TransformRuleController) syncToCloudflare(
 	ctx context.Context,
 	syncState *v1alpha2.CloudflareSyncState,
-	config *rulesetsvc.TransformRuleConfig,
+	aggregated *AggregatedTransformRule,
 ) (*rulesetsvc.TransformRuleSyncResult, error) {
 	logger := log.FromContext(ctx)
 
@@ -185,22 +261,23 @@ func (r *TransformRuleController) syncToCloudflare(
 	}
 
 	// Get the appropriate phase
-	phase := r.getPhase(config.Type)
+	phase := r.getPhase(aggregated.Type)
 
-	// Convert rules to Cloudflare format
-	rules := r.convertRules(config.Rules)
+	// Convert aggregated rules to Cloudflare format with ownership markers
+	rules := r.convertAggregatedRules(aggregated.Rules)
 
 	logger.Info("Updating transform ruleset",
 		"zoneId", zoneID,
 		"phase", phase,
-		"ruleCount", len(rules))
+		"ruleCount", len(rules),
+		"sourceCount", aggregated.SourceCount)
 
 	// Update entrypoint ruleset
 	result, err := apiClient.UpdateEntrypointRuleset(
 		ctx,
 		zoneID,
 		phase,
-		config.Description,
+		aggregated.Description,
 		rules,
 	)
 	if err != nil {
@@ -223,17 +300,23 @@ func (r *TransformRuleController) syncToCloudflare(
 	}, nil
 }
 
-// convertRules converts service config rules to Cloudflare RulesetRule format.
+// convertAggregatedRules converts aggregated rules to Cloudflare RulesetRule format
+// with ownership markers embedded in the description.
 //
 //nolint:revive // cognitive complexity is acceptable for rule conversion
-func (*TransformRuleController) convertRules(rules []rulesetsvc.TransformRuleDefinitionConfig) []cloudflare.RulesetRule {
+func (r *TransformRuleController) convertAggregatedRules(rules []TransformRuleWithOwner) []cloudflare.RulesetRule {
 	cfRules := make([]cloudflare.RulesetRule, len(rules))
 
-	for i, rule := range rules {
+	for i, ruleWithOwner := range rules {
+		rule := ruleWithOwner.Rule
+		// Add ownership marker to description
+		marker := common.NewOwnershipMarker(ruleWithOwner.Owner)
+		description := marker.AppendToDescription(rule.Name)
+
 		cfRule := cloudflare.RulesetRule{
 			Action:      "rewrite",
 			Expression:  rule.Expression,
-			Description: rule.Name,
+			Description: description,
 			Enabled:     ptr.To(rule.Enabled),
 		}
 
@@ -291,9 +374,9 @@ func (*TransformRuleController) convertRules(rules []rulesetsvc.TransformRuleDef
 }
 
 // handleDeletion handles the deletion of Transform Rule from Cloudflare.
-// This clears the transform rules by updating with an empty rules array.
+// Uses unified aggregation pattern: re-aggregate remaining sources and preserve external rules.
 // Following Unified Sync Architecture:
-// Resource Controller unregisters → SyncState updated → Sync Controller deletes from Cloudflare
+// Resource Controller unregisters → SyncState updated → Sync Controller re-aggregates remaining
 //
 //nolint:revive // cognitive complexity unavoidable: deletion logic requires multiple cleanup steps
 func (r *TransformRuleController) handleDeletion(
@@ -307,42 +390,90 @@ func (r *TransformRuleController) handleDeletion(
 		return ctrl.Result{}, nil
 	}
 
-	// Try to extract config to get the type (which determines phase) for clearing rules
-	config, err := r.extractConfig(syncState)
-	if err == nil && config != nil && config.Type != "" {
-		// We have config with type, clear the transform rules
-		apiClient, apiErr := common.CreateAPIClient(ctx, r.Client, syncState)
-		if apiErr != nil {
-			logger.Error(apiErr, "Failed to create API client for deletion")
-			return ctrl.Result{RequeueAfter: common.RequeueAfterError(apiErr)}, nil
-		}
-
-		zoneID := syncState.Spec.ZoneID
-		if zoneID != "" {
-			phase := r.getPhase(config.Type)
-			logger.Info("Clearing Transform Rule from Cloudflare",
-				"zoneId", zoneID,
-				"phase", phase)
-
-			// Update with empty rules to clear the ruleset
-			_, clearErr := apiClient.UpdateEntrypointRuleset(ctx, zoneID, phase, "", []cloudflare.RulesetRule{})
-			if clearErr != nil {
-				if !cf.IsNotFoundError(clearErr) {
-					logger.Error(clearErr, "Failed to clear Transform Rule")
-					if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, clearErr); statusErr != nil {
-						logger.Error(statusErr, "Failed to update error status")
-					}
-					return ctrl.Result{RequeueAfter: common.RequeueAfterError(clearErr)}, nil
-				}
-				logger.Info("Transform ruleset already cleared or not found")
-			} else {
-				logger.Info("Successfully cleared Transform Rule from Cloudflare")
-			}
-		}
-	} else {
-		// No config available - just log and clean up SyncState
-		logger.Info("No config available for Transform Rule deletion, cleaning up SyncState only")
+	zoneID := syncState.Spec.ZoneID
+	if zoneID == "" {
+		logger.Info("No zone ID available, cleaning up SyncState only")
+		return r.cleanupSyncState(ctx, syncState)
 	}
+
+	// Create API client
+	apiClient, apiErr := common.CreateAPIClient(ctx, r.Client, syncState)
+	if apiErr != nil {
+		logger.Error(apiErr, "Failed to create API client for deletion")
+		return ctrl.Result{RequeueAfter: common.RequeueAfterError(apiErr)}, nil
+	}
+
+	// Re-aggregate remaining sources (may be empty if all sources removed)
+	aggregated, err := r.aggregateAllSources(syncState)
+	if err != nil {
+		logger.Error(err, "Failed to aggregate remaining sources")
+		return ctrl.Result{RequeueAfter: common.RequeueAfterError(err)}, nil
+	}
+
+	// Get the phase from aggregated or try to extract from last known config
+	phase := r.getPhase(aggregated.Type)
+	if phase == "" || aggregated.Type == "" {
+		phase = r.getPhaseFromSyncState(syncState)
+	}
+
+	if phase != "" {
+		// Get existing ruleset to preserve external rules
+		existingRuleset, getErr := apiClient.GetEntrypointRuleset(ctx, zoneID, phase)
+		var existingRules []cloudflare.RulesetRule
+		if getErr != nil {
+			if !cf.IsNotFoundError(getErr) {
+				logger.Error(getErr, "Failed to get existing rules from Cloudflare")
+				return ctrl.Result{RequeueAfter: common.RequeueAfterError(getErr)}, nil
+			}
+			existingRules = []cloudflare.RulesetRule{}
+		} else {
+			existingRules = existingRuleset.Rules
+		}
+
+		// Filter external rules (not managed by operator)
+		externalRules := r.filterExternalRules(existingRules)
+
+		// Convert aggregated rules to Cloudflare format
+		finalRules := r.convertAggregatedRules(aggregated.Rules)
+		managedRuleCount := len(finalRules)
+
+		// Merge: aggregated managed rules + external rules
+		finalRules = append(finalRules, externalRules...)
+
+		logger.Info("Updating Transform Rule with remaining sources",
+			"zoneId", zoneID,
+			"phase", phase,
+			"managedRuleCount", managedRuleCount,
+			"externalRuleCount", len(externalRules),
+			"totalRuleCount", len(finalRules))
+
+		// Sync merged configuration to Cloudflare
+		_, syncErr := apiClient.UpdateEntrypointRuleset(ctx, zoneID, phase, aggregated.Description, finalRules)
+		if syncErr != nil {
+			if !cf.IsNotFoundError(syncErr) {
+				logger.Error(syncErr, "Failed to sync Transform Rule")
+				if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, syncErr); statusErr != nil {
+					logger.Error(statusErr, "Failed to update error status")
+				}
+				return ctrl.Result{RequeueAfter: common.RequeueAfterError(syncErr)}, nil
+			}
+			logger.Info("Transform ruleset not found, continuing with cleanup")
+		} else {
+			logger.Info("Successfully synced Transform Rule with remaining sources")
+		}
+	}
+
+	return r.cleanupSyncState(ctx, syncState)
+}
+
+// cleanupSyncState removes the finalizer and optionally deletes the SyncState.
+//
+//nolint:revive // cognitive complexity acceptable for cleanup logic with error handling
+func (r *TransformRuleController) cleanupSyncState(
+	ctx context.Context,
+	syncState *v1alpha2.CloudflareSyncState,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
 
 	// Remove finalizer
 	controllerutil.RemoveFinalizer(syncState, TransformRuleFinalizerName)
@@ -363,6 +494,31 @@ func (r *TransformRuleController) handleDeletion(
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// getPhaseFromSyncState tries to extract phase from stored config in SyncState.
+func (r *TransformRuleController) getPhaseFromSyncState(syncState *v1alpha2.CloudflareSyncState) string {
+	for _, source := range syncState.Spec.Sources {
+		if source.Config.Raw == nil {
+			continue
+		}
+		var config rulesetsvc.TransformRuleConfig
+		if err := json.Unmarshal(source.Config.Raw, &config); err == nil && config.Type != "" {
+			return r.getPhase(config.Type)
+		}
+	}
+	return ""
+}
+
+// filterExternalRules returns rules NOT managed by the operator.
+func (*TransformRuleController) filterExternalRules(rules []cloudflare.RulesetRule) []cloudflare.RulesetRule {
+	var external []cloudflare.RulesetRule
+	for _, rule := range rules {
+		if !common.IsManagedByOperator(rule.Description) {
+			external = append(external, rule)
+		}
+	}
+	return external
 }
 
 // SetupWithManager sets up the controller with the Manager.
