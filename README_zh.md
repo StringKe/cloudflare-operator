@@ -35,7 +35,7 @@
 
 </div>
 
-> **注意**: 此项目目前处于 Alpha 阶段 (v0.26.x)。这**不是** Cloudflare 官方产品，它使用 [Cloudflare API](https://api.cloudflare.com/) 和 [cloudflared](https://github.com/cloudflare/cloudflared) 在 Kubernetes 上自动化 Zero Trust 配置。
+> **注意**: 此项目目前处于 Alpha 阶段 (v0.27.x)。这**不是** Cloudflare 官方产品，它使用 [Cloudflare API](https://api.cloudflare.com/) 和 [cloudflared](https://github.com/cloudflare/cloudflared) 在 Kubernetes 上自动化 Zero Trust 配置。
 >
 > 本项目 Fork 自 [adyanth/cloudflare-operator](https://github.com/adyanth/cloudflare-operator)，在原项目基础上扩展了完整的 Zero Trust 功能。
 
@@ -49,14 +49,14 @@ Cloudflare Zero Trust Operator 提供 Kubernetes 原生的 Cloudflare Zero Trust
 |------|------|
 | **隧道管理** | 创建/管理 Cloudflare Tunnel，自动部署 cloudflared，服务绑定与 DNS |
 | **私有网络** | 虚拟网络、网络路由、通过 WARP 暴露私有服务 |
-| **访问控制** | Zero Trust 应用、访问组、访问策略、身份提供商、服务令牌 |
+| **访问控制** | Zero Trust 应用、访问组、可复用访问策略、内联策略规则、身份提供商、服务令牌 |
 | **网关与安全** | 网关规则 (DNS/HTTP/L4)、网关列表、浏览器隔离 |
 | **设备管理** | Split Tunnel 配置、回退域、设备态势规则 |
 | **DNS 与连接** | DNS 记录管理、WARP Connector 站点连接 |
 | **域名管理** | Zone 设置 (SSL/TLS、缓存、安全)、Origin CA 证书 |
 | **R2 存储** | R2 存储桶、自定义域名、事件通知 |
 | **规则引擎** | Zone 规则集、转换规则 (URL/Header)、重定向规则 |
-| **Cloudflare Pages** | Pages 项目、自定义域名、部署管理 |
+| **Cloudflare Pages** | Pages 项目（构建配置、资源绑定）、自定义域名、部署管理（创建、重试、回滚、直接上传） |
 | **域名注册** | 域名注册管理 (Enterprise) |
 | **Kubernetes 集成** | 原生 Ingress 支持、Gateway API 支持 (Gateway, HTTPRoute, TCPRoute, UDPRoute) |
 
@@ -255,9 +255,9 @@ tunnelRef:
 
 | CRD | API 版本 | 作用域 | 说明 |
 |-----|---------|--------|------|
-| AccessApplication | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | Zero Trust 应用 |
+| AccessApplication | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | Zero Trust 应用（支持内联策略规则） |
 | AccessGroup | `networking.cloudflare-operator.io/v1alpha2` | Cluster | 访问策略组 |
-| AccessPolicy | `networking.cloudflare-operator.io/v1alpha2` | Cluster | 可复用访问策略 |
+| AccessPolicy | `networking.cloudflare-operator.io/v1alpha2` | Cluster | 可复用访问策略（可被多个应用引用） |
 | AccessIdentityProvider | `networking.cloudflare-operator.io/v1alpha2` | Cluster | 身份提供商配置 |
 | AccessServiceToken | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | M2M 服务令牌 |
 
@@ -385,11 +385,13 @@ tunnelRef:
 - v1alpha2 API 及改进的资源管理
 - 原生 Kubernetes Ingress 和 Gateway API 集成
 - R2 存储管理（存储桶、自定义域名、通知）
-- Cloudflare Pages 支持（项目、自定义域名、部署）
+- Cloudflare Pages 支持（项目、自定义域名、高级部署含重试/回滚/直接上传）
 - Zone 设置和规则引擎（SSL/TLS、缓存、WAF、转换/重定向规则）
 - Origin CA 证书集成
 - 域名注册管理（Enterprise）
 - 六层统一同步架构消除竞态条件
+- 可复用 Access 策略和内联 include/exclude/require 规则
+- NetworkRoute 采用支持跨 VNet 搜索
 - 增强的错误处理和状态报告
 - 完善的文档和示例
 

@@ -222,7 +222,7 @@ See [Namespace Restrictions](namespace-restrictions.md) for detailed information
 
 ## Version Information
 
-- Current Version: v0.26.x (Alpha)
+- Current Version: v0.27.x (Alpha)
 - API Version: `networking.cloudflare-operator.io/v1alpha2`
 - Kubernetes: v1.28+
 - Go: 1.25
@@ -231,6 +231,11 @@ See [Namespace Restrictions](namespace-restrictions.md) for detailed information
 - gateway-api: v1.4.1
 
 ## Recent Changes
+
+### v0.27.x - AccessApplication Inline Policies & NetworkRoute Improvements
+- **AccessApplication Inline Policies**: Define include/exclude/require rules directly in AccessApplication spec without creating separate AccessPolicy resources
+- **NetworkRoute Cross-VNet Adoption**: Fixed VirtualNetworkID handling to properly search and adopt routes across all Virtual Networks
+- New API methods: `ListTunnelRoutesByNetwork`, `GetDefaultVirtualNetwork`, `ListVirtualNetworks`
 
 ### v0.26.0 - Cloudflare Pages Support
 - **PagesProject CRD**: Full Pages project management with build config, environment variables, and resource bindings (KV, R2, D1, Durable Objects, Queues, AI, Vectorize, Hyperdrive)

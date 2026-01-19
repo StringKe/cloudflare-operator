@@ -35,7 +35,7 @@
 
 </div>
 
-> **Note**: This project is currently in Alpha (v0.26.x). This is **NOT** an official Cloudflare product. It uses the [Cloudflare API](https://api.cloudflare.com/) and [cloudflared](https://github.com/cloudflare/cloudflared) to automate Zero Trust configuration on Kubernetes.
+> **Note**: This project is currently in Alpha (v0.27.x). This is **NOT** an official Cloudflare product. It uses the [Cloudflare API](https://api.cloudflare.com/) and [cloudflared](https://github.com/cloudflare/cloudflared) to automate Zero Trust configuration on Kubernetes.
 >
 > This project is a fork of [adyanth/cloudflare-operator](https://github.com/adyanth/cloudflare-operator) with extended Zero Trust features and improvements.
 
@@ -49,14 +49,14 @@ The Cloudflare Zero Trust Operator provides Kubernetes-native management of Clou
 |----------|----------|
 | **Tunnel Management** | Create/manage Cloudflare Tunnels, automatic cloudflared deployments, Service binding with DNS |
 | **Private Network** | Virtual Networks, Network Routes, Private Service exposure via WARP |
-| **Access Control** | Zero Trust Applications, Access Groups, Access Policies, Identity Providers, Service Tokens |
+| **Access Control** | Zero Trust Applications, Access Groups, Reusable Access Policies, Inline Policy Rules, Identity Providers, Service Tokens |
 | **Gateway & Security** | Gateway Rules (DNS/HTTP/L4), Gateway Lists, Browser Isolation |
 | **Device Management** | Split Tunnel configuration, Fallback Domains, Device Posture Rules |
 | **DNS & Connectivity** | DNS Record management, WARP Connectors for site-to-site |
 | **Domain Management** | Zone settings (SSL/TLS, Cache, Security), Origin CA Certificates |
 | **R2 Storage** | R2 Buckets, Custom Domains, Event Notifications |
 | **Rules Engine** | Zone Rulesets, Transform Rules (URL/Header), Redirect Rules |
-| **Cloudflare Pages** | Pages Projects, Custom Domains, Deployment management |
+| **Cloudflare Pages** | Pages Projects (build config, resource bindings), Custom Domains, Deployment management (create, retry, rollback) |
 | **Registrar** | Domain Registration management (Enterprise) |
 | **Kubernetes Integration** | Native Ingress support, Gateway API support (Gateway, HTTPRoute, TCPRoute, UDPRoute) |
 
@@ -255,9 +255,9 @@ tunnelRef:
 
 | CRD | API Version | Scope | Description |
 |-----|-------------|-------|-------------|
-| AccessApplication | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | Zero Trust application |
+| AccessApplication | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | Zero Trust application with inline policy rules |
 | AccessGroup | `networking.cloudflare-operator.io/v1alpha2` | Cluster | Access policy group |
-| AccessPolicy | `networking.cloudflare-operator.io/v1alpha2` | Cluster | Reusable access policy |
+| AccessPolicy | `networking.cloudflare-operator.io/v1alpha2` | Cluster | Reusable access policy (referenced by applications) |
 | AccessIdentityProvider | `networking.cloudflare-operator.io/v1alpha2` | Cluster | Identity provider config |
 | AccessServiceToken | `networking.cloudflare-operator.io/v1alpha2` | Namespaced | Service token for M2M |
 
@@ -385,11 +385,13 @@ This fork extends the original project with:
 - v1alpha2 API with improved resource management
 - Native Kubernetes Ingress and Gateway API integration
 - R2 Storage management (buckets, custom domains, notifications)
-- Cloudflare Pages support (projects, custom domains, deployments)
+- Cloudflare Pages support (projects, custom domains, advanced deployments with retry/rollback)
 - Zone settings and rules engine (SSL/TLS, Cache, WAF, Transform/Redirect rules)
 - Origin CA certificate integration
 - Domain registration management (Enterprise)
 - Six-layer unified sync architecture for race condition elimination
+- Reusable Access Policies and inline include/exclude/require rules
+- NetworkRoute adoption with cross-VNet search support
 - Enhanced error handling and status reporting
 - Comprehensive documentation and examples
 
