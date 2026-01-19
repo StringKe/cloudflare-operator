@@ -4,6 +4,7 @@
 package v1alpha2
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -47,16 +48,212 @@ const (
 
 // PagesDirectUpload configures direct upload deployment.
 type PagesDirectUpload struct {
+	// Source defines where to fetch the deployment files from.
+	// Supports HTTP/HTTPS URLs, S3-compatible storage, and OCI registries.
+	// +kubebuilder:validation:Optional
+	Source *DirectUploadSource `json:"source,omitempty"`
+
+	// Checksum for file integrity verification.
+	// When specified, the downloaded file will be verified before extraction.
+	// +kubebuilder:validation:Optional
+	Checksum *ChecksumConfig `json:"checksum,omitempty"`
+
+	// Archive configuration for compressed files.
+	// Specifies how to extract the downloaded archive.
+	// +kubebuilder:validation:Optional
+	Archive *ArchiveConfig `json:"archive,omitempty"`
+
 	// ManifestConfigMapRef references a ConfigMap containing the file manifest.
 	// The ConfigMap should have keys as file paths and values as file contents.
+	// Deprecated: Use Source instead for better flexibility.
 	// +kubebuilder:validation:Optional
 	ManifestConfigMapRef string `json:"manifestConfigMapRef,omitempty"`
 
 	// Manifest is an inline file manifest.
 	// Keys are file paths, values are file contents (base64 encoded for binary files).
+	// Deprecated: Use Source instead for better flexibility.
 	// +kubebuilder:validation:Optional
 	Manifest map[string]string `json:"manifest,omitempty"`
 }
+
+// DirectUploadSource defines the source for direct upload files.
+// Only one source type should be specified.
+type DirectUploadSource struct {
+	// HTTP source - fetch from HTTP/HTTPS URL.
+	// Supports presigned URLs for private storage (e.g., S3 presigned URLs, GCS signed URLs).
+	// +kubebuilder:validation:Optional
+	HTTP *HTTPSource `json:"http,omitempty"`
+
+	// S3 source - fetch from S3-compatible storage.
+	// Supports AWS S3, MinIO, Cloudflare R2, and other S3-compatible services.
+	// +kubebuilder:validation:Optional
+	S3 *S3Source `json:"s3,omitempty"`
+
+	// OCI source - fetch from OCI registry.
+	// Useful for storing build artifacts in container registries.
+	// +kubebuilder:validation:Optional
+	OCI *OCISource `json:"oci,omitempty"`
+}
+
+// HTTPSource defines HTTP/HTTPS source configuration.
+type HTTPSource struct {
+	// URL is the HTTP/HTTPS URL to fetch files from.
+	// Supports presigned URLs for private storage.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^https?://`
+	URL string `json:"url"`
+
+	// Headers to include in the HTTP request.
+	// Useful for authentication tokens or custom headers.
+	// +kubebuilder:validation:Optional
+	Headers map[string]string `json:"headers,omitempty"`
+
+	// HeadersSecretRef references a Secret containing HTTP headers.
+	// Keys in the secret become header names, values become header values.
+	// This is useful for sensitive authentication headers.
+	// +kubebuilder:validation:Optional
+	HeadersSecretRef *corev1.LocalObjectReference `json:"headersSecretRef,omitempty"`
+
+	// Timeout for the HTTP request.
+	// +kubebuilder:default="5m"
+	// +kubebuilder:validation:Optional
+	Timeout *metav1.Duration `json:"timeout,omitempty"`
+
+	// InsecureSkipVerify skips TLS certificate verification.
+	// Use with caution, only for testing or internal URLs.
+	// +kubebuilder:default=false
+	// +kubebuilder:validation:Optional
+	InsecureSkipVerify bool `json:"insecureSkipVerify,omitempty"`
+}
+
+// S3Source defines S3-compatible storage source configuration.
+type S3Source struct {
+	// Bucket is the S3 bucket name.
+	// +kubebuilder:validation:Required
+	Bucket string `json:"bucket"`
+
+	// Key is the object key (path) in the bucket.
+	// +kubebuilder:validation:Required
+	Key string `json:"key"`
+
+	// Region is the S3 region.
+	// Required for AWS S3, optional for other S3-compatible services.
+	// +kubebuilder:validation:Optional
+	Region string `json:"region,omitempty"`
+
+	// Endpoint is the S3 endpoint URL.
+	// Required for S3-compatible services like MinIO, Cloudflare R2.
+	// Examples: "https://s3.us-west-2.amazonaws.com", "https://xxx.r2.cloudflarestorage.com"
+	// +kubebuilder:validation:Optional
+	Endpoint string `json:"endpoint,omitempty"`
+
+	// CredentialsSecretRef references a Secret containing AWS credentials.
+	// Expected keys: accessKeyId, secretAccessKey, sessionToken (optional)
+	// +kubebuilder:validation:Optional
+	CredentialsSecretRef *corev1.LocalObjectReference `json:"credentialsSecretRef,omitempty"`
+
+	// UsePathStyle forces path-style addressing instead of virtual hosted-style.
+	// Required for some S3-compatible services like MinIO.
+	// +kubebuilder:default=false
+	// +kubebuilder:validation:Optional
+	UsePathStyle bool `json:"usePathStyle,omitempty"`
+}
+
+// OCISource defines OCI registry source configuration.
+type OCISource struct {
+	// Image is the OCI image reference.
+	// Format: registry.example.com/repo:tag or registry.example.com/repo@sha256:digest
+	// +kubebuilder:validation:Required
+	Image string `json:"image"`
+
+	// CredentialsSecretRef references a Secret containing registry credentials.
+	// Supports two formats:
+	// - Docker config: .dockerconfigjson key (same as imagePullSecrets)
+	// - Basic auth: username and password keys
+	// +kubebuilder:validation:Optional
+	CredentialsSecretRef *corev1.LocalObjectReference `json:"credentialsSecretRef,omitempty"`
+
+	// InsecureRegistry allows connecting to registries without TLS.
+	// Use with caution, only for testing or internal registries.
+	// +kubebuilder:default=false
+	// +kubebuilder:validation:Optional
+	InsecureRegistry bool `json:"insecureRegistry,omitempty"`
+}
+
+// ChecksumConfig defines file integrity verification.
+type ChecksumConfig struct {
+	// Algorithm is the checksum algorithm.
+	// +kubebuilder:validation:Enum=sha256;sha512;md5
+	// +kubebuilder:default="sha256"
+	// +kubebuilder:validation:Optional
+	Algorithm string `json:"algorithm,omitempty"`
+
+	// Value is the expected checksum value in hexadecimal format.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^[a-fA-F0-9]+$`
+	Value string `json:"value"`
+}
+
+// ArchiveConfig defines archive extraction configuration.
+type ArchiveConfig struct {
+	// Type is the archive type.
+	// - tar.gz: gzip compressed tar archive (default)
+	// - tar: uncompressed tar archive
+	// - zip: ZIP archive
+	// - none: no extraction, treat as single file
+	// +kubebuilder:validation:Enum=tar.gz;tar;zip;none
+	// +kubebuilder:default="tar.gz"
+	// +kubebuilder:validation:Optional
+	Type string `json:"type,omitempty"`
+
+	// StripComponents removes leading path components when extracting.
+	// Similar to tar --strip-components.
+	// Useful when archive contains a top-level directory.
+	// +kubebuilder:default=0
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=10
+	// +kubebuilder:validation:Optional
+	StripComponents int `json:"stripComponents,omitempty"`
+
+	// SubPath extracts only a specific subdirectory from the archive.
+	// Files outside this path are ignored.
+	// +kubebuilder:validation:Optional
+	SubPath string `json:"subPath,omitempty"`
+}
+
+// RollbackConfig defines rollback behavior.
+type RollbackConfig struct {
+	// Strategy defines how to select the rollback target.
+	// - LastSuccessful: Roll back to the last successful deployment
+	// - ByVersion: Roll back to a specific version number from history
+	// - ExactDeploymentID: Roll back to a specific Cloudflare deployment ID
+	// +kubebuilder:validation:Enum=LastSuccessful;ByVersion;ExactDeploymentID
+	// +kubebuilder:default="LastSuccessful"
+	// +kubebuilder:validation:Optional
+	Strategy string `json:"strategy,omitempty"`
+
+	// Version is the target version number (for ByVersion strategy).
+	// This is the sequential version number tracked in deployment history.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Optional
+	Version *int `json:"version,omitempty"`
+
+	// DeploymentID is the exact Cloudflare deployment ID (for ExactDeploymentID strategy).
+	// +kubebuilder:validation:Optional
+	DeploymentID string `json:"deploymentId,omitempty"`
+}
+
+// Rollback strategy constants
+const (
+	// RollbackStrategyLastSuccessful rolls back to the last successful deployment.
+	RollbackStrategyLastSuccessful = "LastSuccessful"
+
+	// RollbackStrategyByVersion rolls back to a specific version number.
+	RollbackStrategyByVersion = "ByVersion"
+
+	// RollbackStrategyExactDeploymentID rolls back to a specific deployment ID.
+	RollbackStrategyExactDeploymentID = "ExactDeploymentID"
+)
 
 // PagesDeploymentSpec defines the desired state of PagesDeployment
 type PagesDeploymentSpec struct {
@@ -92,6 +289,12 @@ type PagesDeploymentSpec struct {
 	// Use this for deploying static files without a git repository.
 	// +kubebuilder:validation:Optional
 	DirectUpload *PagesDirectUpload `json:"directUpload,omitempty"`
+
+	// Rollback configuration for intelligent deployment rollback.
+	// Use this when action is "rollback" and you want smart rollback selection.
+	// If not specified with rollback action, TargetDeploymentID must be set.
+	// +kubebuilder:validation:Optional
+	Rollback *RollbackConfig `json:"rollback,omitempty"`
 
 	// Cloudflare contains Cloudflare-specific configuration.
 	// +kubebuilder:validation:Required

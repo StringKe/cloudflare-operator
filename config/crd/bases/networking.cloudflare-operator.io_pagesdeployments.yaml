@@ -165,18 +165,214 @@ spec:
                   DirectUpload configures direct upload deployment.
                   Use this for deploying static files without a git repository.
                 properties:
+                  archive:
+                    description: |-
+                      Archive configuration for compressed files.
+                      Specifies how to extract the downloaded archive.
+                    properties:
+                      stripComponents:
+                        default: 0
+                        description: |-
+                          StripComponents removes leading path components when extracting.
+                          Similar to tar --strip-components.
+                          Useful when archive contains a top-level directory.
+                        maximum: 10
+                        minimum: 0
+                        type: integer
+                      subPath:
+                        description: |-
+                          SubPath extracts only a specific subdirectory from the archive.
+                          Files outside this path are ignored.
+                        type: string
+                      type:
+                        default: tar.gz
+                        description: |-
+                          Type is the archive type.
+                          - tar.gz: gzip compressed tar archive (default)
+                          - tar: uncompressed tar archive
+                          - zip: ZIP archive
+                          - none: no extraction, treat as single file
+                        enum:
+                        - tar.gz
+                        - tar
+                        - zip
+                        - none
+                        type: string
+                    type: object
+                  checksum:
+                    description: |-
+                      Checksum for file integrity verification.
+                      When specified, the downloaded file will be verified before extraction.
+                    properties:
+                      algorithm:
+                        default: sha256
+                        description: Algorithm is the checksum algorithm.
+                        enum:
+                        - sha256
+                        - sha512
+                        - md5
+                        type: string
+                      value:
+                        description: Value is the expected checksum value in hexadecimal
+                          format.
+                        pattern: ^[a-fA-F0-9]+$
+                        type: string
+                    required:
+                    - value
+                    type: object
                   manifest:
                     additionalProperties:
                       type: string
                     description: |-
                       Manifest is an inline file manifest.
                       Keys are file paths, values are file contents (base64 encoded for binary files).
+                      Deprecated: Use Source instead for better flexibility.
                     type: object
                   manifestConfigMapRef:
                     description: |-
                       ManifestConfigMapRef references a ConfigMap containing the file manifest.
                       The ConfigMap should have keys as file paths and values as file contents.
+                      Deprecated: Use Source instead for better flexibility.
                     type: string
+                  source:
+                    description: |-
+                      Source defines where to fetch the deployment files from.
+                      Supports HTTP/HTTPS URLs, S3-compatible storage, and OCI registries.
+                    properties:
+                      http:
+                        description: |-
+                          HTTP source - fetch from HTTP/HTTPS URL.
+                          Supports presigned URLs for private storage (e.g., S3 presigned URLs, GCS signed URLs).
+                        properties:
+                          headers:
+                            additionalProperties:
+                              type: string
+                            description: |-
+                              Headers to include in the HTTP request.
+                              Useful for authentication tokens or custom headers.
+                            type: object
+                          headersSecretRef:
+                            description: |-
+                              HeadersSecretRef references a Secret containing HTTP headers.
+                              Keys in the secret become header names, values become header values.
+                              This is useful for sensitive authentication headers.
+                            properties:
+                              name:
+                                default: ""
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                            type: object
+                            x-kubernetes-map-type: atomic
+                          insecureSkipVerify:
+                            default: false
+                            description: |-
+                              InsecureSkipVerify skips TLS certificate verification.
+                              Use with caution, only for testing or internal URLs.
+                            type: boolean
+                          timeout:
+                            default: 5m
+                            description: Timeout for the HTTP request.
+                            type: string
+                          url:
+                            description: |-
+                              URL is the HTTP/HTTPS URL to fetch files from.
+                              Supports presigned URLs for private storage.
+                            pattern: ^https?://
+                            type: string
+                        required:
+                        - url
+                        type: object
+                      oci:
+                        description: |-
+                          OCI source - fetch from OCI registry.
+                          Useful for storing build artifacts in container registries.
+                        properties:
+                          credentialsSecretRef:
+                            description: |-
+                              CredentialsSecretRef references a Secret containing registry credentials.
+                              Supports two formats:
+                              - Docker config: .dockerconfigjson key (same as imagePullSecrets)
+                              - Basic auth: username and password keys
+                            properties:
+                              name:
+                                default: ""
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                            type: object
+                            x-kubernetes-map-type: atomic
+                          image:
+                            description: |-
+                              Image is the OCI image reference.
+                              Format: registry.example.com/repo:tag or registry.example.com/repo@sha256:digest
+                            type: string
+                          insecureRegistry:
+                            default: false
+                            description: |-
+                              InsecureRegistry allows connecting to registries without TLS.
+                              Use with caution, only for testing or internal registries.
+                            type: boolean
+                        required:
+                        - image
+                        type: object
+                      s3:
+                        description: |-
+                          S3 source - fetch from S3-compatible storage.
+                          Supports AWS S3, MinIO, Cloudflare R2, and other S3-compatible services.
+                        properties:
+                          bucket:
+                            description: Bucket is the S3 bucket name.
+                            type: string
+                          credentialsSecretRef:
+                            description: |-
+                              CredentialsSecretRef references a Secret containing AWS credentials.
+                              Expected keys: accessKeyId, secretAccessKey, sessionToken (optional)
+                            properties:
+                              name:
+                                default: ""
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                            type: object
+                            x-kubernetes-map-type: atomic
+                          endpoint:
+                            description: |-
+                              Endpoint is the S3 endpoint URL.
+                              Required for S3-compatible services like MinIO, Cloudflare R2.
+                              Examples: "https://s3.us-west-2.amazonaws.com", "https://xxx.r2.cloudflarestorage.com"
+                            type: string
+                          key:
+                            description: Key is the object key (path) in the bucket.
+                            type: string
+                          region:
+                            description: |-
+                              Region is the S3 region.
+                              Required for AWS S3, optional for other S3-compatible services.
+                            type: string
+                          usePathStyle:
+                            default: false
+                            description: |-
+                              UsePathStyle forces path-style addressing instead of virtual hosted-style.
+                              Required for some S3-compatible services like MinIO.
+                            type: boolean
+                        required:
+                        - bucket
+                        - key
+                        type: object
+                    type: object
                 type: object
               projectRef:
                 description: |-
@@ -203,6 +399,35 @@ spec:
                 default: false
                 description: PurgeBuildCache purges the build cache before deployment.
                 type: boolean
+              rollback:
+                description: |-
+                  Rollback configuration for intelligent deployment rollback.
+                  Use this when action is "rollback" and you want smart rollback selection.
+                  If not specified with rollback action, TargetDeploymentID must be set.
+                properties:
+                  deploymentId:
+                    description: DeploymentID is the exact Cloudflare deployment ID
+                      (for ExactDeploymentID strategy).
+                    type: string
+                  strategy:
+                    default: LastSuccessful
+                    description: |-
+                      Strategy defines how to select the rollback target.
+                      - LastSuccessful: Roll back to the last successful deployment
+                      - ByVersion: Roll back to a specific version number from history
+                      - ExactDeploymentID: Roll back to a specific Cloudflare deployment ID
+                    enum:
+                    - LastSuccessful
+                    - ByVersion
+                    - ExactDeploymentID
+                    type: string
+                  version:
+                    description: |-
+                      Version is the target version number (for ByVersion strategy).
+                      This is the sequential version number tracked in deployment history.
+                    minimum: 1
+                    type: integer
+                type: object
               targetDeploymentId:
                 description: |-
                   TargetDeploymentID is the deployment ID to retry or rollback to.

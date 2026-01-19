@@ -5,12 +5,26 @@
 package cf
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
+	"mime/multipart"
+	"net/http"
+	"path/filepath"
 	"time"
 
 	"github.com/cloudflare/cloudflare-go"
 )
+
+// fileEntry represents a file to upload in a batch.
+type fileEntry struct {
+	path    string
+	content []byte
+}
 
 // PagesProjectParams contains parameters for creating or updating a Pages project
 type PagesProjectParams struct {
@@ -939,4 +953,276 @@ func convertFromPagesDeployment(deployment cloudflare.PagesProjectDeployment) *P
 	}
 
 	return result
+}
+
+// =============================================================================
+// Direct Upload API
+// =============================================================================
+
+// PagesDirectUploadResult contains the result of a direct upload deployment.
+type PagesDirectUploadResult struct {
+	ID    string `json:"id"`
+	URL   string `json:"url"`
+	Stage string `json:"stage"`
+}
+
+// CreatePagesDirectUploadDeployment creates a deployment via direct upload.
+// This uses the Pages Direct Upload API to upload static files directly.
+//
+//nolint:revive // cognitive complexity is acceptable for multi-step upload process
+func (api *API) CreatePagesDirectUploadDeployment(
+	ctx context.Context,
+	projectName string,
+	files map[string][]byte,
+) (*PagesDirectUploadResult, error) {
+	if api.CloudflareClient == nil {
+		return nil, errClientNotInitialized
+	}
+
+	accountID, err := api.GetAccountId(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get account ID: %w", err)
+	}
+
+	api.Log.Info("Creating direct upload deployment",
+		"project", projectName,
+		"fileCount", len(files))
+
+	// Step 1: Create upload session and get JWT
+	session, err := api.createDirectUploadSession(ctx, accountID, projectName, files)
+	if err != nil {
+		return nil, fmt.Errorf("create upload session: %w", err)
+	}
+
+	// Step 2: Upload files in batches
+	if err := api.uploadFilesToSession(ctx, session, files); err != nil {
+		return nil, fmt.Errorf("upload files: %w", err)
+	}
+
+	// Step 3: Complete the deployment
+	result, err := api.completeDirectUpload(ctx, accountID, projectName, session.JWT)
+	if err != nil {
+		return nil, fmt.Errorf("complete upload: %w", err)
+	}
+
+	api.Log.Info("Created direct upload deployment",
+		"project", projectName,
+		"deploymentId", result.ID,
+		"url", result.URL)
+
+	return result, nil
+}
+
+// directUploadSession contains session info for direct upload.
+type directUploadSession struct {
+	JWT string `json:"jwt"`
+}
+
+// createDirectUploadSession creates a new upload session.
+func (api *API) createDirectUploadSession(
+	ctx context.Context,
+	accountID string,
+	projectName string,
+	files map[string][]byte,
+) (*directUploadSession, error) {
+	// Build file manifest with hashes
+	manifest := make([]map[string]interface{}, 0, len(files))
+	for path, content := range files {
+		hash := sha256.Sum256(content)
+		manifest = append(manifest, map[string]interface{}{
+			"key":  "/" + path,
+			"hash": hex.EncodeToString(hash[:]),
+			"size": len(content),
+		})
+	}
+
+	// Prepare request body
+	reqBody := map[string]interface{}{
+		"manifest": manifest,
+	}
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request body: %w", err)
+	}
+
+	// Call Cloudflare API to create session
+	endpoint := fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/pages/projects/%s/upload-token",
+		accountID, projectName)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	// Add authorization header from the API client
+	if api.APIToken != "" {
+		req.Header.Set("Authorization", "Bearer "+api.APIToken)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("execute request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("create upload token failed with status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var response struct {
+		Result struct {
+			JWT string `json:"jwt"`
+		} `json:"result"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	return &directUploadSession{
+		JWT: response.Result.JWT,
+	}, nil
+}
+
+// uploadFilesToSession uploads files to the session.
+func (api *API) uploadFilesToSession(
+	ctx context.Context,
+	session *directUploadSession,
+	files map[string][]byte,
+) error {
+	const batchSize = 100
+
+	// Convert map to slice for batching
+	fileList := make([]fileEntry, 0, len(files))
+	for path, content := range files {
+		fileList = append(fileList, fileEntry{path: path, content: content})
+	}
+
+	// Upload in batches
+	for i := 0; i < len(fileList); i += batchSize {
+		end := i + batchSize
+		if end > len(fileList) {
+			end = len(fileList)
+		}
+
+		batch := fileList[i:end]
+		if err := api.uploadBatch(ctx, session, batch); err != nil {
+			return fmt.Errorf("upload batch %d-%d: %w", i, end, err)
+		}
+
+		api.Log.V(1).Info("Uploaded file batch",
+			"start", i,
+			"end", end,
+			"total", len(fileList))
+	}
+
+	return nil
+}
+
+// uploadBatch uploads a batch of files.
+func (api *API) uploadBatch(
+	ctx context.Context,
+	session *directUploadSession,
+	files []fileEntry,
+) error {
+	// Create multipart form
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+
+	for _, file := range files {
+		// Use the path as the form field name
+		part, err := writer.CreateFormFile(file.path, filepath.Base(file.path))
+		if err != nil {
+			return fmt.Errorf("create form file %s: %w", file.path, err)
+		}
+		if _, err := part.Write(file.content); err != nil {
+			return fmt.Errorf("write file content %s: %w", file.path, err)
+		}
+	}
+
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("close multipart writer: %w", err)
+	}
+
+	// Upload to Cloudflare's upload endpoint
+	uploadURL := "https://pages-upload.cloudflare.com/upload"
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, uploadURL, &body)
+	if err != nil {
+		return fmt.Errorf("create upload request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+session.JWT)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("execute upload request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("upload failed with status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
+// completeDirectUpload completes the direct upload deployment.
+func (api *API) completeDirectUpload(
+	ctx context.Context,
+	accountID string,
+	projectName string,
+	jwt string,
+) (*PagesDirectUploadResult, error) {
+	// Prepare request body
+	reqBody := map[string]interface{}{
+		"jwt": jwt,
+	}
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request body: %w", err)
+	}
+
+	endpoint := fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/pages/projects/%s/deployments",
+		accountID, projectName)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	// Add authorization header from the API client
+	if api.APIToken != "" {
+		req.Header.Set("Authorization", "Bearer "+api.APIToken)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("execute request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("complete deployment failed with status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var response struct {
+		Result cloudflare.PagesProjectDeployment `json:"result"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	return &PagesDirectUploadResult{
+		ID:    response.Result.ID,
+		URL:   response.Result.URL,
+		Stage: response.Result.LatestStage.Name,
+	}, nil
 }

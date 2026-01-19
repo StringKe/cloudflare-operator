@@ -38,6 +38,10 @@ Cloudflare Operator 常见任务的操作指南。
 - [Gateway API 集成](gateway-api-integration.md)
 - [Istio 服务网格集成](istio-integration.md)
 
+## Cloudflare Pages
+
+- [Pages 高级部署](pages-advanced-deployment.md) - 直接上传、智能回滚、项目导入
+
 ## 高级主题
 
 - [多租户配置](multi-tenant.md)

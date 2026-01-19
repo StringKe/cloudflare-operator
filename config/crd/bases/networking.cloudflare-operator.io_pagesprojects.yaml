@@ -60,6 +60,18 @@ spec:
           spec:
             description: PagesProjectSpec defines the desired state of PagesProject
             properties:
+              adoptionPolicy:
+                default: MustNotExist
+                description: |-
+                  AdoptionPolicy defines how to handle existing Cloudflare projects.
+                  - IfExists: Adopt if exists, create if not
+                  - MustExist: Require project to exist in Cloudflare
+                  - MustNotExist: Require project to NOT exist (default, creates new)
+                enum:
+                - IfExists
+                - MustExist
+                - MustNotExist
+                type: string
               buildConfig:
                 description: BuildConfig contains the build configuration.
                 properties:
@@ -634,6 +646,14 @@ spec:
                         type: array
                     type: object
                 type: object
+              deploymentHistoryLimit:
+                default: 10
+                description: |-
+                  DeploymentHistoryLimit is the number of deployment records to keep in history.
+                  Used for intelligent rollback feature.
+                maximum: 100
+                minimum: 0
+                type: integer
               name:
                 description: |-
                   Name is the project name in Cloudflare Pages.
@@ -728,6 +748,14 @@ spec:
               accountId:
                 description: AccountID is the Cloudflare account ID.
                 type: string
+              adopted:
+                description: Adopted indicates whether this project was adopted from
+                  an existing Cloudflare project.
+                type: boolean
+              adoptedAt:
+                description: AdoptedAt is the timestamp when the project was adopted.
+                format: date-time
+                type: string
               conditions:
                 description: Conditions represent the latest available observations.
                 items:
@@ -788,11 +816,62 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              deploymentHistory:
+                description: |-
+                  DeploymentHistory contains recent deployment records for this project.
+                  Used for intelligent rollback feature.
+                items:
+                  description: DeploymentHistoryEntry represents a deployment in history.
+                  properties:
+                    createdAt:
+                      description: CreatedAt is when the deployment was created.
+                      format: date-time
+                      type: string
+                    deploymentId:
+                      description: DeploymentID is the Cloudflare deployment ID.
+                      type: string
+                    environment:
+                      description: Environment is the deployment environment (production
+                        or preview).
+                      type: string
+                    isProduction:
+                      description: IsProduction indicates if this is the current production
+                        deployment.
+                      type: boolean
+                    source:
+                      description: |-
+                        Source describes the deployment source.
+                        Examples: "git:main", "direct-upload:http", "rollback:v5"
+                      type: string
+                    status:
+                      description: |-
+                        Status is the deployment status.
+                        Examples: "active", "failed", "superseded"
+                      type: string
+                    url:
+                      description: URL is the deployment URL.
+                      type: string
+                    version:
+                      description: |-
+                        Version is the sequential deployment version number.
+                        Starts at 1 and increments with each deployment.
+                      type: integer
+                  required:
+                  - createdAt
+                  - deploymentId
+                  - version
+                  type: object
+                type: array
               domains:
                 description: Domains are the custom domains configured for this project.
                 items:
                   type: string
                 type: array
+              lastSuccessfulDeploymentId:
+                description: |-
+                  LastSuccessfulDeploymentID is the ID of the last successful deployment.
+                  Used for LastSuccessful rollback strategy.
+                type: string
               latestDeployment:
                 description: LatestDeployment is the latest deployment info.
                 properties:
@@ -818,6 +897,602 @@ spec:
                 description: ObservedGeneration is the last observed generation.
                 format: int64
                 type: integer
+              originalConfig:
+                description: |-
+                  OriginalConfig stores the original Cloudflare configuration before adoption.
+                  Useful for reference or potential rollback.
+                properties:
+                  buildConfig:
+                    description: BuildConfig from Cloudflare.
+                    properties:
+                      buildCaching:
+                        default: true
+                        description: BuildCaching enables build caching.
+                        type: boolean
+                      buildCommand:
+                        description: BuildCommand is the command to build the project.
+                        type: string
+                      destinationDir:
+                        description: DestinationDir is the build output directory.
+                        type: string
+                      rootDir:
+                        description: RootDir is the root directory for the build.
+                        type: string
+                      webAnalyticsTag:
+                        description: WebAnalyticsTag is the Web Analytics tag.
+                        type: string
+                      webAnalyticsToken:
+                        description: WebAnalyticsToken is the Web Analytics token.
+                        type: string
+                    type: object
+                  capturedAt:
+                    description: CapturedAt is when this configuration was captured.
+                    format: date-time
+                    type: string
+                  deploymentConfigs:
+                    description: DeploymentConfigs from Cloudflare.
+                    properties:
+                      preview:
+                        description: Preview contains preview environment configuration.
+                        properties:
+                          aiBindings:
+                            description: AIBindings for Workers AI.
+                            items:
+                              description: PagesAIBinding defines a Workers AI binding.
+                              properties:
+                                name:
+                                  description: Name is the binding name.
+                                  type: string
+                              required:
+                              - name
+                              type: object
+                            type: array
+                          alwaysUseLatestCompatibilityDate:
+                            description: AlwaysUseLatestCompatibilityDate to auto-update.
+                            type: boolean
+                          browserBinding:
+                            description: BrowserBinding for Browser Rendering.
+                            properties:
+                              name:
+                                default: BROWSER
+                                description: Name is the binding name (optional, defaults
+                                  to "BROWSER").
+                                type: string
+                            type: object
+                          compatibilityDate:
+                            description: CompatibilityDate for Workers runtime.
+                            type: string
+                          compatibilityFlags:
+                            description: CompatibilityFlags for Workers runtime.
+                            items:
+                              type: string
+                            type: array
+                          d1Bindings:
+                            description: D1Bindings for D1 databases.
+                            items:
+                              description: PagesD1Binding defines a D1 database binding.
+                              properties:
+                                databaseId:
+                                  description: DatabaseID is the D1 database ID.
+                                  type: string
+                                name:
+                                  description: Name is the binding name.
+                                  type: string
+                              required:
+                              - databaseId
+                              - name
+                              type: object
+                            type: array
+                          durableObjectBindings:
+                            description: DurableObjectBindings for Durable Objects.
+                            items:
+                              description: PagesDurableObjectBinding defines a Durable
+                                Object binding.
+                              properties:
+                                className:
+                                  description: ClassName is the Durable Object class
+                                    name.
+                                  type: string
+                                environmentName:
+                                  description: EnvironmentName is the Worker environment
+                                    name.
+                                  type: string
+                                name:
+                                  description: Name is the binding name.
+                                  type: string
+                                scriptName:
+                                  description: ScriptName is the Worker script name.
+                                  type: string
+                              required:
+                              - className
+                              - name
+                              type: object
+                            type: array
+                          environmentVariables:
+                            additionalProperties:
+                              description: PagesEnvVar defines an environment variable.
+                              properties:
+                                type:
+                                  allOf:
+                                  - enum:
+                                    - plain_text
+                                    - secret_text
+                                  - enum:
+                                    - plain_text
+                                    - secret_text
+                                  default: plain_text
+                                  description: Type is "plain_text" or "secret_text".
+                                  type: string
+                                value:
+                                  description: Value is the plain text value.
+                                  type: string
+                              type: object
+                            description: EnvironmentVariables for this environment.
+                            type: object
+                          failOpen:
+                            description: FailOpen when Workers script fails.
+                            type: boolean
+                          hyperdriveBindings:
+                            description: HyperdriveBindings for Hyperdrive configurations.
+                            items:
+                              description: PagesHyperdriveBinding defines a Hyperdrive
+                                binding.
+                              properties:
+                                id:
+                                  description: ID is the Hyperdrive configuration
+                                    ID.
+                                  type: string
+                                name:
+                                  description: Name is the binding name.
+                                  type: string
+                              required:
+                              - id
+                              - name
+                              type: object
+                            type: array
+                          kvBindings:
+                            description: KVBindings for KV namespaces.
+                            items:
+                              description: PagesKVBinding defines a KV namespace binding.
+                              properties:
+                                name:
+                                  description: Name is the binding name.
+                                  type: string
+                                namespaceId:
+                                  description: NamespaceID is the KV namespace ID.
+                                  type: string
+                              required:
+                              - name
+                              - namespaceId
+                              type: object
+                            type: array
+                          mtlsCertificates:
+                            description: MTLSCertificates for mTLS certificates.
+                            items:
+                              description: PagesMTLSCertificate defines an mTLS certificate
+                                binding.
+                              properties:
+                                certificateId:
+                                  description: CertificateID is the mTLS certificate
+                                    ID.
+                                  type: string
+                                name:
+                                  description: Name is the binding name.
+                                  type: string
+                              required:
+                              - certificateId
+                              - name
+                              type: object
+                            type: array
+                          placement:
+                            description: Placement for Smart Placement.
+                            properties:
+                              mode:
+                                default: smart
+                                description: Mode is the placement mode ("smart" for
+                                  Smart Placement).
+                                type: string
+                            type: object
+                          queueBindings:
+                            description: QueueBindings for Queue producers.
+                            items:
+                              description: PagesQueueBinding defines a Queue producer
+                                binding.
+                              properties:
+                                name:
+                                  description: Name is the binding name.
+                                  type: string
+                                queueName:
+                                  description: QueueName is the Queue name.
+                                  type: string
+                              required:
+                              - name
+                              - queueName
+                              type: object
+                            type: array
+                          r2Bindings:
+                            description: R2Bindings for R2 buckets.
+                            items:
+                              description: PagesR2Binding defines an R2 bucket binding.
+                              properties:
+                                bucketName:
+                                  description: BucketName is the R2 bucket name.
+                                  type: string
+                                name:
+                                  description: Name is the binding name.
+                                  type: string
+                              required:
+                              - bucketName
+                              - name
+                              type: object
+                            type: array
+                          serviceBindings:
+                            description: ServiceBindings for Workers services.
+                            items:
+                              description: PagesServiceBinding defines a Workers service
+                                binding.
+                              properties:
+                                environment:
+                                  description: Environment is the Worker environment.
+                                  type: string
+                                name:
+                                  description: Name is the binding name.
+                                  type: string
+                                service:
+                                  description: Service is the Worker service name.
+                                  type: string
+                              required:
+                              - name
+                              - service
+                              type: object
+                            type: array
+                          usageModel:
+                            description: UsageModel for Workers Unbound.
+                            enum:
+                            - bundled
+                            - unbound
+                            type: string
+                          vectorizeBindings:
+                            description: VectorizeBindings for Vectorize indexes.
+                            items:
+                              description: PagesVectorizeBinding defines a Vectorize
+                                index binding.
+                              properties:
+                                indexName:
+                                  description: IndexName is the Vectorize index name.
+                                  type: string
+                                name:
+                                  description: Name is the binding name.
+                                  type: string
+                              required:
+                              - indexName
+                              - name
+                              type: object
+                            type: array
+                        type: object
+                      production:
+                        description: Production contains production environment configuration.
+                        properties:
+                          aiBindings:
+                            description: AIBindings for Workers AI.
+                            items:
+                              description: PagesAIBinding defines a Workers AI binding.
+                              properties:
+                                name:
+                                  description: Name is the binding name.
+                                  type: string
+                              required:
+                              - name
+                              type: object
+                            type: array
+                          alwaysUseLatestCompatibilityDate:
+                            description: AlwaysUseLatestCompatibilityDate to auto-update.
+                            type: boolean
+                          browserBinding:
+                            description: BrowserBinding for Browser Rendering.
+                            properties:
+                              name:
+                                default: BROWSER
+                                description: Name is the binding name (optional, defaults
+                                  to "BROWSER").
+                                type: string
+                            type: object
+                          compatibilityDate:
+                            description: CompatibilityDate for Workers runtime.
+                            type: string
+                          compatibilityFlags:
+                            description: CompatibilityFlags for Workers runtime.
+                            items:
+                              type: string
+                            type: array
+                          d1Bindings:
+                            description: D1Bindings for D1 databases.
+                            items:
+                              description: PagesD1Binding defines a D1 database binding.
+                              properties:
+                                databaseId:
+                                  description: DatabaseID is the D1 database ID.
+                                  type: string
+                                name:
+                                  description: Name is the binding name.
+                                  type: string
+                              required:
+                              - databaseId
+                              - name
+                              type: object
+                            type: array
+                          durableObjectBindings:
+                            description: DurableObjectBindings for Durable Objects.
+                            items:
+                              description: PagesDurableObjectBinding defines a Durable
+                                Object binding.
+                              properties:
+                                className:
+                                  description: ClassName is the Durable Object class
+                                    name.
+                                  type: string
+                                environmentName:
+                                  description: EnvironmentName is the Worker environment
+                                    name.
+                                  type: string
+                                name:
+                                  description: Name is the binding name.
+                                  type: string
+                                scriptName:
+                                  description: ScriptName is the Worker script name.
+                                  type: string
+                              required:
+                              - className
+                              - name
+                              type: object
+                            type: array
+                          environmentVariables:
+                            additionalProperties:
+                              description: PagesEnvVar defines an environment variable.
+                              properties:
+                                type:
+                                  allOf:
+                                  - enum:
+                                    - plain_text
+                                    - secret_text
+                                  - enum:
+                                    - plain_text
+                                    - secret_text
+                                  default: plain_text
+                                  description: Type is "plain_text" or "secret_text".
+                                  type: string
+                                value:
+                                  description: Value is the plain text value.
+                                  type: string
+                              type: object
+                            description: EnvironmentVariables for this environment.
+                            type: object
+                          failOpen:
+                            description: FailOpen when Workers script fails.
+                            type: boolean
+                          hyperdriveBindings:
+                            description: HyperdriveBindings for Hyperdrive configurations.
+                            items:
+                              description: PagesHyperdriveBinding defines a Hyperdrive
+                                binding.
+                              properties:
+                                id:
+                                  description: ID is the Hyperdrive configuration
+                                    ID.
+                                  type: string
+                                name:
+                                  description: Name is the binding name.
+                                  type: string
+                              required:
+                              - id
+                              - name
+                              type: object
+                            type: array
+                          kvBindings:
+                            description: KVBindings for KV namespaces.
+                            items:
+                              description: PagesKVBinding defines a KV namespace binding.
+                              properties:
+                                name:
+                                  description: Name is the binding name.
+                                  type: string
+                                namespaceId:
+                                  description: NamespaceID is the KV namespace ID.
+                                  type: string
+                              required:
+                              - name
+                              - namespaceId
+                              type: object
+                            type: array
+                          mtlsCertificates:
+                            description: MTLSCertificates for mTLS certificates.
+                            items:
+                              description: PagesMTLSCertificate defines an mTLS certificate
+                                binding.
+                              properties:
+                                certificateId:
+                                  description: CertificateID is the mTLS certificate
+                                    ID.
+                                  type: string
+                                name:
+                                  description: Name is the binding name.
+                                  type: string
+                              required:
+                              - certificateId
+                              - name
+                              type: object
+                            type: array
+                          placement:
+                            description: Placement for Smart Placement.
+                            properties:
+                              mode:
+                                default: smart
+                                description: Mode is the placement mode ("smart" for
+                                  Smart Placement).
+                                type: string
+                            type: object
+                          queueBindings:
+                            description: QueueBindings for Queue producers.
+                            items:
+                              description: PagesQueueBinding defines a Queue producer
+                                binding.
+                              properties:
+                                name:
+                                  description: Name is the binding name.
+                                  type: string
+                                queueName:
+                                  description: QueueName is the Queue name.
+                                  type: string
+                              required:
+                              - name
+                              - queueName
+                              type: object
+                            type: array
+                          r2Bindings:
+                            description: R2Bindings for R2 buckets.
+                            items:
+                              description: PagesR2Binding defines an R2 bucket binding.
+                              properties:
+                                bucketName:
+                                  description: BucketName is the R2 bucket name.
+                                  type: string
+                                name:
+                                  description: Name is the binding name.
+                                  type: string
+                              required:
+                              - bucketName
+                              - name
+                              type: object
+                            type: array
+                          serviceBindings:
+                            description: ServiceBindings for Workers services.
+                            items:
+                              description: PagesServiceBinding defines a Workers service
+                                binding.
+                              properties:
+                                environment:
+                                  description: Environment is the Worker environment.
+                                  type: string
+                                name:
+                                  description: Name is the binding name.
+                                  type: string
+                                service:
+                                  description: Service is the Worker service name.
+                                  type: string
+                              required:
+                              - name
+                              - service
+                              type: object
+                            type: array
+                          usageModel:
+                            description: UsageModel for Workers Unbound.
+                            enum:
+                            - bundled
+                            - unbound
+                            type: string
+                          vectorizeBindings:
+                            description: VectorizeBindings for Vectorize indexes.
+                            items:
+                              description: PagesVectorizeBinding defines a Vectorize
+                                index binding.
+                              properties:
+                                indexName:
+                                  description: IndexName is the Vectorize index name.
+                                  type: string
+                                name:
+                                  description: Name is the binding name.
+                                  type: string
+                              required:
+                              - indexName
+                              - name
+                              type: object
+                            type: array
+                        type: object
+                    type: object
+                  productionBranch:
+                    description: ProductionBranch from Cloudflare.
+                    type: string
+                  source:
+                    description: Source configuration from Cloudflare.
+                    properties:
+                      github:
+                        description: GitHub config when type is github.
+                        properties:
+                          deploymentsEnabled:
+                            default: true
+                            description: DeploymentsEnabled enables deployments globally.
+                            type: boolean
+                          owner:
+                            description: Owner is the GitHub repository owner.
+                            type: string
+                          prCommentsEnabled:
+                            default: true
+                            description: PRCommentsEnabled enables PR comments.
+                            type: boolean
+                          previewDeploymentsEnabled:
+                            default: true
+                            description: PreviewDeploymentsEnabled enables preview
+                              deployments.
+                            type: boolean
+                          productionDeploymentsEnabled:
+                            default: true
+                            description: ProductionDeploymentsEnabled enables production
+                              deployments.
+                            type: boolean
+                          repo:
+                            description: Repo is the GitHub repository name.
+                            type: string
+                        required:
+                        - owner
+                        - repo
+                        type: object
+                      gitlab:
+                        description: GitLab config when type is gitlab.
+                        properties:
+                          deploymentsEnabled:
+                            default: true
+                            description: DeploymentsEnabled enables deployments globally.
+                            type: boolean
+                          owner:
+                            description: Owner is the GitLab namespace.
+                            type: string
+                          previewDeploymentsEnabled:
+                            default: true
+                            description: PreviewDeploymentsEnabled enables preview
+                              deployments.
+                            type: boolean
+                          productionDeploymentsEnabled:
+                            default: true
+                            description: ProductionDeploymentsEnabled enables production
+                              deployments.
+                            type: boolean
+                          repo:
+                            description: Repo is the GitLab project name.
+                            type: string
+                        required:
+                        - owner
+                        - repo
+                        type: object
+                      type:
+                        allOf:
+                        - enum:
+                          - github
+                          - gitlab
+                          - direct_upload
+                        - enum:
+                          - github
+                          - gitlab
+                          - direct_upload
+                        default: direct_upload
+                        description: Type is the source type (github, gitlab, direct_upload).
+                        type: string
+                    type: object
+                  subdomain:
+                    description: Subdomain is the *.pages.dev subdomain.
+                    type: string
+                required:
+                - capturedAt
+                type: object
               projectId:
                 description: ProjectID is the Cloudflare project ID (same as name).
                 type: string

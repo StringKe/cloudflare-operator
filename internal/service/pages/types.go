@@ -44,6 +44,10 @@ type PagesProjectConfig struct {
 	BuildConfig *PagesBuildConfig `json:"buildConfig,omitempty"`
 	// DeploymentConfigs contains environment-specific configurations
 	DeploymentConfigs *PagesDeploymentConfigs `json:"deploymentConfigs,omitempty"`
+	// AdoptionPolicy defines how to handle existing projects
+	AdoptionPolicy string `json:"adoptionPolicy,omitempty"`
+	// DeploymentHistoryLimit is the number of history entries to keep
+	DeploymentHistoryLimit int `json:"deploymentHistoryLimit,omitempty"`
 }
 
 // PagesSourceConfig defines the source repository configuration.
@@ -208,6 +212,34 @@ type PagesDeploymentActionConfig struct {
 	TargetDeploymentID string `json:"targetDeploymentId,omitempty"`
 	// PurgeBuildCache purges the build cache before deployment
 	PurgeBuildCache bool `json:"purgeBuildCache,omitempty"`
+	// DirectUpload contains configuration for direct upload deployments
+	DirectUpload *DirectUploadConfig `json:"directUpload,omitempty"`
+	// Rollback contains configuration for intelligent rollback
+	Rollback *RollbackConfig `json:"rollback,omitempty"`
+}
+
+// DirectUploadConfig contains configuration for direct upload deployments.
+type DirectUploadConfig struct {
+	// Source defines where to fetch the deployment files from
+	Source *v1alpha2.DirectUploadSource `json:"source,omitempty"`
+	// Checksum for file integrity verification
+	Checksum *v1alpha2.ChecksumConfig `json:"checksum,omitempty"`
+	// Archive configuration for compressed files
+	Archive *v1alpha2.ArchiveConfig `json:"archive,omitempty"`
+	// ManifestConfigMapRef references a ConfigMap containing file manifest (deprecated)
+	ManifestConfigMapRef string `json:"manifestConfigMapRef,omitempty"`
+	// Manifest contains inline file manifest (deprecated)
+	Manifest map[string]string `json:"manifest,omitempty"`
+}
+
+// RollbackConfig contains configuration for intelligent rollback.
+type RollbackConfig struct {
+	// Strategy defines how to select the rollback target
+	Strategy string `json:"strategy"`
+	// Version is the target version number (for ByVersion strategy)
+	Version *int `json:"version,omitempty"`
+	// DeploymentID is the exact deployment ID (for ExactDeploymentID strategy)
+	DeploymentID string `json:"deploymentId,omitempty"`
 }
 
 // ProjectRegisterOptions contains options for registering a Pages project configuration.

@@ -12,8 +12,11 @@ package pages
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -153,7 +156,7 @@ func (*ProjectSyncController) extractConfig(syncState *v1alpha2.CloudflareSyncSt
 
 // syncToCloudflare syncs the Pages project configuration to Cloudflare API.
 //
-//nolint:revive // cognitive complexity is acceptable for API sync logic
+//nolint:revive // cognitive complexity is acceptable for API sync logic with adoption
 func (r *ProjectSyncController) syncToCloudflare(
 	ctx context.Context,
 	syncState *v1alpha2.CloudflareSyncState,
@@ -174,52 +177,180 @@ func (r *ProjectSyncController) syncToCloudflare(
 	cloudflareID := syncState.Spec.CloudflareID
 
 	if common.IsPendingID(cloudflareID) {
-		// Create new project
-		logger.Info("Creating new Pages project",
-			"name", config.Name,
-			"productionBranch", config.ProductionBranch)
-
-		result, err := apiClient.CreatePagesProject(ctx, *params)
-		if err != nil {
-			return fmt.Errorf("create Pages project: %w", err)
-		}
-
-		// Update SyncState with actual project name (which is the ID)
-		common.UpdateCloudflareID(ctx, r.Client, syncState, result.Name)
-
-		logger.Info("Created Pages project",
-			"projectName", result.Name,
-			"subdomain", result.Subdomain)
-	} else {
-		// Update existing project
-		logger.Info("Updating Pages project",
-			"projectName", cloudflareID)
-
-		_, err := apiClient.UpdatePagesProject(ctx, cloudflareID, *params)
-		if err != nil {
-			// Check if project was deleted externally
-			if common.HandleNotFoundOnUpdate(err) {
-				// Project deleted externally, recreate it
-				logger.Info("Pages project not found, recreating",
-					"projectName", cloudflareID)
-
-				result, err := apiClient.CreatePagesProject(ctx, *params)
-				if err != nil {
-					return fmt.Errorf("recreate Pages project: %w", err)
-				}
-
-				// Update SyncState with new project name
-				common.UpdateCloudflareID(ctx, r.Client, syncState, result.Name)
-			} else {
-				return fmt.Errorf("update Pages project: %w", err)
-			}
-		}
-
-		logger.Info("Updated Pages project",
-			"projectName", cloudflareID)
+		// Handle adoption policy for new projects
+		return r.handleNewProject(ctx, apiClient, syncState, config, params)
 	}
 
+	// Update existing project
+	logger.Info("Updating Pages project",
+		"projectName", cloudflareID)
+
+	_, err = apiClient.UpdatePagesProject(ctx, cloudflareID, *params)
+	if err != nil {
+		// Check if project was deleted externally
+		if common.HandleNotFoundOnUpdate(err) {
+			// Project deleted externally, recreate it
+			logger.Info("Pages project not found, recreating",
+				"projectName", cloudflareID)
+
+			result, err := apiClient.CreatePagesProject(ctx, *params)
+			if err != nil {
+				return fmt.Errorf("recreate Pages project: %w", err)
+			}
+
+			// Update SyncState with new project name
+			common.UpdateCloudflareID(ctx, r.Client, syncState, result.Name)
+		} else {
+			return fmt.Errorf("update Pages project: %w", err)
+		}
+	}
+
+	logger.Info("Updated Pages project",
+		"projectName", cloudflareID)
+
 	return nil
+}
+
+// handleNewProject handles creation or adoption of a new project based on adoption policy.
+//
+//nolint:revive // cognitive complexity is acceptable for adoption logic
+func (r *ProjectSyncController) handleNewProject(
+	ctx context.Context,
+	apiClient *cf.API,
+	syncState *v1alpha2.CloudflareSyncState,
+	config *pagessvc.PagesProjectConfig,
+	params *cf.PagesProjectParams,
+) error {
+	logger := log.FromContext(ctx)
+
+	// Get adoption policy
+	adoptionPolicy := config.AdoptionPolicy
+	if adoptionPolicy == "" {
+		adoptionPolicy = v1alpha2.AdoptionPolicyMustNotExist
+	}
+
+	// Check if project already exists in Cloudflare
+	existingProject, err := apiClient.GetPagesProject(ctx, config.Name)
+	projectExists := err == nil && existingProject != nil
+
+	// Handle not found as expected case, return other errors
+	if err != nil && !cf.IsNotFoundError(err) {
+		return fmt.Errorf("check existing project: %w", err)
+	}
+
+	// Apply adoption policy
+	switch adoptionPolicy {
+	case v1alpha2.AdoptionPolicyMustNotExist:
+		if projectExists {
+			return fmt.Errorf("project %q already exists in Cloudflare; set adoptionPolicy to IfExists or MustExist to adopt", config.Name)
+		}
+
+	case v1alpha2.AdoptionPolicyMustExist:
+		if !projectExists {
+			return fmt.Errorf("project %q does not exist in Cloudflare (adoptionPolicy: MustExist)", config.Name)
+		}
+
+	case v1alpha2.AdoptionPolicyIfExists:
+		// Will adopt if exists, create if not
+	}
+
+	// Adopt existing project
+	if projectExists {
+		logger.Info("Adopting existing Cloudflare project",
+			"projectName", config.Name,
+			"adoptionPolicy", adoptionPolicy)
+
+		// Store original configuration for reference
+		if err := r.storeOriginalConfig(ctx, syncState, existingProject); err != nil {
+			logger.Error(err, "Failed to store original config, continuing with adoption")
+		}
+
+		// Update project with K8s configuration
+		_, err := apiClient.UpdatePagesProject(ctx, config.Name, *params)
+		if err != nil {
+			return fmt.Errorf("update adopted project: %w", err)
+		}
+
+		// Update SyncState with project name
+		common.UpdateCloudflareID(ctx, r.Client, syncState, config.Name)
+
+		// Mark as adopted in annotations
+		r.markAsAdopted(ctx, syncState)
+
+		logger.Info("Adopted Pages project",
+			"projectName", config.Name,
+			"subdomain", existingProject.Subdomain)
+
+		return nil
+	}
+
+	// Create new project
+	logger.Info("Creating new Pages project",
+		"name", config.Name,
+		"productionBranch", config.ProductionBranch)
+
+	result, err := apiClient.CreatePagesProject(ctx, *params)
+	if err != nil {
+		return fmt.Errorf("create Pages project: %w", err)
+	}
+
+	// Update SyncState with actual project name
+	common.UpdateCloudflareID(ctx, r.Client, syncState, result.Name)
+
+	logger.Info("Created Pages project",
+		"projectName", result.Name,
+		"subdomain", result.Subdomain)
+
+	return nil
+}
+
+// storeOriginalConfig stores the original Cloudflare configuration before adoption.
+func (r *ProjectSyncController) storeOriginalConfig(
+	ctx context.Context,
+	syncState *v1alpha2.CloudflareSyncState,
+	project *cf.PagesProjectResult,
+) error {
+	// Build original config
+	originalConfig := map[string]interface{}{
+		"productionBranch": project.ProductionBranch,
+		"subdomain":        project.Subdomain,
+		"capturedAt":       time.Now().Format(time.RFC3339),
+	}
+
+	if project.Source != nil {
+		originalConfig["source"] = project.Source
+	}
+	if project.BuildConfig != nil {
+		originalConfig["buildConfig"] = project.BuildConfig
+	}
+
+	configJSON, err := json.Marshal(originalConfig)
+	if err != nil {
+		return fmt.Errorf("marshal original config: %w", err)
+	}
+
+	if syncState.Annotations == nil {
+		syncState.Annotations = make(map[string]string)
+	}
+	syncState.Annotations["cloudflare-operator.io/original-config"] = string(configJSON)
+
+	return r.Client.Update(ctx, syncState)
+}
+
+// markAsAdopted marks the SyncState as adopted.
+func (r *ProjectSyncController) markAsAdopted(
+	ctx context.Context,
+	syncState *v1alpha2.CloudflareSyncState,
+) {
+	if syncState.Annotations == nil {
+		syncState.Annotations = make(map[string]string)
+	}
+	syncState.Annotations["cloudflare-operator.io/adopted"] = "true"
+	syncState.Annotations["cloudflare-operator.io/adopted-at"] = metav1.Now().Format(time.RFC3339)
+
+	if err := r.Client.Update(ctx, syncState); err != nil {
+		log.FromContext(ctx).Error(err, "Failed to mark SyncState as adopted")
+	}
 }
 
 // buildProjectParams builds the params for create/update from config.

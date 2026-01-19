@@ -403,6 +403,20 @@ type PagesDeploymentInfo struct {
 	CreatedOn string `json:"createdOn,omitempty"`
 }
 
+// AdoptionPolicy constants for PagesProject
+const (
+	// AdoptionPolicyIfExists adopts if project exists in Cloudflare, creates if not.
+	AdoptionPolicyIfExists = "IfExists"
+
+	// AdoptionPolicyMustExist requires the project to already exist in Cloudflare.
+	// Useful for importing existing projects into Kubernetes management.
+	AdoptionPolicyMustExist = "MustExist"
+
+	// AdoptionPolicyMustNotExist requires the project to NOT exist in Cloudflare.
+	// This is the default behavior - creates new projects only.
+	AdoptionPolicyMustNotExist = "MustNotExist"
+)
+
 // PagesProjectSpec defines the desired state of PagesProject
 type PagesProjectSpec struct {
 	// Name is the project name in Cloudflare Pages.
@@ -432,6 +446,23 @@ type PagesProjectSpec struct {
 	// Cloudflare contains Cloudflare-specific configuration.
 	// +kubebuilder:validation:Required
 	Cloudflare CloudflareDetails `json:"cloudflare"`
+
+	// AdoptionPolicy defines how to handle existing Cloudflare projects.
+	// - IfExists: Adopt if exists, create if not
+	// - MustExist: Require project to exist in Cloudflare
+	// - MustNotExist: Require project to NOT exist (default, creates new)
+	// +kubebuilder:validation:Enum=IfExists;MustExist;MustNotExist
+	// +kubebuilder:default=MustNotExist
+	// +kubebuilder:validation:Optional
+	AdoptionPolicy string `json:"adoptionPolicy,omitempty"`
+
+	// DeploymentHistoryLimit is the number of deployment records to keep in history.
+	// Used for intelligent rollback feature.
+	// +kubebuilder:default=10
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	// +kubebuilder:validation:Optional
+	DeploymentHistoryLimit *int `json:"deploymentHistoryLimit,omitempty"`
 
 	// DeletionPolicy specifies what happens when the Kubernetes resource is deleted.
 	// Delete: The Pages project will be deleted from Cloudflare.
@@ -481,6 +512,94 @@ type PagesProjectStatus struct {
 	// Message provides additional information about the current state.
 	// +kubebuilder:validation:Optional
 	Message string `json:"message,omitempty"`
+
+	// Adopted indicates whether this project was adopted from an existing Cloudflare project.
+	// +kubebuilder:validation:Optional
+	Adopted bool `json:"adopted,omitempty"`
+
+	// AdoptedAt is the timestamp when the project was adopted.
+	// +kubebuilder:validation:Optional
+	AdoptedAt *metav1.Time `json:"adoptedAt,omitempty"`
+
+	// OriginalConfig stores the original Cloudflare configuration before adoption.
+	// Useful for reference or potential rollback.
+	// +kubebuilder:validation:Optional
+	OriginalConfig *PagesProjectOriginalConfig `json:"originalConfig,omitempty"`
+
+	// DeploymentHistory contains recent deployment records for this project.
+	// Used for intelligent rollback feature.
+	// +kubebuilder:validation:Optional
+	DeploymentHistory []DeploymentHistoryEntry `json:"deploymentHistory,omitempty"`
+
+	// LastSuccessfulDeploymentID is the ID of the last successful deployment.
+	// Used for LastSuccessful rollback strategy.
+	// +kubebuilder:validation:Optional
+	LastSuccessfulDeploymentID string `json:"lastSuccessfulDeploymentId,omitempty"`
+}
+
+// PagesProjectOriginalConfig stores the original Cloudflare configuration before adoption.
+type PagesProjectOriginalConfig struct {
+	// ProductionBranch from Cloudflare.
+	// +kubebuilder:validation:Optional
+	ProductionBranch string `json:"productionBranch,omitempty"`
+
+	// Source configuration from Cloudflare.
+	// +kubebuilder:validation:Optional
+	Source *PagesSourceConfig `json:"source,omitempty"`
+
+	// BuildConfig from Cloudflare.
+	// +kubebuilder:validation:Optional
+	BuildConfig *PagesBuildConfig `json:"buildConfig,omitempty"`
+
+	// DeploymentConfigs from Cloudflare.
+	// +kubebuilder:validation:Optional
+	DeploymentConfigs *PagesDeploymentConfigs `json:"deploymentConfigs,omitempty"`
+
+	// Subdomain is the *.pages.dev subdomain.
+	// +kubebuilder:validation:Optional
+	Subdomain string `json:"subdomain,omitempty"`
+
+	// CapturedAt is when this configuration was captured.
+	// +kubebuilder:validation:Required
+	CapturedAt metav1.Time `json:"capturedAt"`
+}
+
+// DeploymentHistoryEntry represents a deployment in history.
+type DeploymentHistoryEntry struct {
+	// DeploymentID is the Cloudflare deployment ID.
+	// +kubebuilder:validation:Required
+	DeploymentID string `json:"deploymentId"`
+
+	// Version is the sequential deployment version number.
+	// Starts at 1 and increments with each deployment.
+	// +kubebuilder:validation:Required
+	Version int `json:"version"`
+
+	// URL is the deployment URL.
+	// +kubebuilder:validation:Optional
+	URL string `json:"url,omitempty"`
+
+	// Environment is the deployment environment (production or preview).
+	// +kubebuilder:validation:Optional
+	Environment string `json:"environment,omitempty"`
+
+	// Source describes the deployment source.
+	// Examples: "git:main", "direct-upload:http", "rollback:v5"
+	// +kubebuilder:validation:Optional
+	Source string `json:"source,omitempty"`
+
+	// CreatedAt is when the deployment was created.
+	// +kubebuilder:validation:Required
+	CreatedAt metav1.Time `json:"createdAt"`
+
+	// Status is the deployment status.
+	// Examples: "active", "failed", "superseded"
+	// +kubebuilder:validation:Optional
+	Status string `json:"status,omitempty"`
+
+	// IsProduction indicates if this is the current production deployment.
+	// +kubebuilder:validation:Optional
+	IsProduction bool `json:"isProduction,omitempty"`
 }
 
 // +kubebuilder:object:root=true

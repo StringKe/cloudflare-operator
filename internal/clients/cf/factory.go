@@ -69,6 +69,7 @@ func (*DefaultClientFactory) NewClient(config ClientConfig) (CloudflareClient, e
 		TunnelId:         config.TunnelID,
 		TunnelName:       config.TunnelName,
 		CloudflareClient: cfClient,
+		APIToken:         config.APIToken,
 	}, nil
 }
 

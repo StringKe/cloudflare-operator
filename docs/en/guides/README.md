@@ -38,6 +38,10 @@ How-to guides for common tasks with the Cloudflare Operator.
 - [Gateway API Integration](gateway-api-integration.md)
 - [Istio Service Mesh Integration](istio-integration.md)
 
+## Cloudflare Pages
+
+- [Pages Advanced Deployment](pages-advanced-deployment.md) - Direct Upload, Smart Rollback, Project Adoption
+
 ## Advanced Topics
 
 - [Multi-Tenant Setup](multi-tenant.md)

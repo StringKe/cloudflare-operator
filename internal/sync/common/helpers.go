@@ -16,6 +16,10 @@ import (
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 )
 
+// OperatorNamespace is the namespace where the operator is deployed.
+// This is used for storing cluster-scoped resource secrets.
+const OperatorNamespace = "cloudflare-operator-system"
+
 // PendingIDPrefix is the prefix used for Cloudflare IDs that haven't been created yet.
 // When a SyncState is first created, the CloudflareID is set to "pending-<resource-name>"
 // to indicate that the resource needs to be created in Cloudflare.
