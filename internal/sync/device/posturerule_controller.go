@@ -72,10 +72,9 @@ func (r *PostureRuleController) Reconcile(ctx context.Context, req ctrl.Request)
 		return r.handleDeletion(ctx, syncState)
 	}
 
-	// Add finalizer if not present
+	// Add finalizer if not present (with conflict retry)
 	if !controllerutil.ContainsFinalizer(syncState, PostureRuleFinalizerName) {
-		controllerutil.AddFinalizer(syncState, PostureRuleFinalizerName)
-		if err := r.Client.Update(ctx, syncState); err != nil {
+		if err := common.AddFinalizerWithRetry(ctx, r.Client, syncState, PostureRuleFinalizerName); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{Requeue: true}, nil
@@ -198,7 +197,7 @@ func (r *PostureRuleController) syncToCloudflare(
 			"name", config.Name,
 			"type", config.Type)
 
-		result, err = apiClient.CreateDevicePostureRule(params)
+		result, err = apiClient.CreateDevicePostureRule(ctx, params)
 		if err != nil {
 			return nil, fmt.Errorf("create Device Posture Rule: %w", err)
 		}
@@ -213,12 +212,12 @@ func (r *PostureRuleController) syncToCloudflare(
 			"ruleId", cloudflareID,
 			"name", config.Name)
 
-		result, err = apiClient.UpdateDevicePostureRule(cloudflareID, params)
+		result, err = apiClient.UpdateDevicePostureRule(ctx, cloudflareID, params)
 		if err != nil {
 			if common.HandleNotFoundOnUpdate(err) {
 				// Rule deleted externally, recreate it
 				logger.Info("Device Posture Rule not found, recreating", "ruleId", cloudflareID)
-				result, err = apiClient.CreateDevicePostureRule(params)
+				result, err = apiClient.CreateDevicePostureRule(ctx, params)
 				if err != nil {
 					return nil, fmt.Errorf("recreate Device Posture Rule: %w", err)
 				}
@@ -287,8 +286,23 @@ func (*PostureRuleController) convertInput(input *devicesvc.DevicePostureInput) 
 		Cn:               input.Cn,
 		CheckPrivateKey:  input.CheckPrivateKey,
 		ExtendedKeyUsage: input.ExtendedKeyUsage,
+		Locations:        convertLocations(input.Locations),
 		CheckDisks:       input.CheckDisks,
 	}
+}
+
+func convertLocations(locations []devicesvc.DevicePostureLocation) []cf.DevicePostureLocationParams {
+	if locations == nil {
+		return nil
+	}
+	result := make([]cf.DevicePostureLocationParams, len(locations))
+	for i, loc := range locations {
+		result[i] = cf.DevicePostureLocationParams{
+			Paths:       loc.Paths,
+			TrustStores: loc.TrustStores,
+		}
+	}
+	return result
 }
 
 // handleDeletion handles the deletion of Device Posture Rule from Cloudflare.
@@ -326,7 +340,7 @@ func (r *PostureRuleController) handleDeletion(
 		logger.Info("Deleting Device Posture Rule from Cloudflare",
 			"ruleId", cloudflareID)
 
-		if err := apiClient.DeleteDevicePostureRule(cloudflareID); err != nil {
+		if err := apiClient.DeleteDevicePostureRule(ctx, cloudflareID); err != nil {
 			if !cf.IsNotFoundError(err) {
 				logger.Error(err, "Failed to delete Device Posture Rule from Cloudflare")
 				if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
@@ -341,9 +355,8 @@ func (r *PostureRuleController) handleDeletion(
 		}
 	}
 
-	// Remove finalizer
-	controllerutil.RemoveFinalizer(syncState, PostureRuleFinalizerName)
-	if err := r.Client.Update(ctx, syncState); err != nil {
+	// Remove finalizer (with conflict retry)
+	if err := common.RemoveFinalizerWithRetry(ctx, r.Client, syncState, PostureRuleFinalizerName); err != nil {
 		logger.Error(err, "Failed to remove finalizer")
 		return ctrl.Result{}, err
 	}

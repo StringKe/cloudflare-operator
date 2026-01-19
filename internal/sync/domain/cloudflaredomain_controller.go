@@ -94,10 +94,9 @@ func (r *CloudflareDomainController) Reconcile(ctx context.Context, req ctrl.Req
 		return r.handleDeletion(ctx, syncState)
 	}
 
-	// Add finalizer if not present
+	// Add finalizer if not present (with conflict retry)
 	if !controllerutil.ContainsFinalizer(syncState, CloudflareDomainFinalizerName) {
-		controllerutil.AddFinalizer(syncState, CloudflareDomainFinalizerName)
-		if err := r.Client.Update(ctx, syncState); err != nil {
+		if err := common.AddFinalizerWithRetry(ctx, r.Client, syncState, CloudflareDomainFinalizerName); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{Requeue: true}, nil
@@ -206,9 +205,8 @@ func (r *CloudflareDomainController) handleDeletion(
 	logger.Info("CloudflareDomain deleted - zone settings will be preserved on Cloudflare",
 		"zoneId", syncState.Spec.ZoneID)
 
-	// Remove finalizer
-	controllerutil.RemoveFinalizer(syncState, CloudflareDomainFinalizerName)
-	if err := r.Client.Update(ctx, syncState); err != nil {
+	// Remove finalizer (with conflict retry)
+	if err := common.RemoveFinalizerWithRetry(ctx, r.Client, syncState, CloudflareDomainFinalizerName); err != nil {
 		logger.Error(err, "Failed to remove finalizer")
 		return ctrl.Result{}, err
 	}
@@ -327,6 +325,20 @@ func (*CloudflareDomainController) syncSSLSettings(
 		}
 	}
 
+	if ssl.TLS13 != "" {
+		logger.V(1).Info("Setting TLS 1.3", "value", ssl.TLS13)
+		if err := cfAPI.UpdateZoneSetting(ctx, zoneID, "tls_1_3", ssl.TLS13); err != nil {
+			return fmt.Errorf("set TLS 1.3: %w", err)
+		}
+	}
+
+	if ssl.AuthenticatedOriginPull != nil {
+		logger.V(1).Info("Setting authenticated origin pull", "enabled", ssl.AuthenticatedOriginPull.Enabled)
+		if err := cfAPI.UpdateZoneSetting(ctx, zoneID, "origin_error_page_pass_thru", boolToOnOff(ssl.AuthenticatedOriginPull.Enabled)); err != nil {
+			return fmt.Errorf("set authenticated origin pull: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -366,6 +378,41 @@ func (*CloudflareDomainController) syncCacheSettings(
 		logger.V(1).Info("Setting always online", "enabled", *cache.AlwaysOnline)
 		if err := cfAPI.UpdateZoneSetting(ctx, zoneID, "always_online", boolToOnOff(*cache.AlwaysOnline)); err != nil {
 			return fmt.Errorf("set always online: %w", err)
+		}
+	}
+
+	if cache.TieredCache != nil {
+		// Tiered caching uses tiered_caching setting with topology value
+		if cache.TieredCache.Enabled {
+			topology := cache.TieredCache.Topology
+			if topology == "" {
+				topology = "smart" // Default to smart topology
+			}
+			logger.V(1).Info("Setting tiered cache", "topology", topology)
+			if err := cfAPI.UpdateZoneSetting(ctx, zoneID, "tiered_caching", map[string]string{"value": topology}); err != nil {
+				return fmt.Errorf("set tiered cache: %w", err)
+			}
+		}
+	}
+
+	if cache.CacheReserve != nil {
+		logger.V(1).Info("Setting cache reserve", "enabled", cache.CacheReserve.Enabled)
+		if err := cfAPI.UpdateZoneSetting(ctx, zoneID, "cache_reserve", boolToOnOff(cache.CacheReserve.Enabled)); err != nil {
+			return fmt.Errorf("set cache reserve: %w", err)
+		}
+	}
+
+	if cache.CacheByDeviceType != nil {
+		logger.V(1).Info("Setting cache by device type", "enabled", *cache.CacheByDeviceType)
+		if err := cfAPI.UpdateZoneSetting(ctx, zoneID, "cache_device_type", boolToOnOff(*cache.CacheByDeviceType)); err != nil {
+			return fmt.Errorf("set cache by device type: %w", err)
+		}
+	}
+
+	if cache.SortQueryStringForCache != nil {
+		logger.V(1).Info("Setting sort query string for cache", "enabled", *cache.SortQueryStringForCache)
+		if err := cfAPI.UpdateZoneSetting(ctx, zoneID, "sort_query_string_for_cache", boolToOnOff(*cache.SortQueryStringForCache)); err != nil {
+			return fmt.Errorf("set sort query string for cache: %w", err)
 		}
 	}
 
@@ -416,6 +463,20 @@ func (*CloudflareDomainController) syncSecuritySettings(
 		logger.V(1).Info("Setting WAF", "enabled", *security.WAF.Enabled)
 		if err := cfAPI.UpdateZoneSetting(ctx, zoneID, "waf", boolToOnOff(*security.WAF.Enabled)); err != nil {
 			return fmt.Errorf("set WAF: %w", err)
+		}
+	}
+
+	if security.ServerSideExclude != nil {
+		logger.V(1).Info("Setting server side exclude", "enabled", *security.ServerSideExclude)
+		if err := cfAPI.UpdateZoneSetting(ctx, zoneID, "server_side_exclude", boolToOnOff(*security.ServerSideExclude)); err != nil {
+			return fmt.Errorf("set server side exclude: %w", err)
+		}
+	}
+
+	if security.ChallengePassage != nil {
+		logger.V(1).Info("Setting challenge passage", "ttl", *security.ChallengePassage)
+		if err := cfAPI.UpdateZoneSetting(ctx, zoneID, "challenge_ttl", *security.ChallengePassage); err != nil {
+			return fmt.Errorf("set challenge passage: %w", err)
 		}
 	}
 
@@ -508,6 +569,34 @@ func (*CloudflareDomainController) syncPerformanceSettings(
 		logger.V(1).Info("Setting Rocket Loader", "enabled", *perf.RocketLoader)
 		if err := cfAPI.UpdateZoneSetting(ctx, zoneID, "rocket_loader", boolToOnOff(*perf.RocketLoader)); err != nil {
 			return fmt.Errorf("set Rocket Loader: %w", err)
+		}
+	}
+
+	if perf.WebP != nil {
+		logger.V(1).Info("Setting WebP", "enabled", *perf.WebP)
+		if err := cfAPI.UpdateZoneSetting(ctx, zoneID, "webp", boolToOnOff(*perf.WebP)); err != nil {
+			return fmt.Errorf("set WebP: %w", err)
+		}
+	}
+
+	if perf.PrefetchPreload != nil {
+		logger.V(1).Info("Setting prefetch preload", "enabled", *perf.PrefetchPreload)
+		if err := cfAPI.UpdateZoneSetting(ctx, zoneID, "prefetch_preload", boolToOnOff(*perf.PrefetchPreload)); err != nil {
+			return fmt.Errorf("set prefetch preload: %w", err)
+		}
+	}
+
+	if perf.IPGeolocation != nil {
+		logger.V(1).Info("Setting IP geolocation", "enabled", *perf.IPGeolocation)
+		if err := cfAPI.UpdateZoneSetting(ctx, zoneID, "ip_geolocation", boolToOnOff(*perf.IPGeolocation)); err != nil {
+			return fmt.Errorf("set IP geolocation: %w", err)
+		}
+	}
+
+	if perf.Websockets != nil {
+		logger.V(1).Info("Setting websockets", "enabled", *perf.Websockets)
+		if err := cfAPI.UpdateZoneSetting(ctx, zoneID, "websockets", boolToOnOff(*perf.Websockets)); err != nil {
+			return fmt.Errorf("set websockets: %w", err)
 		}
 	}
 

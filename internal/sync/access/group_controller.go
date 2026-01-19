@@ -73,10 +73,9 @@ func (r *GroupController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return r.handleDeletion(ctx, syncState)
 	}
 
-	// Add finalizer if not present
+	// Add finalizer if not present (with conflict retry)
 	if !controllerutil.ContainsFinalizer(syncState, GroupFinalizerName) {
-		controllerutil.AddFinalizer(syncState, GroupFinalizerName)
-		if err := r.Client.Update(ctx, syncState); err != nil {
+		if err := common.AddFinalizerWithRetry(ctx, r.Client, syncState, GroupFinalizerName); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{Requeue: true}, nil
@@ -189,7 +188,7 @@ func (r *GroupController) syncToCloudflare(
 		logger.Info("Creating new AccessGroup",
 			"name", config.Name)
 
-		result, err = apiClient.CreateAccessGroup(params)
+		result, err = apiClient.CreateAccessGroup(ctx, params)
 		if err != nil {
 			return nil, fmt.Errorf("create AccessGroup: %w", err)
 		}
@@ -205,13 +204,13 @@ func (r *GroupController) syncToCloudflare(
 			"groupId", cloudflareID,
 			"name", config.Name)
 
-		result, err = apiClient.UpdateAccessGroup(cloudflareID, params)
+		result, err = apiClient.UpdateAccessGroup(ctx, cloudflareID, params)
 		if err != nil {
 			// Check if group was deleted externally
 			if common.HandleNotFoundOnUpdate(err) {
 				logger.Info("AccessGroup not found, recreating",
 					"groupId", cloudflareID)
-				result, err = apiClient.CreateAccessGroup(params)
+				result, err = apiClient.CreateAccessGroup(ctx, params)
 				if err != nil {
 					return nil, fmt.Errorf("recreate AccessGroup: %w", err)
 				}
@@ -456,7 +455,7 @@ func (r *GroupController) handleDeletion(
 		logger.Info("Deleting AccessGroup from Cloudflare",
 			"groupId", cloudflareID)
 
-		if err := apiClient.DeleteAccessGroup(cloudflareID); err != nil {
+		if err := apiClient.DeleteAccessGroup(ctx, cloudflareID); err != nil {
 			if !cf.IsNotFoundError(err) {
 				logger.Error(err, "Failed to delete AccessGroup from Cloudflare")
 				if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
@@ -471,9 +470,8 @@ func (r *GroupController) handleDeletion(
 		}
 	}
 
-	// Remove finalizer
-	controllerutil.RemoveFinalizer(syncState, GroupFinalizerName)
-	if err := r.Client.Update(ctx, syncState); err != nil {
+	// Remove finalizer (with conflict retry)
+	if err := common.RemoveFinalizerWithRetry(ctx, r.Client, syncState, GroupFinalizerName); err != nil {
 		logger.Error(err, "Failed to remove finalizer")
 		return ctrl.Result{}, err
 	}

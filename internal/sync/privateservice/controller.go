@@ -87,10 +87,9 @@ func (r *Controller) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return r.handleDeletion(ctx, syncState)
 	}
 
-	// Add finalizer if not present
+	// Add finalizer if not present (with conflict retry)
 	if !controllerutil.ContainsFinalizer(syncState, FinalizerName) {
-		controllerutil.AddFinalizer(syncState, FinalizerName)
-		if err := r.Client.Update(ctx, syncState); err != nil {
+		if err := common.AddFinalizerWithRetry(ctx, r.Client, syncState, FinalizerName); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{Requeue: true}, nil
@@ -220,7 +219,7 @@ func (r *Controller) syncToCloudflare(
 
 	if isPending {
 		// Check if route already exists (e.g., created by NetworkRoute or externally)
-		existing, err := apiClient.GetTunnelRoute(config.Network, config.VirtualNetworkID)
+		existing, err := apiClient.GetTunnelRoute(ctx, config.Network, config.VirtualNetworkID)
 		if err == nil && existing != nil {
 			// Route exists, update SyncState and return
 			logger.Info("Found existing tunnel route for PrivateService",
@@ -232,7 +231,7 @@ func (r *Controller) syncToCloudflare(
 				"network", config.Network,
 				"tunnelId", config.TunnelID)
 
-			result, err = apiClient.CreateTunnelRoute(params)
+			result, err = apiClient.CreateTunnelRoute(ctx, params)
 			if err != nil {
 				return nil, fmt.Errorf("create tunnel route: %w", err)
 			}
@@ -255,14 +254,14 @@ func (r *Controller) syncToCloudflare(
 			"network", cloudflareID,
 			"tunnelId", config.TunnelID)
 
-		result, err = apiClient.UpdateTunnelRoute(cloudflareID, params)
+		result, err = apiClient.UpdateTunnelRoute(ctx, cloudflareID, params)
 		if err != nil {
 			// Check if route was deleted externally
 			if cf.IsNotFoundError(err) {
 				// Route deleted externally, recreate it
 				logger.Info("Tunnel route not found, recreating for PrivateService",
 					"network", cloudflareID)
-				result, err = apiClient.CreateTunnelRoute(params)
+				result, err = apiClient.CreateTunnelRoute(ctx, params)
 				if err != nil {
 					return nil, fmt.Errorf("recreate tunnel route: %w", err)
 				}
@@ -348,7 +347,7 @@ func (r *Controller) handleDeletion(
 			"network", cloudflareID,
 			"virtualNetworkId", virtualNetworkID)
 
-		if err := apiClient.DeleteTunnelRoute(cloudflareID, virtualNetworkID); err != nil {
+		if err := apiClient.DeleteTunnelRoute(ctx, cloudflareID, virtualNetworkID); err != nil {
 			if !cf.IsNotFoundError(err) {
 				logger.Error(err, "Failed to delete tunnel route from Cloudflare")
 				if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
@@ -363,9 +362,8 @@ func (r *Controller) handleDeletion(
 		}
 	}
 
-	// Remove finalizer
-	controllerutil.RemoveFinalizer(syncState, FinalizerName)
-	if err := r.Client.Update(ctx, syncState); err != nil {
+	// Remove finalizer (with conflict retry)
+	if err := common.RemoveFinalizerWithRetry(ctx, r.Client, syncState, FinalizerName); err != nil {
 		logger.Error(err, "Failed to remove finalizer")
 		return ctrl.Result{}, err
 	}

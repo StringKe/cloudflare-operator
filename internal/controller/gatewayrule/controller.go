@@ -159,12 +159,14 @@ func (r *GatewayRuleReconciler) registerGatewayRule(
 
 	// Build Gateway rule configuration
 	config := gatewaysvc.GatewayRuleConfig{
-		Name:        ruleName,
-		Description: r.rule.Spec.Description,
-		TrafficType: "", // Determined by filters
-		Action:      r.rule.Spec.Action,
-		Enabled:     r.rule.Spec.Enabled,
-		Priority:    r.rule.Spec.Precedence,
+		Name:          ruleName,
+		Description:   r.rule.Spec.Description,
+		TrafficType:   "", // Determined by filters
+		Action:        r.rule.Spec.Action,
+		Enabled:       r.rule.Spec.Enabled,
+		Priority:      r.rule.Spec.Precedence,
+		Identity:      r.rule.Spec.Identity,
+		DevicePosture: r.rule.Spec.DevicePosture,
 	}
 
 	// Build filters
@@ -173,6 +175,28 @@ func (r *GatewayRuleReconciler) registerGatewayRule(
 			Type:       f,
 			Expression: r.rule.Spec.Traffic,
 		})
+	}
+
+	// Build schedule
+	if r.rule.Spec.Schedule != nil {
+		config.Schedule = &gatewaysvc.GatewayRuleSchedule{
+			TimeZone: r.rule.Spec.Schedule.TimeZone,
+			Mon:      r.rule.Spec.Schedule.Mon,
+			Tue:      r.rule.Spec.Schedule.Tue,
+			Wed:      r.rule.Spec.Schedule.Wed,
+			Thu:      r.rule.Spec.Schedule.Thu,
+			Fri:      r.rule.Spec.Schedule.Fri,
+			Sat:      r.rule.Spec.Schedule.Sat,
+			Sun:      r.rule.Spec.Schedule.Sun,
+		}
+	}
+
+	// Build expiration
+	if r.rule.Spec.Expiration != nil {
+		config.Expiration = &gatewaysvc.GatewayRuleExpiration{
+			ExpiresAt: r.rule.Spec.Expiration.ExpiresAt,
+			Duration:  r.rule.Spec.Expiration.Duration,
+		}
 	}
 
 	// Build rule settings
@@ -225,6 +249,13 @@ func (*GatewayRuleReconciler) buildRuleSettings(settings *networkingv1alpha2.Gat
 		OverrideIPs:                     settings.OverrideIPs,
 		InsecureDisableDNSSECValidation: settings.InsecureDisableDNSSECValidation,
 		AddHeaders:                      settings.AddHeaders,
+		UntrustedCertificateAction:      settings.UntrustedCertificateAction,
+		ResolveDNSThroughCloudflare:     settings.ResolveDNSThroughCloudflare,
+		AllowChildBypass:                settings.AllowChildBypass,
+		BypassParentRule:                settings.BypassParentRule,
+		IgnoreCNAMECategoryMatches:      settings.IgnoreCNAMECategoryMatches,
+		IPCategories:                    settings.IPCategories,
+		IPIndicatorFeeds:                settings.IPIndicatorFeeds,
 	}
 
 	if settings.L4Override != nil {
@@ -282,17 +313,40 @@ func (*GatewayRuleReconciler) buildRuleSettings(settings *networkingv1alpha2.Gat
 
 	if settings.DNSResolvers != nil {
 		result.DNSResolvers = &gatewaysvc.DNSResolverSettings{}
-		for _, r := range settings.DNSResolvers.IPv4 {
+		for _, resolver := range settings.DNSResolvers.IPv4 {
 			result.DNSResolvers.Ipv4 = append(result.DNSResolvers.Ipv4, gatewaysvc.DNSResolverAddress{
-				IP:   r.IP,
-				Port: r.Port,
+				IP:                         resolver.IP,
+				Port:                       resolver.Port,
+				VNetID:                     resolver.VNetID,
+				RouteThroughPrivateNetwork: resolver.RouteThroughPrivateNetwork,
 			})
 		}
-		for _, r := range settings.DNSResolvers.IPv6 {
+		for _, resolver := range settings.DNSResolvers.IPv6 {
 			result.DNSResolvers.Ipv6 = append(result.DNSResolvers.Ipv6, gatewaysvc.DNSResolverAddress{
-				IP:   r.IP,
-				Port: r.Port,
+				IP:                         resolver.IP,
+				Port:                       resolver.Port,
+				VNetID:                     resolver.VNetID,
+				RouteThroughPrivateNetwork: resolver.RouteThroughPrivateNetwork,
 			})
+		}
+	}
+
+	if settings.ResolveDNSInternally != nil {
+		result.ResolveDNSInternally = &gatewaysvc.ResolveDNSInternallySettings{
+			ViewID: settings.ResolveDNSInternally.ViewID,
+		}
+		if settings.ResolveDNSInternally.Fallback != nil {
+			if *settings.ResolveDNSInternally.Fallback {
+				result.ResolveDNSInternally.Fallback = "public_dns"
+			} else {
+				result.ResolveDNSInternally.Fallback = "none"
+			}
+		}
+	}
+
+	if settings.Quarantine != nil {
+		result.Quarantine = &gatewaysvc.QuarantineSettings{
+			FileTypes: settings.Quarantine.FileTypes,
 		}
 	}
 

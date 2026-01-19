@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/cloudflare/cloudflare-go"
 	"k8s.io/utils/ptr"
@@ -108,10 +109,9 @@ func (r *RedirectRuleController) Reconcile(ctx context.Context, req ctrl.Request
 		return r.handleDeletion(ctx, syncState)
 	}
 
-	// Add finalizer if not present
+	// Add finalizer if not present (with conflict retry)
 	if !controllerutil.ContainsFinalizer(syncState, RedirectRuleFinalizerName) {
-		controllerutil.AddFinalizer(syncState, RedirectRuleFinalizerName)
-		if err := r.Client.Update(ctx, syncState); err != nil {
+		if err := common.AddFinalizerWithRetry(ctx, r.Client, syncState, RedirectRuleFinalizerName); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{Requeue: true}, nil
@@ -353,8 +353,11 @@ func (r *RedirectRuleController) convertAggregatedRules(aggregated *AggregatedRe
 		marker := common.NewOwnershipMarker(ruleWithOwner.Owner)
 		description := marker.AppendToDescription(rule.Name)
 
-		// Build the expression from wildcard pattern
-		expression := fmt.Sprintf(`http.request.full_uri wildcard "%s"`, rule.SourceURL)
+		// Build the expression from wildcard pattern with IncludeSubdomains and SubpathMatching support
+		expression := r.buildWildcardExpression(rule.SourceURL, WildcardExpressionOptions{
+			IncludeSubdomains: rule.IncludeSubdomains,
+			SubpathMatching:   rule.SubpathMatching,
+		})
 
 		cfRule := cloudflare.RulesetRule{
 			Action:      "redirect",
@@ -483,9 +486,8 @@ func (r *RedirectRuleController) cleanupSyncState(
 ) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	// Remove finalizer
-	controllerutil.RemoveFinalizer(syncState, RedirectRuleFinalizerName)
-	if err := r.Client.Update(ctx, syncState); err != nil {
+	// Remove finalizer (with conflict retry)
+	if err := common.RemoveFinalizerWithRetry(ctx, r.Client, syncState, RedirectRuleFinalizerName); err != nil {
 		logger.Error(err, "Failed to remove finalizer")
 		return ctrl.Result{}, err
 	}
@@ -502,6 +504,65 @@ func (r *RedirectRuleController) cleanupSyncState(
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// WildcardExpressionOptions contains options for building wildcard expressions.
+type WildcardExpressionOptions struct {
+	// IncludeSubdomains matches both the domain and its subdomains
+	IncludeSubdomains bool
+	// SubpathMatching appends /* if the pattern doesn't end with a wildcard
+	SubpathMatching bool
+}
+
+// appendSubpathWildcard appends /* to the URL if it doesn't already end with a wildcard.
+func appendSubpathWildcard(url string) string {
+	if len(url) > 0 && url[len(url)-1] != '*' {
+		return url + "/*"
+	}
+	return url
+}
+
+// buildSubdomainURL creates a subdomain wildcard URL from the original URL.
+// For "https://example.com/path", returns "https://*.example.com/path".
+// Returns the original URL if it doesn't match known protocol patterns.
+func buildSubdomainURL(url string) string {
+	const httpsPrefix, httpPrefix = "https://", "http://"
+	switch {
+	case strings.HasPrefix(url, httpsPrefix):
+		return httpsPrefix + "*." + url[len(httpsPrefix):]
+	case strings.HasPrefix(url, httpPrefix):
+		return httpPrefix + "*." + url[len(httpPrefix):]
+	default:
+		return url
+	}
+}
+
+// buildWildcardExpression builds a wirefilter expression from a wildcard URL pattern.
+// It supports IncludeSubdomains and SubpathMatching options.
+//
+// Examples:
+//   - Basic: https://example.com/path/* -> http.request.full_uri wildcard "https://example.com/path/*"
+//   - IncludeSubdomains: matches both example.com and *.example.com
+//   - SubpathMatching: appends /* if the pattern doesn't end with a wildcard
+func (*RedirectRuleController) buildWildcardExpression(sourceURL string, opts WildcardExpressionOptions) string {
+	effectiveURL := sourceURL
+	if opts.SubpathMatching {
+		effectiveURL = appendSubpathWildcard(effectiveURL)
+	}
+	baseExpression := fmt.Sprintf(`http.request.full_uri wildcard "%s"`, effectiveURL)
+
+	if !opts.IncludeSubdomains {
+		return baseExpression
+	}
+
+	// Build OR expression for domain and subdomains
+	subdomainURL := buildSubdomainURL(effectiveURL)
+	if subdomainURL == effectiveURL {
+		return baseExpression
+	}
+
+	subdomainExpression := fmt.Sprintf(`http.request.full_uri wildcard "%s"`, subdomainURL)
+	return fmt.Sprintf(`(%s) or (%s)`, baseExpression, subdomainExpression)
 }
 
 // filterExternalRules returns rules that are NOT managed by the operator.

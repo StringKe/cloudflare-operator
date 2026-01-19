@@ -73,10 +73,9 @@ func (r *SettingsPolicyController) Reconcile(ctx context.Context, req ctrl.Reque
 		return r.handleDeletion(ctx, syncState)
 	}
 
-	// Add finalizer if not present
+	// Add finalizer if not present (with conflict retry)
 	if !controllerutil.ContainsFinalizer(syncState, SettingsPolicyFinalizerName) {
-		controllerutil.AddFinalizer(syncState, SettingsPolicyFinalizerName)
-		if err := r.Client.Update(ctx, syncState); err != nil {
+		if err := common.AddFinalizerWithRetry(ctx, r.Client, syncState, SettingsPolicyFinalizerName); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{Requeue: true}, nil
@@ -300,7 +299,7 @@ func (r *SettingsPolicyController) syncToCloudflare(
 	logger.Info("Updating split tunnel exclude entries",
 		"count", len(excludeEntries))
 
-	if err := apiClient.UpdateSplitTunnelExclude(excludeEntries); err != nil {
+	if err := apiClient.UpdateSplitTunnelExclude(ctx, excludeEntries); err != nil {
 		return nil, fmt.Errorf("update split tunnel exclude: %w", err)
 	}
 	result.SplitTunnelExcludeCount = len(excludeEntries)
@@ -318,7 +317,7 @@ func (r *SettingsPolicyController) syncToCloudflare(
 	logger.Info("Updating split tunnel include entries",
 		"count", len(includeEntries))
 
-	if err := apiClient.UpdateSplitTunnelInclude(includeEntries); err != nil {
+	if err := apiClient.UpdateSplitTunnelInclude(ctx, includeEntries); err != nil {
 		return nil, fmt.Errorf("update split tunnel include: %w", err)
 	}
 	result.SplitTunnelIncludeCount = len(includeEntries)
@@ -336,7 +335,7 @@ func (r *SettingsPolicyController) syncToCloudflare(
 	logger.Info("Updating fallback domains",
 		"count", len(fallbackDomains))
 
-	if err := apiClient.UpdateFallbackDomains(fallbackDomains); err != nil {
+	if err := apiClient.UpdateFallbackDomains(ctx, fallbackDomains); err != nil {
 		return nil, fmt.Errorf("update fallback domains: %w", err)
 	}
 	result.FallbackDomainsCount = len(fallbackDomains)
@@ -383,18 +382,18 @@ func (r *SettingsPolicyController) handleDeletion(
 		}
 
 		// Get current entries from Cloudflare to preserve external (non-operator-managed) entries
-		existingExclude, err := apiClient.GetSplitTunnelExclude()
+		existingExclude, err := apiClient.GetSplitTunnelExclude(ctx)
 		if err != nil {
 			logger.Error(err, "Failed to get existing exclude entries")
 			// Continue anyway - will just use aggregated entries
 		}
 
-		existingInclude, err := apiClient.GetSplitTunnelInclude()
+		existingInclude, err := apiClient.GetSplitTunnelInclude(ctx)
 		if err != nil {
 			logger.Error(err, "Failed to get existing include entries")
 		}
 
-		existingFallback, err := apiClient.GetFallbackDomains()
+		existingFallback, err := apiClient.GetFallbackDomains(ctx)
 		if err != nil {
 			logger.Error(err, "Failed to get existing fallback domains")
 		}
@@ -416,7 +415,7 @@ func (r *SettingsPolicyController) handleDeletion(
 			"fallbackCount", len(finalFallback),
 			"remainingSources", len(syncState.Spec.Sources))
 
-		if err := apiClient.UpdateSplitTunnelExclude(finalExclude); err != nil {
+		if err := apiClient.UpdateSplitTunnelExclude(ctx, finalExclude); err != nil {
 			if !cf.IsNotFoundError(err) {
 				logger.Error(err, "Failed to update split tunnel exclude entries")
 				if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
@@ -426,7 +425,7 @@ func (r *SettingsPolicyController) handleDeletion(
 			}
 		}
 
-		if err := apiClient.UpdateSplitTunnelInclude(finalInclude); err != nil {
+		if err := apiClient.UpdateSplitTunnelInclude(ctx, finalInclude); err != nil {
 			if !cf.IsNotFoundError(err) {
 				logger.Error(err, "Failed to update split tunnel include entries")
 				if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
@@ -436,7 +435,7 @@ func (r *SettingsPolicyController) handleDeletion(
 			}
 		}
 
-		if err := apiClient.UpdateFallbackDomains(finalFallback); err != nil {
+		if err := apiClient.UpdateFallbackDomains(ctx, finalFallback); err != nil {
 			if !cf.IsNotFoundError(err) {
 				logger.Error(err, "Failed to update fallback domains")
 				if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
@@ -450,9 +449,8 @@ func (r *SettingsPolicyController) handleDeletion(
 	}
 
 removeFinalizer:
-	// Remove finalizer
-	controllerutil.RemoveFinalizer(syncState, SettingsPolicyFinalizerName)
-	if err := r.Client.Update(ctx, syncState); err != nil {
+	// Remove finalizer (with conflict retry)
+	if err := common.RemoveFinalizerWithRetry(ctx, r.Client, syncState, SettingsPolicyFinalizerName); err != nil {
 		logger.Error(err, "Failed to remove finalizer")
 		return ctrl.Result{}, err
 	}

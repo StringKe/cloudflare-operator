@@ -4,6 +4,7 @@
 package cf_test
 
 import (
+	"context"
 	"testing"
 
 	"go.uber.org/mock/gomock"
@@ -29,18 +30,19 @@ func TestCreateTunnel(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockClient := mock.NewMockCloudflareClient(ctrl)
+	ctx := context.Background()
 
 	// Setup expectations
 	expectedTunnelID := "test-tunnel-id-12345"
 	expectedCreds := `{"AccountTag":"account-123","TunnelID":"test-tunnel-id-12345","TunnelName":"test-tunnel","TunnelSecret":"secret123"}`
 
 	mockClient.EXPECT().
-		CreateTunnel().
+		CreateTunnel(gomock.Any()).
 		Return(expectedTunnelID, expectedCreds, nil).
 		Times(1)
 
 	// Execute
-	tunnelID, creds, err := mockClient.CreateTunnel()
+	tunnelID, creds, err := mockClient.CreateTunnel(ctx)
 
 	// Assert
 	if err != nil {
@@ -59,13 +61,14 @@ func TestDeleteTunnel(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockClient := mock.NewMockCloudflareClient(ctrl)
+	ctx := context.Background()
 
 	mockClient.EXPECT().
-		DeleteTunnel().
+		DeleteTunnel(gomock.Any()).
 		Return(nil).
 		Times(1)
 
-	err := mockClient.DeleteTunnel()
+	err := mockClient.DeleteTunnel(ctx)
 
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
@@ -77,6 +80,7 @@ func TestCreateVirtualNetwork(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockClient := mock.NewMockCloudflareClient(ctrl)
+	ctx := context.Background()
 
 	params := cf.VirtualNetworkParams{
 		Name:             "test-vnet",
@@ -92,11 +96,11 @@ func TestCreateVirtualNetwork(t *testing.T) {
 	}
 
 	mockClient.EXPECT().
-		CreateVirtualNetwork(params).
+		CreateVirtualNetwork(gomock.Any(), params).
 		Return(expectedResult, nil).
 		Times(1)
 
-	result, err := mockClient.CreateVirtualNetwork(params)
+	result, err := mockClient.CreateVirtualNetwork(ctx, params)
 
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
@@ -114,6 +118,7 @@ func TestCreateTunnelRoute(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockClient := mock.NewMockCloudflareClient(ctrl)
+	ctx := context.Background()
 
 	params := cf.TunnelRouteParams{
 		Network:          "10.0.0.0/8",
@@ -131,11 +136,11 @@ func TestCreateTunnelRoute(t *testing.T) {
 	}
 
 	mockClient.EXPECT().
-		CreateTunnelRoute(params).
+		CreateTunnelRoute(gomock.Any(), params).
 		Return(expectedResult, nil).
 		Times(1)
 
-	result, err := mockClient.CreateTunnelRoute(params)
+	result, err := mockClient.CreateTunnelRoute(ctx, params)
 
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
@@ -150,14 +155,15 @@ func TestDNSOperations(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockClient := mock.NewMockCloudflareClient(ctrl)
+	ctx := context.Background()
 
 	// Test InsertOrUpdateCName
 	mockClient.EXPECT().
-		InsertOrUpdateCName("app.example.com", "").
+		InsertOrUpdateCName(gomock.Any(), "app.example.com", "").
 		Return("dns-record-123", nil).
 		Times(1)
 
-	dnsID, err := mockClient.InsertOrUpdateCName("app.example.com", "")
+	dnsID, err := mockClient.InsertOrUpdateCName(ctx, "app.example.com", "")
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
 	}
@@ -167,11 +173,11 @@ func TestDNSOperations(t *testing.T) {
 
 	// Test DeleteDNSId
 	mockClient.EXPECT().
-		DeleteDNSId("app.example.com", "dns-record-123", true).
+		DeleteDNSId(gomock.Any(), "app.example.com", "dns-record-123", true).
 		Return(nil).
 		Times(1)
 
-	err = mockClient.DeleteDNSId("app.example.com", "dns-record-123", true)
+	err = mockClient.DeleteDNSId(ctx, "app.example.com", "dns-record-123", true)
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
 	}
@@ -182,6 +188,7 @@ func TestAccessApplication(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockClient := mock.NewMockCloudflareClient(ctrl)
+	ctx := context.Background()
 
 	params := cf.AccessApplicationParams{
 		Name:            "My App",
@@ -200,11 +207,11 @@ func TestAccessApplication(t *testing.T) {
 	}
 
 	mockClient.EXPECT().
-		CreateAccessApplication(params).
+		CreateAccessApplication(gomock.Any(), params).
 		Return(expectedResult, nil).
 		Times(1)
 
-	result, err := mockClient.CreateAccessApplication(params)
+	result, err := mockClient.CreateAccessApplication(ctx, params)
 
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
@@ -219,6 +226,7 @@ func TestGatewayRule(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockClient := mock.NewMockCloudflareClient(ctrl)
+	ctx := context.Background()
 
 	params := cf.GatewayRuleParams{
 		Name:        "Block Malware",
@@ -239,11 +247,11 @@ func TestGatewayRule(t *testing.T) {
 	}
 
 	mockClient.EXPECT().
-		CreateGatewayRule(params).
+		CreateGatewayRule(gomock.Any(), params).
 		Return(expectedResult, nil).
 		Times(1)
 
-	result, err := mockClient.CreateGatewayRule(params)
+	result, err := mockClient.CreateGatewayRule(ctx, params)
 
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
@@ -258,6 +266,7 @@ func TestSplitTunnel(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockClient := mock.NewMockCloudflareClient(ctrl)
+	ctx := context.Background()
 
 	entries := []cf.SplitTunnelEntry{
 		{Address: "10.0.0.0/8", Description: "Private network"},
@@ -265,16 +274,16 @@ func TestSplitTunnel(t *testing.T) {
 	}
 
 	mockClient.EXPECT().
-		GetSplitTunnelExclude().
+		GetSplitTunnelExclude(gomock.Any()).
 		Return(entries, nil).
 		Times(1)
 
 	mockClient.EXPECT().
-		UpdateSplitTunnelExclude(entries).
+		UpdateSplitTunnelExclude(gomock.Any(), entries).
 		Return(nil).
 		Times(1)
 
-	result, err := mockClient.GetSplitTunnelExclude()
+	result, err := mockClient.GetSplitTunnelExclude(ctx)
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
 	}
@@ -282,7 +291,7 @@ func TestSplitTunnel(t *testing.T) {
 		t.Errorf("Expected 2 entries, got %d", len(result))
 	}
 
-	err = mockClient.UpdateSplitTunnelExclude(entries)
+	err = mockClient.UpdateSplitTunnelExclude(ctx, entries)
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
 	}
@@ -293,6 +302,7 @@ func TestWARPConnector(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockClient := mock.NewMockCloudflareClient(ctrl)
+	ctx := context.Background()
 
 	expectedResult := &cf.WARPConnectorResult{
 		ID:          "connector-123",
@@ -302,11 +312,11 @@ func TestWARPConnector(t *testing.T) {
 	}
 
 	mockClient.EXPECT().
-		CreateWARPConnector("my-connector").
+		CreateWARPConnector(gomock.Any(), "my-connector").
 		Return(expectedResult, nil).
 		Times(1)
 
-	result, err := mockClient.CreateWARPConnector("my-connector")
+	result, err := mockClient.CreateWARPConnector(ctx, "my-connector")
 
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)

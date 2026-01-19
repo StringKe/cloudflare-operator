@@ -25,8 +25,8 @@ type WARPConnectorTokenResult struct {
 }
 
 // CreateWARPConnector creates a new WARP Connector.
-func (c *API) CreateWARPConnector(name string) (*WARPConnectorResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) CreateWARPConnector(ctx context.Context, name string) (*WARPConnectorResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
@@ -38,7 +38,6 @@ func (c *API) CreateWARPConnector(name string) (*WARPConnectorResult, error) {
 	}
 	tunnelSecret := base64.StdEncoding.EncodeToString(randSecret)
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	params := cloudflare.TunnelCreateParams{
@@ -71,13 +70,12 @@ func (c *API) CreateWARPConnector(name string) (*WARPConnectorResult, error) {
 }
 
 // GetWARPConnectorToken retrieves the tunnel token for a WARP connector.
-func (c *API) GetWARPConnectorToken(connectorID string) (*WARPConnectorTokenResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) GetWARPConnectorToken(ctx context.Context, connectorID string) (*WARPConnectorTokenResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	token, err := c.CloudflareClient.GetTunnelToken(ctx, rc, connectorID)
@@ -93,13 +91,12 @@ func (c *API) GetWARPConnectorToken(connectorID string) (*WARPConnectorTokenResu
 
 // DeleteWARPConnector deletes a WARP Connector.
 // This method is idempotent - returns nil if the connector is already deleted.
-func (c *API) DeleteWARPConnector(connectorID string) error {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) DeleteWARPConnector(ctx context.Context, connectorID string) error {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	err := c.CloudflareClient.DeleteTunnel(ctx, rc, connectorID)
@@ -157,10 +154,14 @@ type NotificationSettings struct {
 // BlockPageSettings for block page customization.
 type BlockPageSettings struct {
 	Enabled         bool
+	Name            string
 	FooterText      string
 	HeaderText      string
 	LogoPath        string
 	BackgroundColor string
+	MailtoAddress   string
+	MailtoSubject   string
+	SuppressFooter  *bool
 }
 
 // BodyScanningSettings for body scanning.
@@ -195,91 +196,107 @@ type GatewayConfigurationResult struct {
 	AccountID string
 }
 
-// UpdateGatewayConfiguration updates the Gateway configuration for an account.
-func (c *API) UpdateGatewayConfiguration(params GatewayConfigurationParams) (*GatewayConfigurationResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
-		c.Log.Error(err, "error getting account ID")
-		return nil, err
-	}
-
-	ctx := context.Background()
-
-	// Build the gateway settings from strongly-typed params
-	accountSettings := cloudflare.TeamsAccountSettings{}
+// buildTeamsAccountSettings constructs Teams account settings from params.
+//
+//nolint:revive // function extracts settings building logic to reduce main function complexity
+func buildTeamsAccountSettings(params GatewayConfigurationParams) cloudflare.TeamsAccountSettings {
+	settings := cloudflare.TeamsAccountSettings{}
 
 	if params.TLSDecrypt != nil {
-		accountSettings.TLSDecrypt = &cloudflare.TeamsTLSDecrypt{
+		settings.TLSDecrypt = &cloudflare.TeamsTLSDecrypt{
 			Enabled: params.TLSDecrypt.Enabled,
 		}
 	}
 
 	if params.ActivityLog != nil {
-		accountSettings.ActivityLog = &cloudflare.TeamsActivityLog{
+		settings.ActivityLog = &cloudflare.TeamsActivityLog{
 			Enabled: params.ActivityLog.Enabled,
 		}
 	}
 
 	if params.AntiVirus != nil {
-		av := &cloudflare.TeamsAntivirus{
-			EnabledDownloadPhase: params.AntiVirus.EnabledDownloadPhase,
-			EnabledUploadPhase:   params.AntiVirus.EnabledUploadPhase,
-			FailClosed:           params.AntiVirus.FailClosed,
-		}
-		if params.AntiVirus.NotificationSettings != nil {
-			av.NotificationSettings = &cloudflare.TeamsNotificationSettings{
-				Enabled:    &params.AntiVirus.NotificationSettings.Enabled,
-				Message:    params.AntiVirus.NotificationSettings.Message,
-				SupportURL: params.AntiVirus.NotificationSettings.SupportURL,
-			}
-		}
-		accountSettings.Antivirus = av
+		settings.Antivirus = buildAntiVirusSettings(params.AntiVirus)
 	}
 
 	if params.BlockPage != nil {
-		accountSettings.BlockPage = &cloudflare.TeamsBlockPage{
+		settings.BlockPage = &cloudflare.TeamsBlockPage{
 			Enabled:         &params.BlockPage.Enabled,
+			Name:            params.BlockPage.Name,
 			FooterText:      params.BlockPage.FooterText,
 			HeaderText:      params.BlockPage.HeaderText,
 			LogoPath:        params.BlockPage.LogoPath,
 			BackgroundColor: params.BlockPage.BackgroundColor,
+			MailtoAddress:   params.BlockPage.MailtoAddress,
+			MailtoSubject:   params.BlockPage.MailtoSubject,
+			SuppressFooter:  params.BlockPage.SuppressFooter,
 		}
 	}
 
 	if params.BodyScanning != nil {
-		accountSettings.BodyScanning = &cloudflare.TeamsBodyScanning{
+		settings.BodyScanning = &cloudflare.TeamsBodyScanning{
 			InspectionMode: params.BodyScanning.InspectionMode,
 		}
 	}
 
 	if params.BrowserIsolation != nil {
-		accountSettings.BrowserIsolation = &cloudflare.BrowserIsolation{
+		settings.BrowserIsolation = &cloudflare.BrowserIsolation{
 			UrlBrowserIsolationEnabled: &params.BrowserIsolation.URLBrowserIsolationEnabled,
 			NonIdentityEnabled:         &params.BrowserIsolation.NonIdentityEnabled,
 		}
 	}
 
 	if params.FIPS != nil {
-		accountSettings.FIPS = &cloudflare.TeamsFIPS{
+		settings.FIPS = &cloudflare.TeamsFIPS{
 			TLS: params.FIPS.TLS,
 		}
 	}
 
 	if params.ProtocolDetection != nil {
-		accountSettings.ProtocolDetection = &cloudflare.TeamsProtocolDetection{
+		settings.ProtocolDetection = &cloudflare.TeamsProtocolDetection{
 			Enabled: params.ProtocolDetection.Enabled,
 		}
 	}
 
 	if params.CustomCertificate != nil {
-		accountSettings.CustomCertificate = &cloudflare.TeamsCustomCertificate{
+		settings.CustomCertificate = &cloudflare.TeamsCustomCertificate{
 			Enabled: &params.CustomCertificate.Enabled,
 			ID:      params.CustomCertificate.ID,
 		}
 	}
 
+	return settings
+}
+
+// buildAntiVirusSettings constructs Teams antivirus settings.
+func buildAntiVirusSettings(params *AntiVirusSettings) *cloudflare.TeamsAntivirus {
+	av := &cloudflare.TeamsAntivirus{
+		EnabledDownloadPhase: params.EnabledDownloadPhase,
+		EnabledUploadPhase:   params.EnabledUploadPhase,
+		FailClosed:           params.FailClosed,
+	}
+	if params.NotificationSettings != nil {
+		av.NotificationSettings = &cloudflare.TeamsNotificationSettings{
+			Enabled:    &params.NotificationSettings.Enabled,
+			Message:    params.NotificationSettings.Message,
+			SupportURL: params.NotificationSettings.SupportURL,
+		}
+	}
+	return av
+}
+
+// UpdateGatewayConfiguration updates the Gateway configuration for an account.
+func (c *API) UpdateGatewayConfiguration(
+	ctx context.Context,
+	params GatewayConfigurationParams,
+) (*GatewayConfigurationResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
+		c.Log.Error(err, "error getting account ID")
+		return nil, err
+	}
+
 	// Build the final configuration
 	settings := cloudflare.TeamsConfiguration{
-		Settings: accountSettings,
+		Settings: buildTeamsAccountSettings(params),
 	}
 
 	// Update the configuration

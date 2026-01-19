@@ -74,10 +74,9 @@ func (r *ConfigurationController) Reconcile(ctx context.Context, req ctrl.Reques
 		return r.handleDeletion(ctx, syncState)
 	}
 
-	// Add finalizer if not present
+	// Add finalizer if not present (with conflict retry)
 	if !controllerutil.ContainsFinalizer(syncState, ConfigurationFinalizerName) {
-		controllerutil.AddFinalizer(syncState, ConfigurationFinalizerName)
-		if err := r.Client.Update(ctx, syncState); err != nil {
+		if err := common.AddFinalizerWithRetry(ctx, r.Client, syncState, ConfigurationFinalizerName); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{Requeue: true}, nil
@@ -202,10 +201,14 @@ func (r *ConfigurationController) syncToCloudflare(
 	if config.BlockPage != nil {
 		params.BlockPage = &cf.BlockPageSettings{
 			Enabled:         config.BlockPage.Enabled,
+			Name:            config.BlockPage.Name,
 			FooterText:      config.BlockPage.FooterText,
 			HeaderText:      config.BlockPage.HeaderText,
 			LogoPath:        config.BlockPage.LogoPath,
 			BackgroundColor: config.BlockPage.BackgroundColor,
+			MailtoAddress:   config.BlockPage.MailtoAddress,
+			MailtoSubject:   config.BlockPage.MailtoSubject,
+			SuppressFooter:  config.BlockPage.SuppressFooter,
 		}
 	}
 
@@ -244,7 +247,7 @@ func (r *ConfigurationController) syncToCloudflare(
 	logger.Info("Updating Gateway configuration",
 		"accountId", accountID)
 
-	result, err := apiClient.UpdateGatewayConfiguration(params)
+	result, err := apiClient.UpdateGatewayConfiguration(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("update Gateway configuration: %w", err)
 	}
@@ -278,9 +281,8 @@ func (r *ConfigurationController) handleDeletion(
 	logger.Info("GatewayConfiguration deleted - settings will be preserved on Cloudflare",
 		"accountId", syncState.Spec.AccountID)
 
-	// Remove finalizer
-	controllerutil.RemoveFinalizer(syncState, ConfigurationFinalizerName)
-	if err := r.Client.Update(ctx, syncState); err != nil {
+	// Remove finalizer (with conflict retry)
+	if err := common.RemoveFinalizerWithRetry(ctx, r.Client, syncState, ConfigurationFinalizerName); err != nil {
 		logger.Error(err, "Failed to remove finalizer")
 		return ctrl.Result{}, err
 	}

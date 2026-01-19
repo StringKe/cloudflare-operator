@@ -435,7 +435,7 @@ func (r *TunnelBindingReconciler) createDNSLogic(hostname string) error {
 		return err
 	}
 
-	txtID, dnsTxtResponse, canUseDNS, err := cfAPI.GetManagedDnsTxt(hostname)
+	txtID, dnsTxtResponse, canUseDNS, err := cfAPI.GetManagedDnsTxt(r.ctx, hostname)
 	if err != nil {
 		// We should not use this entry
 		r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedReadingTxt", "Failed to read existing TXT DNS entry")
@@ -447,7 +447,7 @@ func (r *TunnelBindingReconciler) createDNSLogic(hostname string) error {
 			fmt.Sprintf("FQDN already managed by Tunnel Name: %s, Id: %s", dnsTxtResponse.TunnelName, dnsTxtResponse.TunnelId))
 		return err
 	}
-	existingID, err := cfAPI.GetDNSCNameId(hostname)
+	existingID, err := cfAPI.GetDNSCNameId(r.ctx, hostname)
 	if err != nil {
 		// Real API error (not "record not found" which now returns "", nil)
 		r.log.Error(err, "Failed to check existing DNS record", "hostname", hostname)
@@ -468,7 +468,7 @@ func (r *TunnelBindingReconciler) createDNSLogic(hostname string) error {
 		dnsTxtResponse.DnsId = existingID
 	}
 
-	newDNSID, err := cfAPI.InsertOrUpdateCName(hostname, dnsTxtResponse.DnsId)
+	newDNSID, err := cfAPI.InsertOrUpdateCName(r.ctx, hostname, dnsTxtResponse.DnsId)
 	if err != nil {
 		r.log.Error(err, "Failed to insert/update DNS entry", "Hostname", hostname)
 		// P0 FIX: Use SanitizeErrorMessage to prevent sensitive info leakage
@@ -476,12 +476,12 @@ func (r *TunnelBindingReconciler) createDNSLogic(hostname string) error {
 			fmt.Sprintf("Failed to insert/update DNS entry: %s", cf.SanitizeErrorMessage(err)))
 		return err
 	}
-	if err := cfAPI.InsertOrUpdateTXT(hostname, txtID, newDNSID); err != nil {
+	if err := cfAPI.InsertOrUpdateTXT(r.ctx, hostname, txtID, newDNSID); err != nil {
 		r.log.Error(err, "Failed to insert/update TXT entry", "Hostname", hostname)
 		// P0 FIX: Use SanitizeErrorMessage to prevent sensitive info leakage
 		r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedCreatingTxt",
 			fmt.Sprintf("Failed to insert/update TXT entry: %s", cf.SanitizeErrorMessage(err)))
-		if err := cfAPI.DeleteDNSId(hostname, newDNSID, dnsTxtResponse.DnsId != ""); err != nil {
+		if err := cfAPI.DeleteDNSId(r.ctx, hostname, newDNSID, dnsTxtResponse.DnsId != ""); err != nil {
 			r.log.Info("Failed to delete DNS entry, left in broken state", "Hostname", hostname)
 			r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedDeletingDns", "Failed to delete DNS entry, left in broken state")
 			return err
@@ -511,7 +511,7 @@ func (r *TunnelBindingReconciler) deleteDNSLogic(hostname string) error {
 	}
 
 	// Delete DNS entry
-	txtID, dnsTxtResponse, canUseDNS, err := cfAPI.GetManagedDnsTxt(hostname)
+	txtID, dnsTxtResponse, canUseDNS, err := cfAPI.GetManagedDnsTxt(r.ctx, hostname)
 	if err != nil {
 		// We should not use this entry
 		r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedReadingTxt",
@@ -522,7 +522,7 @@ func (r *TunnelBindingReconciler) deleteDNSLogic(hostname string) error {
 			fmt.Sprintf("FQDN already managed by Tunnel Name: %s, Id: %s, not cleaning up",
 				dnsTxtResponse.TunnelName, dnsTxtResponse.TunnelId))
 	} else {
-		if id, err := cfAPI.GetDNSCNameId(hostname); err != nil {
+		if id, err := cfAPI.GetDNSCNameId(r.ctx, hostname); err != nil {
 			r.log.Error(err, "Error fetching DNS record", "Hostname", hostname)
 			r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedDeletingDns", "Error fetching DNS record")
 		} else if id != dnsTxtResponse.DnsId {
@@ -530,7 +530,7 @@ func (r *TunnelBindingReconciler) deleteDNSLogic(hostname string) error {
 			r.log.Error(err, "DNS ID from TXT and real DNS record does not match", "Hostname", hostname)
 			r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedDeletingDns", "DNS/TXT ID Mismatch")
 		} else {
-			if err := cfAPI.DeleteDNSId(hostname, dnsTxtResponse.DnsId, true); err != nil {
+			if err := cfAPI.DeleteDNSId(r.ctx, hostname, dnsTxtResponse.DnsId, true); err != nil {
 				r.log.Info("Failed to delete DNS entry", "Hostname", hostname)
 				// P0 FIX: Use SanitizeErrorMessage to prevent sensitive info leakage
 				errMsg := fmt.Sprintf("Failed to delete DNS entry: %s", cf.SanitizeErrorMessage(err))
@@ -539,7 +539,7 @@ func (r *TunnelBindingReconciler) deleteDNSLogic(hostname string) error {
 			}
 			r.log.Info("Deleted DNS entry", "Hostname", hostname)
 			r.Recorder.Event(r.binding, corev1.EventTypeNormal, "DeletedDns", "Deleted DNS entry")
-			if err := cfAPI.DeleteDNSId(hostname, txtID, true); err != nil {
+			if err := cfAPI.DeleteDNSId(r.ctx, hostname, txtID, true); err != nil {
 				// P0 FIX: Use SanitizeErrorMessage to prevent sensitive info leakage
 				errMsg := fmt.Sprintf("Failed to delete TXT entry: %s", cf.SanitizeErrorMessage(err))
 				r.Recorder.Event(r.binding, corev1.EventTypeWarning, "FailedDeletingTxt", errMsg)

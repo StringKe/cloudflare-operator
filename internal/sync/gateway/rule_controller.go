@@ -75,10 +75,9 @@ func (r *RuleController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return r.handleDeletion(ctx, syncState)
 	}
 
-	// Add finalizer if not present
+	// Add finalizer if not present (with conflict retry)
 	if !controllerutil.ContainsFinalizer(syncState, FinalizerName) {
-		controllerutil.AddFinalizer(syncState, FinalizerName)
-		if err := r.Client.Update(ctx, syncState); err != nil {
+		if err := common.AddFinalizerWithRetry(ctx, r.Client, syncState, FinalizerName); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{Requeue: true}, nil
@@ -172,11 +171,13 @@ func (r *RuleController) syncToCloudflare(
 
 	// Build Gateway rule params
 	params := cf.GatewayRuleParams{
-		Name:        config.Name,
-		Description: config.Description,
-		Action:      config.Action,
-		Enabled:     config.Enabled,
-		Precedence:  config.Priority,
+		Name:          config.Name,
+		Description:   config.Description,
+		Action:        config.Action,
+		Enabled:       config.Enabled,
+		Precedence:    config.Priority,
+		Identity:      config.Identity,
+		DevicePosture: config.DevicePosture,
 	}
 
 	// Build filters/traffic expression
@@ -187,6 +188,28 @@ func (r *RuleController) syncToCloudflare(
 		}
 		if config.Filters[0].Expression != "" {
 			params.Traffic = config.Filters[0].Expression
+		}
+	}
+
+	// Build schedule
+	if config.Schedule != nil {
+		params.Schedule = &cf.GatewayRuleScheduleParams{
+			TimeZone: config.Schedule.TimeZone,
+			Mon:      config.Schedule.Mon,
+			Tue:      config.Schedule.Tue,
+			Wed:      config.Schedule.Wed,
+			Thu:      config.Schedule.Thu,
+			Fri:      config.Schedule.Fri,
+			Sat:      config.Schedule.Sat,
+			Sun:      config.Schedule.Sun,
+		}
+	}
+
+	// Build expiration
+	if config.Expiration != nil {
+		params.Expiration = &cf.GatewayRuleExpirationParams{
+			ExpiresAt: config.Expiration.ExpiresAt,
+			Duration:  config.Expiration.Duration,
 		}
 	}
 
@@ -205,7 +228,7 @@ func (r *RuleController) syncToCloudflare(
 			"name", config.Name,
 			"action", config.Action)
 
-		result, err = apiClient.CreateGatewayRule(params)
+		result, err = apiClient.CreateGatewayRule(ctx, params)
 		if err != nil {
 			return nil, fmt.Errorf("create Gateway rule: %w", err)
 		}
@@ -220,12 +243,12 @@ func (r *RuleController) syncToCloudflare(
 			"ruleId", cloudflareID,
 			"name", config.Name)
 
-		result, err = apiClient.UpdateGatewayRule(cloudflareID, params)
+		result, err = apiClient.UpdateGatewayRule(ctx, cloudflareID, params)
 		if err != nil {
 			if common.HandleNotFoundOnUpdate(err) {
 				// Rule deleted externally, recreate it
 				logger.Info("Gateway rule not found, recreating", "ruleId", cloudflareID)
-				result, err = apiClient.CreateGatewayRule(params)
+				result, err = apiClient.CreateGatewayRule(ctx, params)
 				if err != nil {
 					return nil, fmt.Errorf("recreate Gateway rule: %w", err)
 				}
@@ -260,6 +283,13 @@ func (*RuleController) convertRuleSettings(settings *gatewaysvc.GatewayRuleSetti
 		OverrideIPs:                     settings.OverrideIPs,
 		InsecureDisableDNSSECValidation: settings.InsecureDisableDNSSECValidation,
 		AddHeaders:                      settings.AddHeaders,
+		UntrustedCertAction:             settings.UntrustedCertificateAction,
+		ResolveDNSThroughCloudflare:     settings.ResolveDNSThroughCloudflare,
+		AllowChildBypass:                settings.AllowChildBypass,
+		BypassParentRule:                settings.BypassParentRule,
+		IgnoreCNAMECategoryMatches:      settings.IgnoreCNAMECategoryMatches,
+		IPCategories:                    settings.IPCategories,
+		IPIndicatorFeeds:                settings.IPIndicatorFeeds,
 	}
 
 	if settings.L4Override != nil {
@@ -317,17 +347,34 @@ func (*RuleController) convertRuleSettings(settings *gatewaysvc.GatewayRuleSetti
 
 	if settings.DNSResolvers != nil {
 		params.DNSResolvers = &cf.GatewayDNSResolversParams{}
-		for _, r := range settings.DNSResolvers.Ipv4 {
+		for _, resolver := range settings.DNSResolvers.Ipv4 {
 			params.DNSResolvers.IPv4 = append(params.DNSResolvers.IPv4, cf.GatewayDNSResolverEntryParams{
-				IP:   r.IP,
-				Port: r.Port,
+				IP:                         resolver.IP,
+				Port:                       resolver.Port,
+				VNetID:                     resolver.VNetID,
+				RouteThroughPrivateNetwork: resolver.RouteThroughPrivateNetwork,
 			})
 		}
-		for _, r := range settings.DNSResolvers.Ipv6 {
+		for _, resolver := range settings.DNSResolvers.Ipv6 {
 			params.DNSResolvers.IPv6 = append(params.DNSResolvers.IPv6, cf.GatewayDNSResolverEntryParams{
-				IP:   r.IP,
-				Port: r.Port,
+				IP:                         resolver.IP,
+				Port:                       resolver.Port,
+				VNetID:                     resolver.VNetID,
+				RouteThroughPrivateNetwork: resolver.RouteThroughPrivateNetwork,
 			})
+		}
+	}
+
+	if settings.ResolveDNSInternally != nil {
+		params.ResolveDNSInternally = &cf.GatewayResolveDNSInternallyParams{
+			ViewID:   settings.ResolveDNSInternally.ViewID,
+			Fallback: settings.ResolveDNSInternally.Fallback,
+		}
+	}
+
+	if settings.Quarantine != nil {
+		params.Quarantine = &cf.GatewayQuarantineParams{
+			FileTypes: settings.Quarantine.FileTypes,
 		}
 	}
 
@@ -369,7 +416,7 @@ func (r *RuleController) handleDeletion(
 		logger.Info("Deleting Gateway Rule from Cloudflare",
 			"ruleId", cloudflareID)
 
-		if err := apiClient.DeleteGatewayRule(cloudflareID); err != nil {
+		if err := apiClient.DeleteGatewayRule(ctx, cloudflareID); err != nil {
 			if !cf.IsNotFoundError(err) {
 				logger.Error(err, "Failed to delete Gateway Rule from Cloudflare")
 				if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
@@ -384,9 +431,8 @@ func (r *RuleController) handleDeletion(
 		}
 	}
 
-	// Remove finalizer
-	controllerutil.RemoveFinalizer(syncState, FinalizerName)
-	if err := r.Client.Update(ctx, syncState); err != nil {
+	// Remove finalizer (with conflict retry)
+	if err := common.RemoveFinalizerWithRetry(ctx, r.Client, syncState, FinalizerName); err != nil {
 		logger.Error(err, "Failed to remove finalizer")
 		return ctrl.Result{}, err
 	}

@@ -74,10 +74,9 @@ func (r *ApplicationController) Reconcile(ctx context.Context, req ctrl.Request)
 		return r.handleDeletion(ctx, syncState)
 	}
 
-	// Add finalizer if not present
+	// Add finalizer if not present (with conflict retry)
 	if !controllerutil.ContainsFinalizer(syncState, ApplicationFinalizerName) {
-		controllerutil.AddFinalizer(syncState, ApplicationFinalizerName)
-		if err := r.Client.Update(ctx, syncState); err != nil {
+		if err := common.AddFinalizerWithRetry(ctx, r.Client, syncState, ApplicationFinalizerName); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{Requeue: true}, nil
@@ -192,7 +191,7 @@ func (r *ApplicationController) syncToCloudflare(
 			"domain", config.Domain,
 			"type", config.Type)
 
-		result, err = apiClient.CreateAccessApplication(params)
+		result, err = apiClient.CreateAccessApplication(ctx, params)
 		if err != nil {
 			return nil, fmt.Errorf("create AccessApplication: %w", err)
 		}
@@ -209,13 +208,13 @@ func (r *ApplicationController) syncToCloudflare(
 			"applicationId", cloudflareID,
 			"name", config.Name)
 
-		result, err = apiClient.UpdateAccessApplication(cloudflareID, params)
+		result, err = apiClient.UpdateAccessApplication(ctx, cloudflareID, params)
 		if err != nil {
 			// Check if app was deleted externally
 			if common.HandleNotFoundOnUpdate(err) {
 				logger.Info("AccessApplication not found, recreating",
 					"applicationId", cloudflareID)
-				result, err = apiClient.CreateAccessApplication(params)
+				result, err = apiClient.CreateAccessApplication(ctx, params)
 				if err != nil {
 					return nil, fmt.Errorf("recreate AccessApplication: %w", err)
 				}
@@ -241,6 +240,17 @@ func (r *ApplicationController) syncToCloudflare(
 
 		if err := r.syncPolicies(ctx, apiClient, result.ID, config.Policies); err != nil {
 			return nil, fmt.Errorf("sync policies: %w", err)
+		}
+	}
+
+	// Sync reusable policy references after application is created/updated
+	if len(config.ReusablePolicyRefs) > 0 {
+		logger.Info("Syncing Reusable Policy References",
+			"applicationId", result.ID,
+			"reusablePolicyCount", len(config.ReusablePolicyRefs))
+
+		if err := r.syncReusablePolicies(ctx, apiClient, result.ID, config.ReusablePolicyRefs); err != nil {
+			return nil, fmt.Errorf("sync reusable policies: %w", err)
 		}
 	}
 
@@ -278,7 +288,7 @@ func (r *ApplicationController) resolveGroupReferences(
 		switch {
 		case policy.CloudflareGroupID != "":
 			// Validate the group ID exists
-			group, err := apiClient.GetAccessGroup(policy.CloudflareGroupID)
+			group, err := apiClient.GetAccessGroup(ctx, policy.CloudflareGroupID)
 			if err != nil {
 				if cf.IsNotFoundError(err) {
 					logger.Error(err, "Cloudflare Access Group not found",
@@ -294,7 +304,7 @@ func (r *ApplicationController) resolveGroupReferences(
 
 		case policy.CloudflareGroupName != "":
 			// Look up by name
-			group, err := apiClient.ListAccessGroupsByName(policy.CloudflareGroupName)
+			group, err := apiClient.ListAccessGroupsByName(ctx, policy.CloudflareGroupName)
 			if err != nil {
 				return nil, fmt.Errorf("lookup cloudflare group by name %s: %w", policy.CloudflareGroupName, err)
 			}
@@ -363,7 +373,7 @@ func (r *ApplicationController) syncPolicies(
 	}
 
 	// List existing policies
-	existingPolicies, err := apiClient.ListAccessPolicies(appID)
+	existingPolicies, err := apiClient.ListAccessPolicies(ctx, appID)
 	if err != nil {
 		return fmt.Errorf("list existing policies: %w", err)
 	}
@@ -399,7 +409,7 @@ func (r *ApplicationController) syncPolicies(
 				"precedence", desired.Precedence,
 				"groupId", desired.GroupID)
 
-			if _, err := apiClient.UpdateAccessPolicy(existing.ID, params); err != nil {
+			if _, err := apiClient.UpdateAccessPolicy(ctx, existing.ID, params); err != nil {
 				return fmt.Errorf("update policy at precedence %d: %w", desired.Precedence, err)
 			}
 		} else {
@@ -409,7 +419,7 @@ func (r *ApplicationController) syncPolicies(
 				"decision", desired.Decision,
 				"groupId", desired.GroupID)
 
-			if _, err := apiClient.CreateAccessPolicy(params); err != nil {
+			if _, err := apiClient.CreateAccessPolicy(ctx, params); err != nil {
 				return fmt.Errorf("create policy at precedence %d: %w", desired.Precedence, err)
 			}
 		}
@@ -422,7 +432,7 @@ func (r *ApplicationController) syncPolicies(
 				"policyId", existing.ID,
 				"precedence", precedence)
 
-			if err := apiClient.DeleteAccessPolicy(appID, existing.ID); err != nil {
+			if err := apiClient.DeleteAccessPolicy(ctx, appID, existing.ID); err != nil {
 				return fmt.Errorf("delete policy at precedence %d: %w", precedence, err)
 			}
 		}
@@ -440,6 +450,191 @@ func (*ApplicationController) getPolicyName(policy accesssvc.AccessPolicyConfig)
 		return fmt.Sprintf("%s - %s", policy.GroupName, policy.Decision)
 	}
 	return fmt.Sprintf("Policy %d - %s", policy.Precedence, policy.Decision)
+}
+
+// syncReusablePolicies synchronizes reusable policy references for an application.
+// Reusable policies are attached to applications by referencing their policy ID.
+//
+//nolint:revive // cognitive complexity is acceptable for policy sync logic
+func (r *ApplicationController) syncReusablePolicies(
+	ctx context.Context,
+	apiClient *cf.API,
+	appID string,
+	policyRefs []accesssvc.ReusablePolicyRefConfig,
+) error {
+	logger := log.FromContext(ctx)
+
+	// Resolve policy references first
+	resolvedRefs, err := r.resolveReusablePolicyRefs(ctx, apiClient, policyRefs)
+	if err != nil {
+		return fmt.Errorf("resolve reusable policy references: %w", err)
+	}
+
+	// For each resolved policy, we need to add it to the application
+	// Cloudflare API: POST /accounts/{account_id}/access/apps/{app_id}/policies
+	// with the reusable_policy_id field set
+
+	for _, ref := range resolvedRefs {
+		logger.V(1).Info("Adding reusable policy to application",
+			"appId", appID,
+			"policyId", ref.PolicyID,
+			"policyName", ref.PolicyName)
+
+		// The reusable policy is added by creating an application policy
+		// that references the reusable policy ID
+		params := cf.AccessPolicyParams{
+			ApplicationID:    appID,
+			ReusablePolicyID: ref.PolicyID,
+			Name:             ref.PolicyName, // Use resolved name
+			Decision:         ref.Decision,
+			Precedence:       ref.Precedence,
+		}
+
+		// Check if this policy already exists by precedence
+		existingPolicies, err := apiClient.ListAccessPolicies(ctx, appID)
+		if err != nil {
+			return fmt.Errorf("list existing policies for app %s: %w", appID, err)
+		}
+
+		var existingPolicy *cf.AccessPolicyResult
+		for i := range existingPolicies {
+			p := &existingPolicies[i]
+			// Match by reusable policy ID if available
+			if p.ReusablePolicyID != nil && *p.ReusablePolicyID == ref.PolicyID {
+				existingPolicy = p
+				break
+			}
+		}
+
+		if existingPolicy != nil {
+			// Update existing policy reference
+			logger.V(1).Info("Updating reusable policy reference",
+				"policyId", existingPolicy.ID,
+				"reusablePolicyId", ref.PolicyID)
+
+			if _, err := apiClient.UpdateAccessPolicy(ctx, existingPolicy.ID, params); err != nil {
+				return fmt.Errorf("update reusable policy reference %s: %w", ref.PolicyID, err)
+			}
+		} else {
+			// Create new policy reference
+			logger.V(1).Info("Creating reusable policy reference",
+				"reusablePolicyId", ref.PolicyID,
+				"precedence", ref.Precedence)
+
+			if _, err := apiClient.CreateAccessPolicy(ctx, params); err != nil {
+				return fmt.Errorf("create reusable policy reference %s: %w", ref.PolicyID, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// resolvedReusablePolicy holds resolved reusable policy information
+type resolvedReusablePolicy struct {
+	PolicyID   string
+	PolicyName string
+	Decision   string
+	Precedence int
+}
+
+// resolveReusablePolicyRefs resolves all reusable policy references.
+// This supports three reference types:
+// - Name: Kubernetes AccessPolicy resource name lookup
+// - CloudflareID: Direct ID reference (validated via API)
+// - CloudflareName: Name lookup via Cloudflare API
+//
+//nolint:revive // cognitive complexity is acceptable for policy resolution logic
+func (r *ApplicationController) resolveReusablePolicyRefs(
+	ctx context.Context,
+	apiClient *cf.API,
+	refs []accesssvc.ReusablePolicyRefConfig,
+) ([]resolvedReusablePolicy, error) {
+	logger := log.FromContext(ctx)
+	resolved := make([]resolvedReusablePolicy, 0, len(refs))
+
+	for i, ref := range refs {
+		var result resolvedReusablePolicy
+
+		// Resolve by reference type (priority: CloudflareID > CloudflareName > Name)
+		switch {
+		case ref.CloudflareID != "":
+			// Validate the policy ID exists
+			policy, err := apiClient.GetReusableAccessPolicy(ctx, ref.CloudflareID)
+			if err != nil {
+				if cf.IsNotFoundError(err) {
+					logger.Error(err, "Cloudflare reusable Access Policy not found",
+						"policyId", ref.CloudflareID, "index", i)
+					return nil, fmt.Errorf("cloudflare reusable access policy not found: %s", ref.CloudflareID)
+				}
+				return nil, fmt.Errorf("validate cloudflare reusable policy %s: %w", ref.CloudflareID, err)
+			}
+			result.PolicyID = ref.CloudflareID
+			result.PolicyName = policy.Name
+			result.Decision = policy.Decision
+			logger.V(1).Info("Resolved CloudflareID for reusable policy",
+				"policyId", ref.CloudflareID, "policyName", policy.Name)
+
+		case ref.CloudflareName != "":
+			// Look up by name
+			policy, err := apiClient.GetReusableAccessPolicyByName(ctx, ref.CloudflareName)
+			if err != nil {
+				return nil, fmt.Errorf("lookup cloudflare reusable policy by name %s: %w", ref.CloudflareName, err)
+			}
+			if policy == nil {
+				logger.Error(nil, "Cloudflare reusable Access Policy not found by name",
+					"policyName", ref.CloudflareName, "index", i)
+				return nil, fmt.Errorf("cloudflare reusable access policy not found by name: %s", ref.CloudflareName)
+			}
+			result.PolicyID = policy.ID
+			result.PolicyName = policy.Name
+			result.Decision = policy.Decision
+			logger.V(1).Info("Resolved CloudflareName for reusable policy",
+				"policyName", ref.CloudflareName, "policyId", policy.ID)
+
+		case ref.Name != "":
+			// Look up Kubernetes AccessPolicy resource
+			accessPolicy := &v1alpha2.AccessPolicy{}
+			if err := r.Client.Get(ctx, client.ObjectKey{Name: ref.Name}, accessPolicy); err != nil {
+				if client.IgnoreNotFound(err) == nil {
+					logger.Error(err, "Kubernetes AccessPolicy not found",
+						"name", ref.Name, "index", i)
+					return nil, fmt.Errorf("kubernetes AccessPolicy not found: %s", ref.Name)
+				}
+				return nil, fmt.Errorf("get kubernetes AccessPolicy %s: %w", ref.Name, err)
+			}
+			if accessPolicy.Status.PolicyID == "" {
+				logger.Info("AccessPolicy not yet ready (no PolicyID)",
+					"name", ref.Name, "index", i)
+				return nil, fmt.Errorf("AccessPolicy %s not yet ready (no PolicyID in status)", ref.Name)
+			}
+			result.PolicyID = accessPolicy.Status.PolicyID
+			result.PolicyName = accessPolicy.GetAccessPolicyName()
+			result.Decision = accessPolicy.Spec.Decision
+			logger.V(1).Info("Resolved K8s AccessPolicy name",
+				"k8sName", ref.Name,
+				"policyId", accessPolicy.Status.PolicyID,
+				"policyName", result.PolicyName)
+
+		default:
+			// No reference specified
+			logger.Error(nil, "No reusable policy reference specified",
+				"index", i)
+			return nil, fmt.Errorf("no reusable policy reference specified at index %d", i)
+		}
+
+		// Set precedence (use override if provided)
+		if ref.Precedence != nil {
+			result.Precedence = *ref.Precedence
+		} else {
+			// Use a default precedence based on index if not specified
+			result.Precedence = 100 + i
+		}
+
+		resolved = append(resolved, result)
+	}
+
+	return resolved, nil
 }
 
 // nilIfEmpty returns nil if the string is empty, otherwise returns a pointer to the string.
@@ -742,7 +937,7 @@ func (r *ApplicationController) handleDeletion(
 		logger.Info("Deleting AccessApplication from Cloudflare",
 			"applicationId", cloudflareID)
 
-		if err := apiClient.DeleteAccessApplication(cloudflareID); err != nil {
+		if err := apiClient.DeleteAccessApplication(ctx, cloudflareID); err != nil {
 			if !cf.IsNotFoundError(err) {
 				logger.Error(err, "Failed to delete AccessApplication from Cloudflare")
 				if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
@@ -757,9 +952,8 @@ func (r *ApplicationController) handleDeletion(
 		}
 	}
 
-	// Remove finalizer
-	controllerutil.RemoveFinalizer(syncState, ApplicationFinalizerName)
-	if err := r.Client.Update(ctx, syncState); err != nil {
+	// Remove finalizer (with conflict retry)
+	if err := common.RemoveFinalizerWithRetry(ctx, r.Client, syncState, ApplicationFinalizerName); err != nil {
 		logger.Error(err, "Failed to remove finalizer")
 		return ctrl.Result{}, err
 	}

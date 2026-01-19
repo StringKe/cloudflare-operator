@@ -42,12 +42,25 @@ type AggregatedZoneRuleset struct {
 	Rules []RuleWithOwner
 	// SourceCount is the number of sources that contributed
 	SourceCount int
+	// PhaseConflicts tracks sources that have different phases than the first source
+	// These conflicts should be logged as warnings
+	PhaseConflicts []PhaseConflict
 }
 
 // RuleWithOwner contains a rule with its owner information.
 type RuleWithOwner struct {
 	Rule  rulesetsvc.RulesetRuleConfig
 	Owner v1alpha2.SourceReference
+}
+
+// PhaseConflict represents a phase mismatch between sources.
+type PhaseConflict struct {
+	// Source is the source with the conflicting phase
+	Source v1alpha2.SourceReference
+	// ExpectedPhase is the phase from the first source
+	ExpectedPhase string
+	// ActualPhase is the phase from this source
+	ActualPhase string
 }
 
 // ZoneRulesetController is the Sync Controller for Zone Ruleset Configuration.
@@ -100,10 +113,9 @@ func (r *ZoneRulesetController) Reconcile(ctx context.Context, req ctrl.Request)
 		return r.handleDeletion(ctx, syncState)
 	}
 
-	// Add finalizer if not present
+	// Add finalizer if not present (with conflict retry)
 	if !controllerutil.ContainsFinalizer(syncState, ZoneRulesetFinalizerName) {
-		controllerutil.AddFinalizer(syncState, ZoneRulesetFinalizerName)
-		if err := r.Client.Update(ctx, syncState); err != nil {
+		if err := common.AddFinalizerWithRetry(ctx, r.Client, syncState, ZoneRulesetFinalizerName); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{Requeue: true}, nil
@@ -140,6 +152,18 @@ func (r *ZoneRulesetController) Reconcile(ctx context.Context, req ctrl.Request)
 	// Set syncing status
 	if err := r.SetSyncStatus(ctx, syncState, v1alpha2.SyncStatusSyncing); err != nil {
 		return ctrl.Result{}, err
+	}
+
+	// Log phase conflicts as warnings - this is a configuration error that should be fixed
+	if len(aggregated.PhaseConflicts) > 0 {
+		for _, conflict := range aggregated.PhaseConflicts {
+			logger.Info("WARNING: Phase conflict detected - rules from this source will use the first source's phase",
+				"sourceKind", conflict.Source.Kind,
+				"sourceName", conflict.Source.Name,
+				"sourceNamespace", conflict.Source.Namespace,
+				"expectedPhase", conflict.ExpectedPhase,
+				"actualPhase", conflict.ActualPhase)
+		}
 	}
 
 	// Sync to Cloudflare API with aggregated rules
@@ -205,11 +229,20 @@ func (r *ZoneRulesetController) aggregateAllSources(syncState *v1alpha2.Cloudfla
 		}
 
 		// Use first source's zone, phase, and description
+		// Track conflicts for logging
 		if result.Zone == "" {
 			result.Zone = config.Zone
 		}
 		if result.Phase == "" {
 			result.Phase = config.Phase
+		} else if config.Phase != "" && config.Phase != result.Phase {
+			// Phase conflict detected - rules from this source will be associated with the first phase
+			// This is a configuration error that should be fixed by the user
+			result.PhaseConflicts = append(result.PhaseConflicts, PhaseConflict{
+				Source:        source.Ref,
+				ExpectedPhase: result.Phase,
+				ActualPhase:   config.Phase,
+			})
 		}
 		if result.Description == "" {
 			result.Description = config.Description
@@ -327,7 +360,7 @@ func (r *ZoneRulesetController) convertAggregatedRules(rules []RuleWithOwner) []
 // convertActionParameters converts action parameters to Cloudflare format.
 //
 //nolint:revive // cognitive complexity is acceptable for parameter conversion
-func (*ZoneRulesetController) convertActionParameters(params *v1alpha2.RulesetRuleActionParameters) *cloudflare.RulesetRuleActionParameters {
+func (r *ZoneRulesetController) convertActionParameters(params *v1alpha2.RulesetRuleActionParameters) *cloudflare.RulesetRuleActionParameters {
 	cfParams := &cloudflare.RulesetRuleActionParameters{}
 
 	// URI rewrite
@@ -377,6 +410,29 @@ func (*ZoneRulesetController) convertActionParameters(params *v1alpha2.RulesetRu
 		}
 	}
 
+	// Origin (for origin override action)
+	if params.Origin != nil {
+		cfParams.Origin = &cloudflare.RulesetRuleActionParametersOrigin{
+			Host: params.Origin.Host,
+			Port: uint16(params.Origin.Port),
+		}
+	}
+
+	// Cache settings (for set_cache_settings action)
+	if params.Cache != nil {
+		r.convertCacheSettings(params.Cache, cfParams)
+	}
+
+	// Compression algorithms (for compress_response action)
+	if len(params.Algorithms) > 0 {
+		cfParams.Algorithms = make([]cloudflare.RulesetRuleActionParametersCompressionAlgorithm, len(params.Algorithms))
+		for i, alg := range params.Algorithms {
+			cfParams.Algorithms[i] = cloudflare.RulesetRuleActionParametersCompressionAlgorithm{
+				Name: alg.Name,
+			}
+		}
+	}
+
 	// Products (for skip action)
 	if len(params.Products) > 0 {
 		cfParams.Products = params.Products
@@ -409,6 +465,127 @@ func (*ZoneRulesetController) convertActionParameters(params *v1alpha2.RulesetRu
 	}
 
 	return cfParams
+}
+
+// convertCacheSettings converts cache settings to Cloudflare format.
+//
+//nolint:revive // cognitive complexity is acceptable for nested cache structure conversion
+func (*ZoneRulesetController) convertCacheSettings(cache *v1alpha2.RulesetCacheSettings, cfParams *cloudflare.RulesetRuleActionParameters) {
+	// Cache enable/disable
+	cfParams.Cache = cache.Cache
+
+	// Respect strong ETags
+	cfParams.RespectStrongETags = cache.RespectStrongETags
+
+	// Origin error page passthru
+	cfParams.OriginErrorPagePassthru = cache.OriginErrorPagePassthru
+
+	// Edge TTL
+	if cache.EdgeTTL != nil {
+		cfParams.EdgeTTL = &cloudflare.RulesetRuleActionParametersEdgeTTL{
+			Mode: cache.EdgeTTL.Mode,
+		}
+		if cache.EdgeTTL.Default != nil {
+			cfParams.EdgeTTL.Default = ptr.To(uint(*cache.EdgeTTL.Default))
+		}
+		if len(cache.EdgeTTL.StatusCodeTTL) > 0 {
+			cfParams.EdgeTTL.StatusCodeTTL = make([]cloudflare.RulesetRuleActionParametersStatusCodeTTL, len(cache.EdgeTTL.StatusCodeTTL))
+			for i, sct := range cache.EdgeTTL.StatusCodeTTL {
+				cfParams.EdgeTTL.StatusCodeTTL[i] = cloudflare.RulesetRuleActionParametersStatusCodeTTL{
+					Value: ptr.To(sct.Value),
+				}
+				if sct.StatusCodeRange != nil {
+					cfParams.EdgeTTL.StatusCodeTTL[i].StatusCodeRange = &cloudflare.RulesetRuleActionParametersStatusCodeRange{
+						From: ptr.To(uint(sct.StatusCodeRange.From)),
+						To:   ptr.To(uint(sct.StatusCodeRange.To)),
+					}
+				}
+				if sct.StatusCodeValue != nil {
+					cfParams.EdgeTTL.StatusCodeTTL[i].StatusCodeValue = ptr.To(uint(*sct.StatusCodeValue))
+				}
+			}
+		}
+	}
+
+	// Browser TTL
+	if cache.BrowserTTL != nil {
+		cfParams.BrowserTTL = &cloudflare.RulesetRuleActionParametersBrowserTTL{
+			Mode: cache.BrowserTTL.Mode,
+		}
+		if cache.BrowserTTL.Default != nil {
+			cfParams.BrowserTTL.Default = ptr.To(uint(*cache.BrowserTTL.Default))
+		}
+	}
+
+	// Cache Key
+	if cache.CacheKey != nil {
+		cfParams.CacheKey = &cloudflare.RulesetRuleActionParametersCacheKey{
+			IgnoreQueryStringsOrder: cache.CacheKey.IgnoreQueryStringsOrder,
+			CacheDeceptionArmor:     cache.CacheKey.CacheDeceptionArmor,
+		}
+
+		// Custom key components
+		if cache.CacheKey.QueryString != nil || cache.CacheKey.Header != nil ||
+			cache.CacheKey.Cookie != nil || cache.CacheKey.User != nil || cache.CacheKey.Host != nil {
+			cfParams.CacheKey.CustomKey = &cloudflare.RulesetRuleActionParametersCustomKey{}
+
+			// Query string
+			if cache.CacheKey.QueryString != nil {
+				cfParams.CacheKey.CustomKey.Query = &cloudflare.RulesetRuleActionParametersCustomKeyQuery{}
+				if cache.CacheKey.QueryString.Include != nil {
+					cfParams.CacheKey.CustomKey.Query.Include = &cloudflare.RulesetRuleActionParametersCustomKeyList{
+						List: cache.CacheKey.QueryString.Include.List,
+					}
+					if cache.CacheKey.QueryString.Include.All != nil {
+						cfParams.CacheKey.CustomKey.Query.Include.All = *cache.CacheKey.QueryString.Include.All
+					}
+				}
+				if cache.CacheKey.QueryString.Exclude != nil {
+					cfParams.CacheKey.CustomKey.Query.Exclude = &cloudflare.RulesetRuleActionParametersCustomKeyList{
+						List: cache.CacheKey.QueryString.Exclude.List,
+					}
+					if cache.CacheKey.QueryString.Exclude.All != nil {
+						cfParams.CacheKey.CustomKey.Query.Exclude.All = *cache.CacheKey.QueryString.Exclude.All
+					}
+				}
+			}
+
+			// Header
+			if cache.CacheKey.Header != nil {
+				cfParams.CacheKey.CustomKey.Header = &cloudflare.RulesetRuleActionParametersCustomKeyHeader{
+					RulesetRuleActionParametersCustomKeyFields: cloudflare.RulesetRuleActionParametersCustomKeyFields{
+						Include:       cache.CacheKey.Header.Include,
+						CheckPresence: cache.CacheKey.Header.CheckPresence,
+					},
+					ExcludeOrigin: cache.CacheKey.Header.ExcludeOrigin,
+				}
+			}
+
+			// Cookie
+			if cache.CacheKey.Cookie != nil {
+				cfParams.CacheKey.CustomKey.Cookie = &cloudflare.RulesetRuleActionParametersCustomKeyCookie{
+					Include:       cache.CacheKey.Cookie.Include,
+					CheckPresence: cache.CacheKey.Cookie.CheckPresence,
+				}
+			}
+
+			// User
+			if cache.CacheKey.User != nil {
+				cfParams.CacheKey.CustomKey.User = &cloudflare.RulesetRuleActionParametersCustomKeyUser{
+					DeviceType: cache.CacheKey.User.DeviceType,
+					Geo:        cache.CacheKey.User.Geo,
+					Lang:       cache.CacheKey.User.Lang,
+				}
+			}
+
+			// Host
+			if cache.CacheKey.Host != nil {
+				cfParams.CacheKey.CustomKey.Host = &cloudflare.RulesetRuleActionParametersCustomKeyHost{
+					Resolved: cache.CacheKey.Host.Resolved,
+				}
+			}
+		}
+	}
 }
 
 // convertRateLimit converts rate limit settings to Cloudflare format.
@@ -540,9 +717,8 @@ func (r *ZoneRulesetController) cleanupSyncState(
 ) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	// Remove finalizer
-	controllerutil.RemoveFinalizer(syncState, ZoneRulesetFinalizerName)
-	if err := r.Client.Update(ctx, syncState); err != nil {
+	// Remove finalizer (with conflict retry)
+	if err := common.RemoveFinalizerWithRetry(ctx, r.Client, syncState, ZoneRulesetFinalizerName); err != nil {
 		logger.Error(err, "Failed to remove finalizer")
 		return ctrl.Result{}, err
 	}

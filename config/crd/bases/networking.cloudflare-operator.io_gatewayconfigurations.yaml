@@ -208,8 +208,11 @@ spec:
                         type: boolean
                     type: object
                   nonIdentityBrowserIsolation:
-                    description: NonIdentityBrowserIsolation configures non-identity
-                      isolation.
+                    description: |-
+                      NonIdentityBrowserIsolation configures non-identity isolation.
+                      Deprecated: Use BrowserIsolation.NonIdentityEnabled instead.
+                      This field is kept for backward compatibility and will be merged into
+                      BrowserIsolation.NonIdentityEnabled during reconciliation.
                     properties:
                       enabled:
                         type: boolean

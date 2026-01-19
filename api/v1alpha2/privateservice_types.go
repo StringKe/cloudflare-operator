@@ -24,6 +24,9 @@ type PrivateServiceSpec struct {
 	VirtualNetworkRef *VirtualNetworkRef `json:"virtualNetworkRef,omitempty"`
 
 	// Protocol specifies the protocol to use for the private service.
+	// Deprecated: Protocol handling is automatic in cloudflared. Tunnel Routes operate at the
+	// network layer (IP CIDR) and cloudflared handles protocol detection automatically.
+	// This field is kept for documentation purposes only and is not passed to the Cloudflare API.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Enum=tcp;udp
 	// +kubebuilder:default=tcp

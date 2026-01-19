@@ -72,10 +72,9 @@ func (r *IdentityProviderController) Reconcile(ctx context.Context, req ctrl.Req
 		return r.handleDeletion(ctx, syncState)
 	}
 
-	// Add finalizer if not present
+	// Add finalizer if not present (with conflict retry)
 	if !controllerutil.ContainsFinalizer(syncState, IdentityProviderFinalizerName) {
-		controllerutil.AddFinalizer(syncState, IdentityProviderFinalizerName)
-		if err := r.Client.Update(ctx, syncState); err != nil {
+		if err := common.AddFinalizerWithRetry(ctx, r.Client, syncState, IdentityProviderFinalizerName); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{Requeue: true}, nil
@@ -190,7 +189,7 @@ func (r *IdentityProviderController) syncToCloudflare(
 			"name", config.Name,
 			"type", config.Type)
 
-		result, err = apiClient.CreateAccessIdentityProvider(params)
+		result, err = apiClient.CreateAccessIdentityProvider(ctx, params)
 		if err != nil {
 			return nil, fmt.Errorf("create AccessIdentityProvider: %w", err)
 		}
@@ -206,13 +205,13 @@ func (r *IdentityProviderController) syncToCloudflare(
 			"providerId", cloudflareID,
 			"name", config.Name)
 
-		result, err = apiClient.UpdateAccessIdentityProvider(cloudflareID, params)
+		result, err = apiClient.UpdateAccessIdentityProvider(ctx, cloudflareID, params)
 		if err != nil {
 			// Check if provider was deleted externally
 			if common.HandleNotFoundOnUpdate(err) {
 				logger.Info("AccessIdentityProvider not found, recreating",
 					"providerId", cloudflareID)
-				result, err = apiClient.CreateAccessIdentityProvider(params)
+				result, err = apiClient.CreateAccessIdentityProvider(ctx, params)
 				if err != nil {
 					return nil, fmt.Errorf("recreate AccessIdentityProvider: %w", err)
 				}
@@ -418,7 +417,7 @@ func (r *IdentityProviderController) handleDeletion(
 		logger.Info("Deleting AccessIdentityProvider from Cloudflare",
 			"providerId", cloudflareID)
 
-		if err := apiClient.DeleteAccessIdentityProvider(cloudflareID); err != nil {
+		if err := apiClient.DeleteAccessIdentityProvider(ctx, cloudflareID); err != nil {
 			if !cf.IsNotFoundError(err) {
 				logger.Error(err, "Failed to delete AccessIdentityProvider from Cloudflare")
 				if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
@@ -433,9 +432,8 @@ func (r *IdentityProviderController) handleDeletion(
 		}
 	}
 
-	// Remove finalizer
-	controllerutil.RemoveFinalizer(syncState, IdentityProviderFinalizerName)
-	if err := r.Client.Update(ctx, syncState); err != nil {
+	// Remove finalizer (with conflict retry)
+	if err := common.RemoveFinalizerWithRetry(ctx, r.Client, syncState, IdentityProviderFinalizerName); err != nil {
 		logger.Error(err, "Failed to remove finalizer")
 		return ctrl.Result{}, err
 	}

@@ -24,13 +24,11 @@ type FallbackDomainEntry struct {
 }
 
 // GetSplitTunnelExclude retrieves the current split tunnel exclude list.
-func (c *API) GetSplitTunnelExclude() ([]SplitTunnelEntry, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) GetSplitTunnelExclude(ctx context.Context) ([]SplitTunnelEntry, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
-
-	ctx := context.Background()
 
 	routes, err := c.CloudflareClient.ListSplitTunnels(ctx, c.ValidAccountId, "exclude")
 	if err != nil {
@@ -51,13 +49,11 @@ func (c *API) GetSplitTunnelExclude() ([]SplitTunnelEntry, error) {
 }
 
 // UpdateSplitTunnelExclude updates the split tunnel exclude list.
-func (c *API) UpdateSplitTunnelExclude(entries []SplitTunnelEntry) error {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) UpdateSplitTunnelExclude(ctx context.Context, entries []SplitTunnelEntry) error {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return err
 	}
-
-	ctx := context.Background()
 
 	tunnels := make([]cloudflare.SplitTunnel, len(entries))
 	for i, e := range entries {
@@ -79,13 +75,11 @@ func (c *API) UpdateSplitTunnelExclude(entries []SplitTunnelEntry) error {
 }
 
 // GetSplitTunnelInclude retrieves the current split tunnel include list.
-func (c *API) GetSplitTunnelInclude() ([]SplitTunnelEntry, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) GetSplitTunnelInclude(ctx context.Context) ([]SplitTunnelEntry, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
-
-	ctx := context.Background()
 
 	routes, err := c.CloudflareClient.ListSplitTunnels(ctx, c.ValidAccountId, "include")
 	if err != nil {
@@ -106,13 +100,11 @@ func (c *API) GetSplitTunnelInclude() ([]SplitTunnelEntry, error) {
 }
 
 // UpdateSplitTunnelInclude updates the split tunnel include list.
-func (c *API) UpdateSplitTunnelInclude(entries []SplitTunnelEntry) error {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) UpdateSplitTunnelInclude(ctx context.Context, entries []SplitTunnelEntry) error {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return err
 	}
-
-	ctx := context.Background()
 
 	tunnels := make([]cloudflare.SplitTunnel, len(entries))
 	for i, e := range entries {
@@ -134,13 +126,11 @@ func (c *API) UpdateSplitTunnelInclude(entries []SplitTunnelEntry) error {
 }
 
 // GetFallbackDomains retrieves the current fallback domains list.
-func (c *API) GetFallbackDomains() ([]FallbackDomainEntry, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) GetFallbackDomains(ctx context.Context) ([]FallbackDomainEntry, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
-
-	ctx := context.Background()
 
 	domains, err := c.CloudflareClient.ListFallbackDomains(ctx, c.ValidAccountId)
 	if err != nil {
@@ -161,13 +151,11 @@ func (c *API) GetFallbackDomains() ([]FallbackDomainEntry, error) {
 }
 
 // UpdateFallbackDomains updates the fallback domains list.
-func (c *API) UpdateFallbackDomains(entries []FallbackDomainEntry) error {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) UpdateFallbackDomains(ctx context.Context, entries []FallbackDomainEntry) error {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return err
 	}
-
-	ctx := context.Background()
 
 	domains := make([]cloudflare.FallbackDomain, len(entries))
 	for i, e := range entries {

@@ -322,6 +322,12 @@ func (r *WARPConnectorReconciler) reconcileSecret(token string) error {
 }
 
 func (r *WARPConnectorReconciler) reconcileDeployment() error {
+	// Validate resource requirements before creating/updating deployment
+	resources, err := r.buildResources(r.connector.Spec.Resources)
+	if err != nil {
+		return fmt.Errorf("validate resources: %w", err)
+	}
+
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      r.connector.Name,
@@ -329,7 +335,7 @@ func (r *WARPConnectorReconciler) reconcileDeployment() error {
 		},
 	}
 
-	_, err := controllerutil.CreateOrUpdate(r.ctx, r.Client, deployment, func() error {
+	_, err = controllerutil.CreateOrUpdate(r.ctx, r.Client, deployment, func() error {
 		replicas := r.connector.Spec.Replicas
 		if replicas == 0 {
 			replicas = 1
@@ -377,7 +383,7 @@ func (r *WARPConnectorReconciler) reconcileDeployment() error {
 									},
 								},
 							},
-							Resources: r.buildResources(r.connector.Spec.Resources),
+							Resources: resources,
 						},
 					},
 				},
@@ -412,9 +418,10 @@ func (*WARPConnectorReconciler) buildTolerations(tolerations []networkingv1alpha
 	return result
 }
 
-func (*WARPConnectorReconciler) buildResources(res *networkingv1alpha2.ResourceRequirements) corev1.ResourceRequirements {
+//nolint:revive // cognitive complexity is acceptable for validation logic with error handling
+func (*WARPConnectorReconciler) buildResources(res *networkingv1alpha2.ResourceRequirements) (corev1.ResourceRequirements, error) {
 	if res == nil {
-		return corev1.ResourceRequirements{}
+		return corev1.ResourceRequirements{}, nil
 	}
 
 	result := corev1.ResourceRequirements{}
@@ -422,18 +429,26 @@ func (*WARPConnectorReconciler) buildResources(res *networkingv1alpha2.ResourceR
 	if res.Limits != nil {
 		result.Limits = make(corev1.ResourceList)
 		for k, v := range res.Limits {
-			result.Limits[corev1.ResourceName(k)] = resource.MustParse(v)
+			quantity, err := resource.ParseQuantity(v)
+			if err != nil {
+				return corev1.ResourceRequirements{}, fmt.Errorf("invalid resource limit %s=%s: %w", k, v, err)
+			}
+			result.Limits[corev1.ResourceName(k)] = quantity
 		}
 	}
 
 	if res.Requests != nil {
 		result.Requests = make(corev1.ResourceList)
 		for k, v := range res.Requests {
-			result.Requests[corev1.ResourceName(k)] = resource.MustParse(v)
+			quantity, err := resource.ParseQuantity(v)
+			if err != nil {
+				return corev1.ResourceRequirements{}, fmt.Errorf("invalid resource request %s=%s: %w", k, v, err)
+			}
+			result.Requests[corev1.ResourceName(k)] = quantity
 		}
 	}
 
-	return result
+	return result, nil
 }
 
 func (r *WARPConnectorReconciler) updateStatusError(err error) (ctrl.Result, error) {

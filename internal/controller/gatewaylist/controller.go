@@ -200,21 +200,28 @@ func (r *GatewayListReconciler) registerGatewayList(
 	return r.updateStatusPending(credInfo.AccountID, len(items))
 }
 
-func (r *GatewayListReconciler) collectItems() ([]string, error) {
-	items := make([]string, 0)
+func (r *GatewayListReconciler) collectItems() ([]gatewaysvc.GatewayListItem, error) {
+	items := make([]gatewaysvc.GatewayListItem, 0)
 
-	// Add items from spec
+	// Add items from spec with descriptions
 	for _, item := range r.list.Spec.Items {
-		items = append(items, item.Value)
+		items = append(items, gatewaysvc.GatewayListItem{
+			Value:       item.Value,
+			Description: item.Description,
+		})
 	}
 
-	// Add items from ConfigMap
+	// Add items from ConfigMap (ConfigMap items don't have descriptions)
 	if r.list.Spec.ItemsFromConfigMap != nil {
 		configMapItems, err := r.getItemsFromConfigMap()
 		if err != nil {
 			return nil, err
 		}
-		items = append(items, configMapItems...)
+		for _, value := range configMapItems {
+			items = append(items, gatewaysvc.GatewayListItem{
+				Value: value,
+			})
+		}
 	}
 
 	return items, nil

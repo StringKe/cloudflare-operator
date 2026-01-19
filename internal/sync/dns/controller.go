@@ -96,10 +96,9 @@ func (r *Controller) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return r.handleDeletion(ctx, syncState)
 	}
 
-	// Add finalizer if not present
+	// Add finalizer if not present (with conflict retry)
 	if !controllerutil.ContainsFinalizer(syncState, FinalizerName) {
-		controllerutil.AddFinalizer(syncState, FinalizerName)
-		if err := r.Client.Update(ctx, syncState); err != nil {
+		if err := common.AddFinalizerWithRetry(ctx, r.Client, syncState, FinalizerName); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{Requeue: true}, nil
@@ -225,7 +224,7 @@ func (r *Controller) syncToCloudflare(
 			"type", config.Type,
 			"zoneId", zoneID)
 
-		result, err = apiClient.CreateDNSRecordInZone(zoneID, params)
+		result, err = apiClient.CreateDNSRecordInZone(ctx, zoneID, params)
 		if err != nil {
 			return nil, fmt.Errorf("create DNS record: %w", err)
 		}
@@ -243,14 +242,14 @@ func (r *Controller) syncToCloudflare(
 			"name", config.Name,
 			"zoneId", zoneID)
 
-		result, err = apiClient.UpdateDNSRecordInZone(zoneID, cloudflareID, params)
+		result, err = apiClient.UpdateDNSRecordInZone(ctx, zoneID, cloudflareID, params)
 		if err != nil {
 			// Check if record was deleted externally
 			if common.HandleNotFoundOnUpdate(err) {
 				// Record deleted externally, recreate it
 				logger.Info("DNS record not found, recreating",
 					"recordId", cloudflareID)
-				result, err = apiClient.CreateDNSRecordInZone(zoneID, params)
+				result, err = apiClient.CreateDNSRecordInZone(ctx, zoneID, params)
 				if err != nil {
 					return nil, fmt.Errorf("recreate DNS record: %w", err)
 				}
@@ -361,7 +360,7 @@ func (r *Controller) handleDeletion(
 				"recordId", cloudflareID,
 				"zoneId", zoneID)
 
-			if err := apiClient.DeleteDNSRecordInZone(zoneID, cloudflareID); err != nil {
+			if err := apiClient.DeleteDNSRecordInZone(ctx, zoneID, cloudflareID); err != nil {
 				if !cf.IsNotFoundError(err) {
 					logger.Error(err, "Failed to delete DNS record from Cloudflare")
 					if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
@@ -377,9 +376,8 @@ func (r *Controller) handleDeletion(
 		}
 	}
 
-	// Remove finalizer
-	controllerutil.RemoveFinalizer(syncState, FinalizerName)
-	if err := r.Client.Update(ctx, syncState); err != nil {
+	// Remove finalizer (with conflict retry)
+	if err := common.RemoveFinalizerWithRetry(ctx, r.Client, syncState, FinalizerName); err != nil {
 		logger.Error(err, "Failed to remove finalizer")
 		return ctrl.Result{}, err
 	}

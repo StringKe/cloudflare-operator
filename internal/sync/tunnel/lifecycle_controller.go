@@ -78,10 +78,9 @@ func (r *LifecycleController) Reconcile(ctx context.Context, req ctrl.Request) (
 		return r.handleDeletion(ctx, syncState)
 	}
 
-	// Add finalizer if not present
+	// Add finalizer if not present (with conflict retry)
 	if !controllerutil.ContainsFinalizer(syncState, TunnelLifecycleFinalizerName) {
-		controllerutil.AddFinalizer(syncState, TunnelLifecycleFinalizerName)
-		if err := r.Client.Update(ctx, syncState); err != nil {
+		if err := common.AddFinalizerWithRetry(ctx, r.Client, syncState, TunnelLifecycleFinalizerName); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{Requeue: true}, nil
@@ -189,7 +188,7 @@ func (r *LifecycleController) createTunnel(
 	logger.Info("Creating tunnel", "name", config.TunnelName)
 
 	// Create tunnel using parameterized method
-	tunnelResult, err := cfAPI.CreateTunnelWithParams(config.TunnelName, config.ConfigSrc)
+	tunnelResult, err := cfAPI.CreateTunnelWithParams(ctx, config.TunnelName, config.ConfigSrc)
 	if err != nil {
 		// Check if tunnel already exists (conflict error)
 		if cf.IsConflictError(err) {
@@ -201,7 +200,7 @@ func (r *LifecycleController) createTunnel(
 	}
 
 	// Get tunnel token
-	token, err := cfAPI.GetTunnelToken(tunnelResult.ID)
+	token, err := cfAPI.GetTunnelToken(ctx, tunnelResult.ID)
 	if err != nil {
 		logger.Error(err, "Failed to get tunnel token, tunnel created but token unavailable",
 			"tunnelId", tunnelResult.ID)
@@ -241,14 +240,14 @@ func (*LifecycleController) deleteTunnel(
 	logger.Info("Deleting tunnel", "tunnelId", config.TunnelID)
 
 	// Delete associated routes first
-	if _, err := cfAPI.DeleteTunnelRoutesByTunnelID(config.TunnelID); err != nil {
+	if _, err := cfAPI.DeleteTunnelRoutesByTunnelID(ctx, config.TunnelID); err != nil {
 		if !cf.IsNotFoundError(err) {
 			logger.Error(err, "Failed to delete tunnel routes, continuing with tunnel deletion")
 		}
 	}
 
 	// Delete tunnel using parameterized method
-	if err := cfAPI.DeleteTunnelByID(config.TunnelID); err != nil {
+	if err := cfAPI.DeleteTunnelByID(ctx, config.TunnelID); err != nil {
 		if cf.IsNotFoundError(err) {
 			logger.Info("Tunnel already deleted", "tunnelId", config.TunnelID)
 			return nil
@@ -276,13 +275,13 @@ func (*LifecycleController) adoptTunnel(
 	logger.Info("Adopting tunnel", "tunnelId", tunnelID, "tunnelName", config.TunnelName)
 
 	// Get tunnel token
-	token, err := cfAPI.GetTunnelToken(tunnelID)
+	token, err := cfAPI.GetTunnelToken(ctx, tunnelID)
 	if err != nil {
 		return nil, fmt.Errorf("get tunnel token: %w", err)
 	}
 
 	// Get tunnel credentials
-	creds, err := cfAPI.GetTunnelCredsByID(tunnelID)
+	creds, err := cfAPI.GetTunnelCredsByID(ctx, tunnelID)
 	if err != nil {
 		logger.Error(err, "Failed to get tunnel credentials, continuing without them")
 		// Continue - we have the token at least
@@ -315,7 +314,7 @@ func (r *LifecycleController) adoptTunnelByName(
 	logger := log.FromContext(ctx)
 
 	// Get tunnel ID by name using parameterized method
-	tunnelID, err := cfAPI.GetTunnelIDByName(tunnelName)
+	tunnelID, err := cfAPI.GetTunnelIDByName(ctx, tunnelName)
 	if err != nil {
 		return nil, fmt.Errorf("get tunnel ID by name: %w", err)
 	}
@@ -421,14 +420,14 @@ func (r *LifecycleController) handleDeletion(
 			"tunnelId", tunnelID)
 
 		// Delete associated routes first
-		if _, err := cfAPI.DeleteTunnelRoutesByTunnelID(tunnelID); err != nil {
+		if _, err := cfAPI.DeleteTunnelRoutesByTunnelID(ctx, tunnelID); err != nil {
 			if !cf.IsNotFoundError(err) {
 				logger.Error(err, "Failed to delete tunnel routes, continuing with tunnel deletion")
 			}
 		}
 
 		// Delete the tunnel
-		if err := cfAPI.DeleteTunnelByID(tunnelID); err != nil {
+		if err := cfAPI.DeleteTunnelByID(ctx, tunnelID); err != nil {
 			if !cf.IsNotFoundError(err) {
 				logger.Error(err, "Failed to delete tunnel")
 				if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
@@ -442,9 +441,8 @@ func (r *LifecycleController) handleDeletion(
 		}
 	}
 
-	// Remove finalizer
-	controllerutil.RemoveFinalizer(syncState, TunnelLifecycleFinalizerName)
-	if err := r.Client.Update(ctx, syncState); err != nil {
+	// Remove finalizer (with conflict retry)
+	if err := common.RemoveFinalizerWithRetry(ctx, r.Client, syncState, TunnelLifecycleFinalizerName); err != nil {
 		logger.Error(err, "Failed to remove finalizer")
 		return ctrl.Result{}, err
 	}

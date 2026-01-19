@@ -214,10 +214,14 @@ func (*GatewayConfigurationReconciler) buildConfigParams(settings networkingv1al
 	if settings.BlockPage != nil {
 		config.BlockPage = &gatewaysvc.BlockPageSettings{
 			Enabled:         settings.BlockPage.Enabled,
+			Name:            settings.BlockPage.Name,
 			FooterText:      settings.BlockPage.FooterText,
 			HeaderText:      settings.BlockPage.HeaderText,
 			LogoPath:        settings.BlockPage.LogoPath,
 			BackgroundColor: settings.BlockPage.BackgroundColor,
+			MailtoAddress:   settings.BlockPage.MailtoAddress,
+			MailtoSubject:   settings.BlockPage.MailtoSubject,
+			SuppressFooter:  &settings.BlockPage.SuppressFooter,
 		}
 	}
 
@@ -251,6 +255,16 @@ func (*GatewayConfigurationReconciler) buildConfigParams(settings networkingv1al
 			Enabled: settings.CustomCertificate.Enabled,
 			ID:      settings.CustomCertificate.ID,
 		}
+	}
+
+	// Merge deprecated NonIdentityBrowserIsolation into BrowserIsolation.NonIdentityEnabled
+	// This maintains backward compatibility while the field is deprecated.
+	// See: BrowserIsolation.NonIdentityEnabled is the canonical field for this setting.
+	if settings.NonIdentityBrowserIsolation != nil && settings.NonIdentityBrowserIsolation.Enabled {
+		if config.BrowserIsolation == nil {
+			config.BrowserIsolation = &gatewaysvc.BrowserIsolationSettings{}
+		}
+		config.BrowserIsolation.NonIdentityEnabled = true
 	}
 
 	return config

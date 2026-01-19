@@ -44,13 +44,12 @@ type TunnelRouteResult struct {
 }
 
 // CreateVirtualNetwork creates a new Virtual Network in Cloudflare.
-func (c *API) CreateVirtualNetwork(params VirtualNetworkParams) (*VirtualNetworkResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) CreateVirtualNetwork(ctx context.Context, params VirtualNetworkParams) (*VirtualNetworkResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	createParams := cloudflare.TunnelVirtualNetworkCreateParams{
@@ -76,13 +75,12 @@ func (c *API) CreateVirtualNetwork(params VirtualNetworkParams) (*VirtualNetwork
 }
 
 // GetVirtualNetwork retrieves a Virtual Network by ID.
-func (c *API) GetVirtualNetwork(virtualNetworkID string) (*VirtualNetworkResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) GetVirtualNetwork(ctx context.Context, virtualNetworkID string) (*VirtualNetworkResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	// List all virtual networks and find by ID
@@ -117,13 +115,12 @@ func (c *API) GetVirtualNetwork(virtualNetworkID string) (*VirtualNetworkResult,
 }
 
 // GetVirtualNetworkByName retrieves a Virtual Network by name.
-func (c *API) GetVirtualNetworkByName(name string) (*VirtualNetworkResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) GetVirtualNetworkByName(ctx context.Context, name string) (*VirtualNetworkResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	params := cloudflare.TunnelVirtualNetworksListParams{
@@ -150,13 +147,12 @@ func (c *API) GetVirtualNetworkByName(name string) (*VirtualNetworkResult, error
 }
 
 // UpdateVirtualNetwork updates an existing Virtual Network.
-func (c *API) UpdateVirtualNetwork(virtualNetworkID string, params VirtualNetworkParams) (*VirtualNetworkResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) UpdateVirtualNetwork(ctx context.Context, virtualNetworkID string, params VirtualNetworkParams) (*VirtualNetworkResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	updateParams := cloudflare.TunnelVirtualNetworkUpdateParams{
@@ -184,13 +180,12 @@ func (c *API) UpdateVirtualNetwork(virtualNetworkID string, params VirtualNetwor
 
 // DeleteVirtualNetwork deletes a Virtual Network.
 // This method is idempotent - returns nil if the virtual network is already deleted.
-func (c *API) DeleteVirtualNetwork(virtualNetworkID string) error {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) DeleteVirtualNetwork(ctx context.Context, virtualNetworkID string) error {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	err := c.CloudflareClient.DeleteTunnelVirtualNetwork(ctx, rc, virtualNetworkID)
@@ -208,13 +203,12 @@ func (c *API) DeleteVirtualNetwork(virtualNetworkID string) error {
 }
 
 // CreateTunnelRoute creates a new Tunnel Route for private network access.
-func (c *API) CreateTunnelRoute(params TunnelRouteParams) (*TunnelRouteResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) CreateTunnelRoute(ctx context.Context, params TunnelRouteParams) (*TunnelRouteResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	createParams := cloudflare.TunnelRoutesCreateParams{
@@ -242,13 +236,12 @@ func (c *API) CreateTunnelRoute(params TunnelRouteParams) (*TunnelRouteResult, e
 }
 
 // GetTunnelRoute retrieves a Tunnel Route by network CIDR and virtual network ID.
-func (c *API) GetTunnelRoute(network, virtualNetworkID string) (*TunnelRouteResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) GetTunnelRoute(ctx context.Context, network, virtualNetworkID string) (*TunnelRouteResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	params := cloudflare.TunnelRoutesListParams{
@@ -277,13 +270,12 @@ func (c *API) GetTunnelRoute(network, virtualNetworkID string) (*TunnelRouteResu
 }
 
 // UpdateTunnelRoute updates an existing Tunnel Route.
-func (c *API) UpdateTunnelRoute(network string, params TunnelRouteParams) (*TunnelRouteResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) UpdateTunnelRoute(ctx context.Context, network string, params TunnelRouteParams) (*TunnelRouteResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	updateParams := cloudflare.TunnelRoutesUpdateParams{
@@ -312,13 +304,12 @@ func (c *API) UpdateTunnelRoute(network string, params TunnelRouteParams) (*Tunn
 
 // DeleteTunnelRoute deletes a Tunnel Route.
 // This method is idempotent - returns nil if the route is already deleted.
-func (c *API) DeleteTunnelRoute(network, virtualNetworkID string) error {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) DeleteTunnelRoute(ctx context.Context, network, virtualNetworkID string) error {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	params := cloudflare.TunnelRoutesDeleteParams{
@@ -342,13 +333,12 @@ func (c *API) DeleteTunnelRoute(network, virtualNetworkID string) error {
 
 // ListTunnelRoutesByTunnelID lists all Tunnel Routes associated with a specific Tunnel.
 // This is used to clean up routes before deleting a tunnel.
-func (c *API) ListTunnelRoutesByTunnelID(tunnelID string) ([]TunnelRouteResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) ListTunnelRoutesByTunnelID(ctx context.Context, tunnelID string) ([]TunnelRouteResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	params := cloudflare.TunnelRoutesListParams{
@@ -377,13 +367,12 @@ func (c *API) ListTunnelRoutesByTunnelID(tunnelID string) ([]TunnelRouteResult, 
 
 // ListTunnelRoutesByVirtualNetworkID lists all Tunnel Routes associated with a specific Virtual Network.
 // This is used to clean up routes before deleting a virtual network.
-func (c *API) ListTunnelRoutesByVirtualNetworkID(virtualNetworkID string) ([]TunnelRouteResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) ListTunnelRoutesByVirtualNetworkID(ctx context.Context, virtualNetworkID string) ([]TunnelRouteResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	params := cloudflare.TunnelRoutesListParams{
@@ -414,15 +403,15 @@ func (c *API) ListTunnelRoutesByVirtualNetworkID(virtualNetworkID string) ([]Tun
 // Returns the number of routes deleted and any error encountered.
 //
 //nolint:revive // cognitive complexity is acceptable for this cleanup function
-func (c *API) DeleteTunnelRoutesByTunnelID(tunnelID string) (int, error) {
-	routes, err := c.ListTunnelRoutesByTunnelID(tunnelID)
+func (c *API) DeleteTunnelRoutesByTunnelID(ctx context.Context, tunnelID string) (int, error) {
+	routes, err := c.ListTunnelRoutesByTunnelID(ctx, tunnelID)
 	if err != nil {
 		return 0, err
 	}
 
 	deletedCount := 0
 	for _, route := range routes {
-		if err := c.DeleteTunnelRoute(route.Network, route.VirtualNetworkID); err != nil {
+		if err := c.DeleteTunnelRoute(ctx, route.Network, route.VirtualNetworkID); err != nil {
 			if !IsNotFoundError(err) {
 				c.Log.Error(err, "error deleting tunnel route during cleanup",
 					"network", route.Network, "tunnelId", tunnelID)
@@ -444,15 +433,15 @@ func (c *API) DeleteTunnelRoutesByTunnelID(tunnelID string) (int, error) {
 // Returns the number of routes deleted and any error encountered.
 //
 //nolint:revive // cognitive complexity is acceptable for this cleanup function
-func (c *API) DeleteTunnelRoutesByVirtualNetworkID(virtualNetworkID string) (int, error) {
-	routes, err := c.ListTunnelRoutesByVirtualNetworkID(virtualNetworkID)
+func (c *API) DeleteTunnelRoutesByVirtualNetworkID(ctx context.Context, virtualNetworkID string) (int, error) {
+	routes, err := c.ListTunnelRoutesByVirtualNetworkID(ctx, virtualNetworkID)
 	if err != nil {
 		return 0, err
 	}
 
 	deletedCount := 0
 	for _, route := range routes {
-		if err := c.DeleteTunnelRoute(route.Network, route.VirtualNetworkID); err != nil {
+		if err := c.DeleteTunnelRoute(ctx, route.Network, route.VirtualNetworkID); err != nil {
 			if !IsNotFoundError(err) {
 				c.Log.Error(err, "error deleting tunnel route during cleanup",
 					"network", route.Network, "virtualNetworkId", virtualNetworkID)

@@ -24,7 +24,7 @@ func (api *API) GetQueueID(ctx context.Context, queueName string) (string, error
 		return "", errClientNotInitialized
 	}
 
-	accountID, err := api.GetAccountId()
+	accountID, err := api.GetAccountId(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to get account ID: %w", err)
 	}
@@ -55,7 +55,7 @@ func (api *API) ListQueues(ctx context.Context) ([]Queue, error) {
 		return nil, errClientNotInitialized
 	}
 
-	accountID, err := api.GetAccountId()
+	accountID, err := api.GetAccountId(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get account ID: %w", err)
 	}

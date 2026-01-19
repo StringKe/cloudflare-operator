@@ -50,12 +50,22 @@ type SSLConfig struct {
 	Mode string `json:"mode,omitempty"`
 	// MinVersion is the minimum TLS version (1.0, 1.1, 1.2, 1.3)
 	MinVersion string `json:"minVersion,omitempty"`
+	// TLS13 enables TLS 1.3 (on, off)
+	TLS13 string `json:"tls13,omitempty"`
 	// AlwaysUseHTTPS enables automatic HTTPS redirect
 	AlwaysUseHTTPS *bool `json:"alwaysUseHttps,omitempty"`
 	// AutomaticHTTPSRewrites enables automatic HTTPS rewrites
 	AutomaticHTTPSRewrites *bool `json:"automaticHttpsRewrites,omitempty"`
 	// OpportunisticEncryption enables opportunistic encryption
 	OpportunisticEncryption *bool `json:"opportunisticEncryption,omitempty"`
+	// AuthenticatedOriginPull configures mTLS between Cloudflare and origin
+	AuthenticatedOriginPull *AuthenticatedOriginPullConfig `json:"authenticatedOriginPull,omitempty"`
+}
+
+// AuthenticatedOriginPullConfig configures client certificate authentication.
+type AuthenticatedOriginPullConfig struct {
+	// Enabled enables authenticated origin pulls (mTLS)
+	Enabled bool `json:"enabled,omitempty"`
 }
 
 // CacheConfig contains cache configuration.
@@ -68,6 +78,29 @@ type CacheConfig struct {
 	DevelopmentMode *bool `json:"developmentMode,omitempty"`
 	// AlwaysOnline enables always online
 	AlwaysOnline *bool `json:"alwaysOnline,omitempty"`
+	// TieredCache configures tiered caching
+	TieredCache *TieredCacheConfig `json:"tieredCache,omitempty"`
+	// CacheReserve configures persistent cache storage
+	CacheReserve *CacheReserveConfig `json:"cacheReserve,omitempty"`
+	// CacheByDeviceType caches content separately for mobile/desktop
+	CacheByDeviceType *bool `json:"cacheByDeviceType,omitempty"`
+	// SortQueryStringForCache treats query strings with same parameters
+	// but different order as the same for caching purposes
+	SortQueryStringForCache *bool `json:"sortQueryStringForCache,omitempty"`
+}
+
+// TieredCacheConfig configures tiered caching.
+type TieredCacheConfig struct {
+	// Enabled enables tiered caching
+	Enabled bool `json:"enabled,omitempty"`
+	// Topology sets the tiered cache topology (smart, generic)
+	Topology string `json:"topology,omitempty"`
+}
+
+// CacheReserveConfig configures Cache Reserve (persistent cache).
+type CacheReserveConfig struct {
+	// Enabled enables Cache Reserve
+	Enabled bool `json:"enabled,omitempty"`
 }
 
 // SecurityConfig contains security configuration.
@@ -78,8 +111,13 @@ type SecurityConfig struct {
 	BrowserIntegrityCheck *bool `json:"browserIntegrityCheck,omitempty"`
 	// EmailObfuscation enables email obfuscation
 	EmailObfuscation *bool `json:"emailObfuscation,omitempty"`
+	// ServerSideExclude enables server-side excludes
+	ServerSideExclude *bool `json:"serverSideExclude,omitempty"`
 	// HotlinkProtection enables hotlink protection
 	HotlinkProtection *bool `json:"hotlinkProtection,omitempty"`
+	// ChallengePassage sets how long a visitor can access the site
+	// after completing a challenge (in seconds)
+	ChallengePassage *int `json:"challengePassage,omitempty"`
 	// WAF contains WAF configuration
 	WAF *WAFConfig `json:"waf,omitempty"`
 }
@@ -106,6 +144,8 @@ type PerformanceConfig struct {
 	Minify *MinifyConfig `json:"minify,omitempty"`
 	// Polish is the image optimization setting (lossy, lossless, off)
 	Polish string `json:"polish,omitempty"`
+	// WebP enables WebP image conversion
+	WebP *bool `json:"webp,omitempty"`
 	// Mirage enables Mirage (image optimization for mobile)
 	Mirage *bool `json:"mirage,omitempty"`
 	// Brotli enables Brotli compression
@@ -120,6 +160,12 @@ type PerformanceConfig struct {
 	ZeroRTT *bool `json:"zeroRtt,omitempty"`
 	// RocketLoader enables Rocket Loader
 	RocketLoader *bool `json:"rocketLoader,omitempty"`
+	// PrefetchPreload enables prefetch and preload
+	PrefetchPreload *bool `json:"prefetchPreload,omitempty"`
+	// IPGeolocation adds visitor's country to request headers
+	IPGeolocation *bool `json:"ipGeolocation,omitempty"`
+	// Websockets enables WebSocket support
+	Websockets *bool `json:"websockets,omitempty"`
 }
 
 // MinifyConfig contains minification settings.

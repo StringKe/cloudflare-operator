@@ -91,10 +91,9 @@ func (r *Controller) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return r.handleEmptySources(ctx, syncState)
 	}
 
-	// Add finalizer if not present
+	// Add finalizer if not present (with conflict retry)
 	if !controllerutil.ContainsFinalizer(syncState, FinalizerName) {
-		controllerutil.AddFinalizer(syncState, FinalizerName)
-		if err := r.Client.Update(ctx, syncState); err != nil {
+		if err := common.AddFinalizerWithRetry(ctx, r.Client, syncState, FinalizerName); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{Requeue: true}, nil
@@ -222,7 +221,7 @@ func (r *Controller) syncToCloudflare(
 		"ingressCount", len(cfConfig.Ingress))
 
 	// Call Cloudflare API to update configuration
-	result, err := cfAPI.UpdateTunnelConfiguration(tunnelID, cfConfig)
+	result, err := cfAPI.UpdateTunnelConfiguration(ctx, tunnelID, cfConfig)
 	if err != nil {
 		return nil, fmt.Errorf("update tunnel configuration: %w", err)
 	}
@@ -352,7 +351,7 @@ func (r *Controller) handleDeletion(
 
 		// Update with empty config (only catch-all rule)
 		emptyConfig := r.buildEmptyConfig()
-		_, err = cfAPI.UpdateTunnelConfiguration(tunnelID, emptyConfig)
+		_, err = cfAPI.UpdateTunnelConfiguration(ctx, tunnelID, emptyConfig)
 		if err != nil {
 			if !cf.IsNotFoundError(err) {
 				logger.Error(err, "Failed to clear tunnel configuration")
@@ -368,9 +367,8 @@ func (r *Controller) handleDeletion(
 		}
 	}
 
-	// Remove finalizer
-	controllerutil.RemoveFinalizer(syncState, FinalizerName)
-	if err := r.Client.Update(ctx, syncState); err != nil {
+	// Remove finalizer (with conflict retry)
+	if err := common.RemoveFinalizerWithRetry(ctx, r.Client, syncState, FinalizerName); err != nil {
 		logger.Error(err, "Failed to remove finalizer")
 		return ctrl.Result{}, err
 	}
@@ -393,9 +391,8 @@ func (r *Controller) handleEmptySources(
 	// Skip if pending ID
 	if common.IsPendingID(tunnelID) {
 		logger.Info("Skipping empty sources handling - Tunnel was never configured")
-		// Remove finalizer and delete SyncState
-		controllerutil.RemoveFinalizer(syncState, FinalizerName)
-		if err := r.Client.Update(ctx, syncState); err != nil {
+		// Remove finalizer and delete SyncState (with conflict retry)
+		if err := common.RemoveFinalizerWithRetry(ctx, r.Client, syncState, FinalizerName); err != nil {
 			return ctrl.Result{}, err
 		}
 		if err := r.Client.Delete(ctx, syncState); err != nil {
@@ -421,7 +418,7 @@ func (r *Controller) handleEmptySources(
 		"tunnelId", tunnelID)
 
 	emptyConfig := r.buildEmptyConfig()
-	_, err = cfAPI.UpdateTunnelConfiguration(tunnelID, emptyConfig)
+	_, err = cfAPI.UpdateTunnelConfiguration(ctx, tunnelID, emptyConfig)
 	if err != nil {
 		if cf.IsNotFoundError(err) {
 			logger.Info("Tunnel already deleted from Cloudflare")
@@ -443,9 +440,8 @@ func (r *Controller) handleEmptySources(
 		return ctrl.Result{}, err
 	}
 
-	// Remove finalizer and delete SyncState since it has no sources
-	controllerutil.RemoveFinalizer(syncState, FinalizerName)
-	if err := r.Client.Update(ctx, syncState); err != nil {
+	// Remove finalizer and delete SyncState since it has no sources (with conflict retry)
+	if err := common.RemoveFinalizerWithRetry(ctx, r.Client, syncState, FinalizerName); err != nil {
 		logger.Error(err, "Failed to remove finalizer")
 		return ctrl.Result{}, err
 	}

@@ -99,10 +99,9 @@ func (r *Controller) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return r.handleDeletion(ctx, syncState)
 	}
 
-	// Add finalizer if not present
+	// Add finalizer if not present (with conflict retry)
 	if !controllerutil.ContainsFinalizer(syncState, FinalizerName) {
-		controllerutil.AddFinalizer(syncState, FinalizerName)
-		if err := r.Client.Update(ctx, syncState); err != nil {
+		if err := common.AddFinalizerWithRetry(ctx, r.Client, syncState, FinalizerName); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{Requeue: true}, nil
@@ -233,7 +232,7 @@ func (r *Controller) syncToCloudflare(
 		logger.Info("Creating new VirtualNetwork",
 			"name", config.Name)
 
-		result, err = apiClient.CreateVirtualNetwork(params)
+		result, err = apiClient.CreateVirtualNetwork(ctx, params)
 		if err != nil {
 			return nil, fmt.Errorf("create VirtualNetwork: %w", err)
 		}
@@ -255,14 +254,14 @@ func (r *Controller) syncToCloudflare(
 			"vnetId", cloudflareID,
 			"name", config.Name)
 
-		result, err = apiClient.UpdateVirtualNetwork(cloudflareID, params)
+		result, err = apiClient.UpdateVirtualNetwork(ctx, cloudflareID, params)
 		if err != nil {
 			// Check if VirtualNetwork was deleted externally
 			if cf.IsNotFoundError(err) {
 				// VirtualNetwork deleted externally, recreate it
 				logger.Info("VirtualNetwork not found, recreating",
 					"vnetId", cloudflareID)
-				result, err = apiClient.CreateVirtualNetwork(params)
+				result, err = apiClient.CreateVirtualNetwork(ctx, params)
 				if err != nil {
 					return nil, fmt.Errorf("recreate VirtualNetwork: %w", err)
 				}
@@ -335,7 +334,7 @@ func (r *Controller) handleDeletion(
 
 		// Delete all routes associated with this VirtualNetwork FIRST
 		// This prevents the "virtual network is used by IP Route(s)" error
-		deletedCount, err := apiClient.DeleteTunnelRoutesByVirtualNetworkID(cloudflareID)
+		deletedCount, err := apiClient.DeleteTunnelRoutesByVirtualNetworkID(ctx, cloudflareID)
 		if err != nil {
 			logger.Error(err, "Failed to delete routes for VirtualNetwork", "vnetId", cloudflareID)
 			if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
@@ -352,7 +351,7 @@ func (r *Controller) handleDeletion(
 		logger.Info("Deleting VirtualNetwork from Cloudflare",
 			"vnetId", cloudflareID)
 
-		if err := apiClient.DeleteVirtualNetwork(cloudflareID); err != nil {
+		if err := apiClient.DeleteVirtualNetwork(ctx, cloudflareID); err != nil {
 			if !cf.IsNotFoundError(err) {
 				logger.Error(err, "Failed to delete VirtualNetwork from Cloudflare")
 				if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
@@ -367,9 +366,8 @@ func (r *Controller) handleDeletion(
 		}
 	}
 
-	// Remove finalizer
-	controllerutil.RemoveFinalizer(syncState, FinalizerName)
-	if err := r.Client.Update(ctx, syncState); err != nil {
+	// Remove finalizer (with conflict retry)
+	if err := common.RemoveFinalizerWithRetry(ctx, r.Client, syncState, FinalizerName); err != nil {
 		logger.Error(err, "Failed to remove finalizer")
 		return ctrl.Result{}, err
 	}

@@ -265,6 +265,8 @@ func convertRuleSettingsToSDK(params *GatewayRuleSettingsParams) cloudflare.Team
 	if params.IPCategories != nil {
 		settings.IPCategories = *params.IPCategories
 	}
+	// Note: IPIndicatorFeeds is not supported in cloudflare-go SDK v0.116.0
+	// The field exists in CRD but cannot be passed to API until SDK is updated
 	if params.ResolveDNSThroughCloudflare != nil {
 		settings.ResolveDnsThroughCloudflare = params.ResolveDNSThroughCloudflare
 	}
@@ -349,13 +351,11 @@ func convertExpirationToSDK(params *GatewayRuleExpirationParams) *cloudflare.Tea
 }
 
 // CreateGatewayRule creates a new Gateway Rule.
-func (c *API) CreateGatewayRule(params GatewayRuleParams) (*GatewayRuleResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) CreateGatewayRule(ctx context.Context, params GatewayRuleParams) (*GatewayRuleResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
-
-	ctx := context.Background()
 
 	rule := cloudflare.TeamsRule{
 		Name:          params.Name,
@@ -391,13 +391,11 @@ func (c *API) CreateGatewayRule(params GatewayRuleParams) (*GatewayRuleResult, e
 }
 
 // GetGatewayRule retrieves a Gateway Rule by ID.
-func (c *API) GetGatewayRule(ruleID string) (*GatewayRuleResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) GetGatewayRule(ctx context.Context, ruleID string) (*GatewayRuleResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
-
-	ctx := context.Background()
 
 	rule, err := c.CloudflareClient.TeamsRule(ctx, c.ValidAccountId, ruleID)
 	if err != nil {
@@ -416,13 +414,11 @@ func (c *API) GetGatewayRule(ruleID string) (*GatewayRuleResult, error) {
 }
 
 // UpdateGatewayRule updates an existing Gateway Rule.
-func (c *API) UpdateGatewayRule(ruleID string, params GatewayRuleParams) (*GatewayRuleResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) UpdateGatewayRule(ctx context.Context, ruleID string, params GatewayRuleParams) (*GatewayRuleResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
-
-	ctx := context.Background()
 
 	rule := cloudflare.TeamsRule{
 		ID:            ruleID,
@@ -460,13 +456,11 @@ func (c *API) UpdateGatewayRule(ruleID string, params GatewayRuleParams) (*Gatew
 
 // DeleteGatewayRule deletes a Gateway Rule.
 // This method is idempotent - returns nil if the rule is already deleted.
-func (c *API) DeleteGatewayRule(ruleID string) error {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) DeleteGatewayRule(ctx context.Context, ruleID string) error {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return err
 	}
-
-	ctx := context.Background()
 
 	err := c.CloudflareClient.TeamsDeleteRule(ctx, c.ValidAccountId, ruleID)
 	if err != nil {
@@ -487,7 +481,7 @@ type GatewayListParams struct {
 	Name        string
 	Description string
 	Type        string // SERIAL, URL, DOMAIN, EMAIL, IP
-	Items       []string
+	Items       []GatewayListItem
 }
 
 // GatewayListItem represents an item in a Gateway List.
@@ -507,18 +501,19 @@ type GatewayListResult struct {
 }
 
 // CreateGatewayList creates a new Gateway List.
-func (c *API) CreateGatewayList(params GatewayListParams) (*GatewayListResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) CreateGatewayList(ctx context.Context, params GatewayListParams) (*GatewayListResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
-
-	// Convert items to TeamsListItems
+	// Convert items to TeamsListItems with descriptions
 	items := make([]cloudflare.TeamsListItem, len(params.Items))
 	for i, item := range params.Items {
-		items[i] = cloudflare.TeamsListItem{Value: item}
+		items[i] = cloudflare.TeamsListItem{
+			Value:       item.Value,
+			Description: item.Description,
+		}
 	}
 
 	createParams := cloudflare.CreateTeamsListParams{
@@ -547,13 +542,11 @@ func (c *API) CreateGatewayList(params GatewayListParams) (*GatewayListResult, e
 }
 
 // GetGatewayList retrieves a Gateway List by ID.
-func (c *API) GetGatewayList(listID string) (*GatewayListResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) GetGatewayList(ctx context.Context, listID string) (*GatewayListResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
-
-	ctx := context.Background()
 
 	list, err := c.CloudflareClient.GetTeamsList(ctx, cloudflare.AccountIdentifier(c.ValidAccountId), listID)
 	if err != nil {
@@ -572,13 +565,11 @@ func (c *API) GetGatewayList(listID string) (*GatewayListResult, error) {
 }
 
 // UpdateGatewayList updates an existing Gateway List.
-func (c *API) UpdateGatewayList(listID string, params GatewayListParams) (*GatewayListResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) UpdateGatewayList(ctx context.Context, listID string, params GatewayListParams) (*GatewayListResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
-
-	ctx := context.Background()
 
 	updateParams := cloudflare.UpdateTeamsListParams{
 		ID:          listID,
@@ -606,13 +597,11 @@ func (c *API) UpdateGatewayList(listID string, params GatewayListParams) (*Gatew
 
 // DeleteGatewayList deletes a Gateway List.
 // This method is idempotent - returns nil if the list is already deleted.
-func (c *API) DeleteGatewayList(listID string) error {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) DeleteGatewayList(ctx context.Context, listID string) error {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return err
 	}
-
-	ctx := context.Background()
 
 	err := c.CloudflareClient.DeleteTeamsList(ctx, cloudflare.AccountIdentifier(c.ValidAccountId), listID)
 	if err != nil {
@@ -630,13 +619,11 @@ func (c *API) DeleteGatewayList(listID string) error {
 
 // ListGatewayRulesByName finds a Gateway Rule by name.
 // Returns nil if no rule with the given name is found.
-func (c *API) ListGatewayRulesByName(name string) (*GatewayRuleResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) ListGatewayRulesByName(ctx context.Context, name string) (*GatewayRuleResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
-
-	ctx := context.Background()
 
 	rules, err := c.CloudflareClient.TeamsRules(ctx, c.ValidAccountId)
 	if err != nil {
@@ -662,13 +649,11 @@ func (c *API) ListGatewayRulesByName(name string) (*GatewayRuleResult, error) {
 
 // ListGatewayListsByName finds a Gateway List by name.
 // Returns nil if no list with the given name is found.
-func (c *API) ListGatewayListsByName(name string) (*GatewayListResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) ListGatewayListsByName(ctx context.Context, name string) (*GatewayListResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
-
-	ctx := context.Background()
 
 	lists, _, err := c.CloudflareClient.ListTeamsLists(ctx, cloudflare.AccountIdentifier(c.ValidAccountId), cloudflare.ListTeamListsParams{})
 	if err != nil {

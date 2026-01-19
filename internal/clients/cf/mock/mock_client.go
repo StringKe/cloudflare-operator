@@ -10,6 +10,7 @@
 package mock
 
 import (
+	context "context"
 	reflect "reflect"
 
 	cf "github.com/StringKe/cloudflare-operator/internal/clients/cf"
@@ -41,144 +42,144 @@ func (m *MockCloudflareClient) EXPECT() *MockCloudflareClientMockRecorder {
 }
 
 // CreateAccessApplication mocks base method.
-func (m *MockCloudflareClient) CreateAccessApplication(params cf.AccessApplicationParams) (*cf.AccessApplicationResult, error) {
+func (m *MockCloudflareClient) CreateAccessApplication(ctx context.Context, params cf.AccessApplicationParams) (*cf.AccessApplicationResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateAccessApplication", params)
+	ret := m.ctrl.Call(m, "CreateAccessApplication", ctx, params)
 	ret0, _ := ret[0].(*cf.AccessApplicationResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // CreateAccessApplication indicates an expected call of CreateAccessApplication.
-func (mr *MockCloudflareClientMockRecorder) CreateAccessApplication(params any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) CreateAccessApplication(ctx, params any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateAccessApplication", reflect.TypeOf((*MockCloudflareClient)(nil).CreateAccessApplication), params)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateAccessApplication", reflect.TypeOf((*MockCloudflareClient)(nil).CreateAccessApplication), ctx, params)
 }
 
 // CreateAccessGroup mocks base method.
-func (m *MockCloudflareClient) CreateAccessGroup(params cf.AccessGroupParams) (*cf.AccessGroupResult, error) {
+func (m *MockCloudflareClient) CreateAccessGroup(ctx context.Context, params cf.AccessGroupParams) (*cf.AccessGroupResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateAccessGroup", params)
+	ret := m.ctrl.Call(m, "CreateAccessGroup", ctx, params)
 	ret0, _ := ret[0].(*cf.AccessGroupResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // CreateAccessGroup indicates an expected call of CreateAccessGroup.
-func (mr *MockCloudflareClientMockRecorder) CreateAccessGroup(params any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) CreateAccessGroup(ctx, params any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateAccessGroup", reflect.TypeOf((*MockCloudflareClient)(nil).CreateAccessGroup), params)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateAccessGroup", reflect.TypeOf((*MockCloudflareClient)(nil).CreateAccessGroup), ctx, params)
 }
 
 // CreateAccessIdentityProvider mocks base method.
-func (m *MockCloudflareClient) CreateAccessIdentityProvider(params cf.AccessIdentityProviderParams) (*cf.AccessIdentityProviderResult, error) {
+func (m *MockCloudflareClient) CreateAccessIdentityProvider(ctx context.Context, params cf.AccessIdentityProviderParams) (*cf.AccessIdentityProviderResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateAccessIdentityProvider", params)
+	ret := m.ctrl.Call(m, "CreateAccessIdentityProvider", ctx, params)
 	ret0, _ := ret[0].(*cf.AccessIdentityProviderResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // CreateAccessIdentityProvider indicates an expected call of CreateAccessIdentityProvider.
-func (mr *MockCloudflareClientMockRecorder) CreateAccessIdentityProvider(params any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) CreateAccessIdentityProvider(ctx, params any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateAccessIdentityProvider", reflect.TypeOf((*MockCloudflareClient)(nil).CreateAccessIdentityProvider), params)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateAccessIdentityProvider", reflect.TypeOf((*MockCloudflareClient)(nil).CreateAccessIdentityProvider), ctx, params)
 }
 
 // CreateAccessPolicy mocks base method.
-func (m *MockCloudflareClient) CreateAccessPolicy(params cf.AccessPolicyParams) (*cf.AccessPolicyResult, error) {
+func (m *MockCloudflareClient) CreateAccessPolicy(ctx context.Context, params cf.AccessPolicyParams) (*cf.AccessPolicyResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateAccessPolicy", params)
+	ret := m.ctrl.Call(m, "CreateAccessPolicy", ctx, params)
 	ret0, _ := ret[0].(*cf.AccessPolicyResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // CreateAccessPolicy indicates an expected call of CreateAccessPolicy.
-func (mr *MockCloudflareClientMockRecorder) CreateAccessPolicy(params any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) CreateAccessPolicy(ctx, params any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateAccessPolicy", reflect.TypeOf((*MockCloudflareClient)(nil).CreateAccessPolicy), params)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateAccessPolicy", reflect.TypeOf((*MockCloudflareClient)(nil).CreateAccessPolicy), ctx, params)
 }
 
 // CreateAccessServiceToken mocks base method.
-func (m *MockCloudflareClient) CreateAccessServiceToken(name, duration string) (*cf.AccessServiceTokenResult, error) {
+func (m *MockCloudflareClient) CreateAccessServiceToken(ctx context.Context, name, duration string) (*cf.AccessServiceTokenResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateAccessServiceToken", name, duration)
+	ret := m.ctrl.Call(m, "CreateAccessServiceToken", ctx, name, duration)
 	ret0, _ := ret[0].(*cf.AccessServiceTokenResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // CreateAccessServiceToken indicates an expected call of CreateAccessServiceToken.
-func (mr *MockCloudflareClientMockRecorder) CreateAccessServiceToken(name, duration any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) CreateAccessServiceToken(ctx, name, duration any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateAccessServiceToken", reflect.TypeOf((*MockCloudflareClient)(nil).CreateAccessServiceToken), name, duration)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateAccessServiceToken", reflect.TypeOf((*MockCloudflareClient)(nil).CreateAccessServiceToken), ctx, name, duration)
 }
 
 // CreateDNSRecord mocks base method.
-func (m *MockCloudflareClient) CreateDNSRecord(params cf.DNSRecordParams) (*cf.DNSRecordResult, error) {
+func (m *MockCloudflareClient) CreateDNSRecord(ctx context.Context, params cf.DNSRecordParams) (*cf.DNSRecordResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateDNSRecord", params)
+	ret := m.ctrl.Call(m, "CreateDNSRecord", ctx, params)
 	ret0, _ := ret[0].(*cf.DNSRecordResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // CreateDNSRecord indicates an expected call of CreateDNSRecord.
-func (mr *MockCloudflareClientMockRecorder) CreateDNSRecord(params any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) CreateDNSRecord(ctx, params any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateDNSRecord", reflect.TypeOf((*MockCloudflareClient)(nil).CreateDNSRecord), params)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateDNSRecord", reflect.TypeOf((*MockCloudflareClient)(nil).CreateDNSRecord), ctx, params)
 }
 
 // CreateDevicePostureRule mocks base method.
-func (m *MockCloudflareClient) CreateDevicePostureRule(params cf.DevicePostureRuleParams) (*cf.DevicePostureRuleResult, error) {
+func (m *MockCloudflareClient) CreateDevicePostureRule(ctx context.Context, params cf.DevicePostureRuleParams) (*cf.DevicePostureRuleResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateDevicePostureRule", params)
+	ret := m.ctrl.Call(m, "CreateDevicePostureRule", ctx, params)
 	ret0, _ := ret[0].(*cf.DevicePostureRuleResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // CreateDevicePostureRule indicates an expected call of CreateDevicePostureRule.
-func (mr *MockCloudflareClientMockRecorder) CreateDevicePostureRule(params any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) CreateDevicePostureRule(ctx, params any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateDevicePostureRule", reflect.TypeOf((*MockCloudflareClient)(nil).CreateDevicePostureRule), params)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateDevicePostureRule", reflect.TypeOf((*MockCloudflareClient)(nil).CreateDevicePostureRule), ctx, params)
 }
 
 // CreateGatewayList mocks base method.
-func (m *MockCloudflareClient) CreateGatewayList(params cf.GatewayListParams) (*cf.GatewayListResult, error) {
+func (m *MockCloudflareClient) CreateGatewayList(ctx context.Context, params cf.GatewayListParams) (*cf.GatewayListResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateGatewayList", params)
+	ret := m.ctrl.Call(m, "CreateGatewayList", ctx, params)
 	ret0, _ := ret[0].(*cf.GatewayListResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // CreateGatewayList indicates an expected call of CreateGatewayList.
-func (mr *MockCloudflareClientMockRecorder) CreateGatewayList(params any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) CreateGatewayList(ctx, params any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateGatewayList", reflect.TypeOf((*MockCloudflareClient)(nil).CreateGatewayList), params)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateGatewayList", reflect.TypeOf((*MockCloudflareClient)(nil).CreateGatewayList), ctx, params)
 }
 
 // CreateGatewayRule mocks base method.
-func (m *MockCloudflareClient) CreateGatewayRule(params cf.GatewayRuleParams) (*cf.GatewayRuleResult, error) {
+func (m *MockCloudflareClient) CreateGatewayRule(ctx context.Context, params cf.GatewayRuleParams) (*cf.GatewayRuleResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateGatewayRule", params)
+	ret := m.ctrl.Call(m, "CreateGatewayRule", ctx, params)
 	ret0, _ := ret[0].(*cf.GatewayRuleResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // CreateGatewayRule indicates an expected call of CreateGatewayRule.
-func (mr *MockCloudflareClientMockRecorder) CreateGatewayRule(params any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) CreateGatewayRule(ctx, params any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateGatewayRule", reflect.TypeOf((*MockCloudflareClient)(nil).CreateGatewayRule), params)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateGatewayRule", reflect.TypeOf((*MockCloudflareClient)(nil).CreateGatewayRule), ctx, params)
 }
 
 // CreateTunnel mocks base method.
-func (m *MockCloudflareClient) CreateTunnel() (string, string, error) {
+func (m *MockCloudflareClient) CreateTunnel(ctx context.Context) (string, string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateTunnel")
+	ret := m.ctrl.Call(m, "CreateTunnel", ctx)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(string)
 	ret2, _ := ret[2].(error)
@@ -186,436 +187,436 @@ func (m *MockCloudflareClient) CreateTunnel() (string, string, error) {
 }
 
 // CreateTunnel indicates an expected call of CreateTunnel.
-func (mr *MockCloudflareClientMockRecorder) CreateTunnel() *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) CreateTunnel(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateTunnel", reflect.TypeOf((*MockCloudflareClient)(nil).CreateTunnel))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateTunnel", reflect.TypeOf((*MockCloudflareClient)(nil).CreateTunnel), ctx)
 }
 
 // CreateTunnelRoute mocks base method.
-func (m *MockCloudflareClient) CreateTunnelRoute(params cf.TunnelRouteParams) (*cf.TunnelRouteResult, error) {
+func (m *MockCloudflareClient) CreateTunnelRoute(ctx context.Context, params cf.TunnelRouteParams) (*cf.TunnelRouteResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateTunnelRoute", params)
+	ret := m.ctrl.Call(m, "CreateTunnelRoute", ctx, params)
 	ret0, _ := ret[0].(*cf.TunnelRouteResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // CreateTunnelRoute indicates an expected call of CreateTunnelRoute.
-func (mr *MockCloudflareClientMockRecorder) CreateTunnelRoute(params any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) CreateTunnelRoute(ctx, params any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateTunnelRoute", reflect.TypeOf((*MockCloudflareClient)(nil).CreateTunnelRoute), params)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateTunnelRoute", reflect.TypeOf((*MockCloudflareClient)(nil).CreateTunnelRoute), ctx, params)
 }
 
 // CreateVirtualNetwork mocks base method.
-func (m *MockCloudflareClient) CreateVirtualNetwork(params cf.VirtualNetworkParams) (*cf.VirtualNetworkResult, error) {
+func (m *MockCloudflareClient) CreateVirtualNetwork(ctx context.Context, params cf.VirtualNetworkParams) (*cf.VirtualNetworkResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateVirtualNetwork", params)
+	ret := m.ctrl.Call(m, "CreateVirtualNetwork", ctx, params)
 	ret0, _ := ret[0].(*cf.VirtualNetworkResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // CreateVirtualNetwork indicates an expected call of CreateVirtualNetwork.
-func (mr *MockCloudflareClientMockRecorder) CreateVirtualNetwork(params any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) CreateVirtualNetwork(ctx, params any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateVirtualNetwork", reflect.TypeOf((*MockCloudflareClient)(nil).CreateVirtualNetwork), params)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateVirtualNetwork", reflect.TypeOf((*MockCloudflareClient)(nil).CreateVirtualNetwork), ctx, params)
 }
 
 // CreateWARPConnector mocks base method.
-func (m *MockCloudflareClient) CreateWARPConnector(name string) (*cf.WARPConnectorResult, error) {
+func (m *MockCloudflareClient) CreateWARPConnector(ctx context.Context, name string) (*cf.WARPConnectorResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateWARPConnector", name)
+	ret := m.ctrl.Call(m, "CreateWARPConnector", ctx, name)
 	ret0, _ := ret[0].(*cf.WARPConnectorResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // CreateWARPConnector indicates an expected call of CreateWARPConnector.
-func (mr *MockCloudflareClientMockRecorder) CreateWARPConnector(name any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) CreateWARPConnector(ctx, name any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateWARPConnector", reflect.TypeOf((*MockCloudflareClient)(nil).CreateWARPConnector), name)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateWARPConnector", reflect.TypeOf((*MockCloudflareClient)(nil).CreateWARPConnector), ctx, name)
 }
 
 // DeleteAccessApplication mocks base method.
-func (m *MockCloudflareClient) DeleteAccessApplication(applicationID string) error {
+func (m *MockCloudflareClient) DeleteAccessApplication(ctx context.Context, applicationID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteAccessApplication", applicationID)
+	ret := m.ctrl.Call(m, "DeleteAccessApplication", ctx, applicationID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeleteAccessApplication indicates an expected call of DeleteAccessApplication.
-func (mr *MockCloudflareClientMockRecorder) DeleteAccessApplication(applicationID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) DeleteAccessApplication(ctx, applicationID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteAccessApplication", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteAccessApplication), applicationID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteAccessApplication", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteAccessApplication), ctx, applicationID)
 }
 
 // DeleteAccessGroup mocks base method.
-func (m *MockCloudflareClient) DeleteAccessGroup(groupID string) error {
+func (m *MockCloudflareClient) DeleteAccessGroup(ctx context.Context, groupID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteAccessGroup", groupID)
+	ret := m.ctrl.Call(m, "DeleteAccessGroup", ctx, groupID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeleteAccessGroup indicates an expected call of DeleteAccessGroup.
-func (mr *MockCloudflareClientMockRecorder) DeleteAccessGroup(groupID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) DeleteAccessGroup(ctx, groupID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteAccessGroup", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteAccessGroup), groupID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteAccessGroup", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteAccessGroup), ctx, groupID)
 }
 
 // DeleteAccessIdentityProvider mocks base method.
-func (m *MockCloudflareClient) DeleteAccessIdentityProvider(idpID string) error {
+func (m *MockCloudflareClient) DeleteAccessIdentityProvider(ctx context.Context, idpID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteAccessIdentityProvider", idpID)
+	ret := m.ctrl.Call(m, "DeleteAccessIdentityProvider", ctx, idpID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeleteAccessIdentityProvider indicates an expected call of DeleteAccessIdentityProvider.
-func (mr *MockCloudflareClientMockRecorder) DeleteAccessIdentityProvider(idpID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) DeleteAccessIdentityProvider(ctx, idpID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteAccessIdentityProvider", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteAccessIdentityProvider), idpID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteAccessIdentityProvider", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteAccessIdentityProvider), ctx, idpID)
 }
 
 // DeleteAccessPolicy mocks base method.
-func (m *MockCloudflareClient) DeleteAccessPolicy(applicationID, policyID string) error {
+func (m *MockCloudflareClient) DeleteAccessPolicy(ctx context.Context, applicationID, policyID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteAccessPolicy", applicationID, policyID)
+	ret := m.ctrl.Call(m, "DeleteAccessPolicy", ctx, applicationID, policyID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeleteAccessPolicy indicates an expected call of DeleteAccessPolicy.
-func (mr *MockCloudflareClientMockRecorder) DeleteAccessPolicy(applicationID, policyID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) DeleteAccessPolicy(ctx, applicationID, policyID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteAccessPolicy", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteAccessPolicy), applicationID, policyID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteAccessPolicy", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteAccessPolicy), ctx, applicationID, policyID)
 }
 
 // DeleteAccessServiceToken mocks base method.
-func (m *MockCloudflareClient) DeleteAccessServiceToken(tokenID string) error {
+func (m *MockCloudflareClient) DeleteAccessServiceToken(ctx context.Context, tokenID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteAccessServiceToken", tokenID)
+	ret := m.ctrl.Call(m, "DeleteAccessServiceToken", ctx, tokenID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeleteAccessServiceToken indicates an expected call of DeleteAccessServiceToken.
-func (mr *MockCloudflareClientMockRecorder) DeleteAccessServiceToken(tokenID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) DeleteAccessServiceToken(ctx, tokenID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteAccessServiceToken", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteAccessServiceToken), tokenID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteAccessServiceToken", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteAccessServiceToken), ctx, tokenID)
 }
 
 // DeleteDNSId mocks base method.
-func (m *MockCloudflareClient) DeleteDNSId(fqdn, dnsID string, created bool) error {
+func (m *MockCloudflareClient) DeleteDNSId(ctx context.Context, fqdn, dnsID string, created bool) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteDNSId", fqdn, dnsID, created)
+	ret := m.ctrl.Call(m, "DeleteDNSId", ctx, fqdn, dnsID, created)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeleteDNSId indicates an expected call of DeleteDNSId.
-func (mr *MockCloudflareClientMockRecorder) DeleteDNSId(fqdn, dnsID, created any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) DeleteDNSId(ctx, fqdn, dnsID, created any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteDNSId", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteDNSId), fqdn, dnsID, created)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteDNSId", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteDNSId), ctx, fqdn, dnsID, created)
 }
 
 // DeleteDNSRecord mocks base method.
-func (m *MockCloudflareClient) DeleteDNSRecord(zoneID, recordID string) error {
+func (m *MockCloudflareClient) DeleteDNSRecord(ctx context.Context, zoneID, recordID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteDNSRecord", zoneID, recordID)
+	ret := m.ctrl.Call(m, "DeleteDNSRecord", ctx, zoneID, recordID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeleteDNSRecord indicates an expected call of DeleteDNSRecord.
-func (mr *MockCloudflareClientMockRecorder) DeleteDNSRecord(zoneID, recordID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) DeleteDNSRecord(ctx, zoneID, recordID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteDNSRecord", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteDNSRecord), zoneID, recordID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteDNSRecord", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteDNSRecord), ctx, zoneID, recordID)
 }
 
 // DeleteDevicePostureRule mocks base method.
-func (m *MockCloudflareClient) DeleteDevicePostureRule(ruleID string) error {
+func (m *MockCloudflareClient) DeleteDevicePostureRule(ctx context.Context, ruleID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteDevicePostureRule", ruleID)
+	ret := m.ctrl.Call(m, "DeleteDevicePostureRule", ctx, ruleID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeleteDevicePostureRule indicates an expected call of DeleteDevicePostureRule.
-func (mr *MockCloudflareClientMockRecorder) DeleteDevicePostureRule(ruleID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) DeleteDevicePostureRule(ctx, ruleID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteDevicePostureRule", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteDevicePostureRule), ruleID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteDevicePostureRule", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteDevicePostureRule), ctx, ruleID)
 }
 
 // DeleteGatewayList mocks base method.
-func (m *MockCloudflareClient) DeleteGatewayList(listID string) error {
+func (m *MockCloudflareClient) DeleteGatewayList(ctx context.Context, listID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteGatewayList", listID)
+	ret := m.ctrl.Call(m, "DeleteGatewayList", ctx, listID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeleteGatewayList indicates an expected call of DeleteGatewayList.
-func (mr *MockCloudflareClientMockRecorder) DeleteGatewayList(listID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) DeleteGatewayList(ctx, listID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteGatewayList", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteGatewayList), listID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteGatewayList", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteGatewayList), ctx, listID)
 }
 
 // DeleteGatewayRule mocks base method.
-func (m *MockCloudflareClient) DeleteGatewayRule(ruleID string) error {
+func (m *MockCloudflareClient) DeleteGatewayRule(ctx context.Context, ruleID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteGatewayRule", ruleID)
+	ret := m.ctrl.Call(m, "DeleteGatewayRule", ctx, ruleID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeleteGatewayRule indicates an expected call of DeleteGatewayRule.
-func (mr *MockCloudflareClientMockRecorder) DeleteGatewayRule(ruleID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) DeleteGatewayRule(ctx, ruleID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteGatewayRule", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteGatewayRule), ruleID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteGatewayRule", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteGatewayRule), ctx, ruleID)
 }
 
 // DeleteTunnel mocks base method.
-func (m *MockCloudflareClient) DeleteTunnel() error {
+func (m *MockCloudflareClient) DeleteTunnel(ctx context.Context) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteTunnel")
+	ret := m.ctrl.Call(m, "DeleteTunnel", ctx)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeleteTunnel indicates an expected call of DeleteTunnel.
-func (mr *MockCloudflareClientMockRecorder) DeleteTunnel() *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) DeleteTunnel(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteTunnel", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteTunnel))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteTunnel", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteTunnel), ctx)
 }
 
 // DeleteTunnelRoute mocks base method.
-func (m *MockCloudflareClient) DeleteTunnelRoute(network, virtualNetworkID string) error {
+func (m *MockCloudflareClient) DeleteTunnelRoute(ctx context.Context, network, virtualNetworkID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteTunnelRoute", network, virtualNetworkID)
+	ret := m.ctrl.Call(m, "DeleteTunnelRoute", ctx, network, virtualNetworkID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeleteTunnelRoute indicates an expected call of DeleteTunnelRoute.
-func (mr *MockCloudflareClientMockRecorder) DeleteTunnelRoute(network, virtualNetworkID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) DeleteTunnelRoute(ctx, network, virtualNetworkID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteTunnelRoute", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteTunnelRoute), network, virtualNetworkID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteTunnelRoute", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteTunnelRoute), ctx, network, virtualNetworkID)
 }
 
 // DeleteVirtualNetwork mocks base method.
-func (m *MockCloudflareClient) DeleteVirtualNetwork(virtualNetworkID string) error {
+func (m *MockCloudflareClient) DeleteVirtualNetwork(ctx context.Context, virtualNetworkID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteVirtualNetwork", virtualNetworkID)
+	ret := m.ctrl.Call(m, "DeleteVirtualNetwork", ctx, virtualNetworkID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeleteVirtualNetwork indicates an expected call of DeleteVirtualNetwork.
-func (mr *MockCloudflareClientMockRecorder) DeleteVirtualNetwork(virtualNetworkID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) DeleteVirtualNetwork(ctx, virtualNetworkID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteVirtualNetwork", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteVirtualNetwork), virtualNetworkID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteVirtualNetwork", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteVirtualNetwork), ctx, virtualNetworkID)
 }
 
 // DeleteWARPConnector mocks base method.
-func (m *MockCloudflareClient) DeleteWARPConnector(connectorID string) error {
+func (m *MockCloudflareClient) DeleteWARPConnector(ctx context.Context, connectorID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteWARPConnector", connectorID)
+	ret := m.ctrl.Call(m, "DeleteWARPConnector", ctx, connectorID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeleteWARPConnector indicates an expected call of DeleteWARPConnector.
-func (mr *MockCloudflareClientMockRecorder) DeleteWARPConnector(connectorID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) DeleteWARPConnector(ctx, connectorID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteWARPConnector", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteWARPConnector), connectorID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteWARPConnector", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteWARPConnector), ctx, connectorID)
 }
 
 // GetAccessApplication mocks base method.
-func (m *MockCloudflareClient) GetAccessApplication(applicationID string) (*cf.AccessApplicationResult, error) {
+func (m *MockCloudflareClient) GetAccessApplication(ctx context.Context, applicationID string) (*cf.AccessApplicationResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetAccessApplication", applicationID)
+	ret := m.ctrl.Call(m, "GetAccessApplication", ctx, applicationID)
 	ret0, _ := ret[0].(*cf.AccessApplicationResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetAccessApplication indicates an expected call of GetAccessApplication.
-func (mr *MockCloudflareClientMockRecorder) GetAccessApplication(applicationID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) GetAccessApplication(ctx, applicationID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAccessApplication", reflect.TypeOf((*MockCloudflareClient)(nil).GetAccessApplication), applicationID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAccessApplication", reflect.TypeOf((*MockCloudflareClient)(nil).GetAccessApplication), ctx, applicationID)
 }
 
 // GetAccessGroup mocks base method.
-func (m *MockCloudflareClient) GetAccessGroup(groupID string) (*cf.AccessGroupResult, error) {
+func (m *MockCloudflareClient) GetAccessGroup(ctx context.Context, groupID string) (*cf.AccessGroupResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetAccessGroup", groupID)
+	ret := m.ctrl.Call(m, "GetAccessGroup", ctx, groupID)
 	ret0, _ := ret[0].(*cf.AccessGroupResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetAccessGroup indicates an expected call of GetAccessGroup.
-func (mr *MockCloudflareClientMockRecorder) GetAccessGroup(groupID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) GetAccessGroup(ctx, groupID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAccessGroup", reflect.TypeOf((*MockCloudflareClient)(nil).GetAccessGroup), groupID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAccessGroup", reflect.TypeOf((*MockCloudflareClient)(nil).GetAccessGroup), ctx, groupID)
 }
 
 // GetAccessIdentityProvider mocks base method.
-func (m *MockCloudflareClient) GetAccessIdentityProvider(idpID string) (*cf.AccessIdentityProviderResult, error) {
+func (m *MockCloudflareClient) GetAccessIdentityProvider(ctx context.Context, idpID string) (*cf.AccessIdentityProviderResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetAccessIdentityProvider", idpID)
+	ret := m.ctrl.Call(m, "GetAccessIdentityProvider", ctx, idpID)
 	ret0, _ := ret[0].(*cf.AccessIdentityProviderResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetAccessIdentityProvider indicates an expected call of GetAccessIdentityProvider.
-func (mr *MockCloudflareClientMockRecorder) GetAccessIdentityProvider(idpID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) GetAccessIdentityProvider(ctx, idpID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAccessIdentityProvider", reflect.TypeOf((*MockCloudflareClient)(nil).GetAccessIdentityProvider), idpID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAccessIdentityProvider", reflect.TypeOf((*MockCloudflareClient)(nil).GetAccessIdentityProvider), ctx, idpID)
 }
 
 // GetAccessPolicy mocks base method.
-func (m *MockCloudflareClient) GetAccessPolicy(applicationID, policyID string) (*cf.AccessPolicyResult, error) {
+func (m *MockCloudflareClient) GetAccessPolicy(ctx context.Context, applicationID, policyID string) (*cf.AccessPolicyResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetAccessPolicy", applicationID, policyID)
+	ret := m.ctrl.Call(m, "GetAccessPolicy", ctx, applicationID, policyID)
 	ret0, _ := ret[0].(*cf.AccessPolicyResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetAccessPolicy indicates an expected call of GetAccessPolicy.
-func (mr *MockCloudflareClientMockRecorder) GetAccessPolicy(applicationID, policyID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) GetAccessPolicy(ctx, applicationID, policyID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAccessPolicy", reflect.TypeOf((*MockCloudflareClient)(nil).GetAccessPolicy), applicationID, policyID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAccessPolicy", reflect.TypeOf((*MockCloudflareClient)(nil).GetAccessPolicy), ctx, applicationID, policyID)
 }
 
 // GetAccessServiceTokenByName mocks base method.
-func (m *MockCloudflareClient) GetAccessServiceTokenByName(name string) (*cf.AccessServiceTokenResult, error) {
+func (m *MockCloudflareClient) GetAccessServiceTokenByName(ctx context.Context, name string) (*cf.AccessServiceTokenResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetAccessServiceTokenByName", name)
+	ret := m.ctrl.Call(m, "GetAccessServiceTokenByName", ctx, name)
 	ret0, _ := ret[0].(*cf.AccessServiceTokenResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetAccessServiceTokenByName indicates an expected call of GetAccessServiceTokenByName.
-func (mr *MockCloudflareClientMockRecorder) GetAccessServiceTokenByName(name any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) GetAccessServiceTokenByName(ctx, name any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAccessServiceTokenByName", reflect.TypeOf((*MockCloudflareClient)(nil).GetAccessServiceTokenByName), name)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAccessServiceTokenByName", reflect.TypeOf((*MockCloudflareClient)(nil).GetAccessServiceTokenByName), ctx, name)
 }
 
 // GetAccountId mocks base method.
-func (m *MockCloudflareClient) GetAccountId() (string, error) {
+func (m *MockCloudflareClient) GetAccountId(ctx context.Context) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetAccountId")
+	ret := m.ctrl.Call(m, "GetAccountId", ctx)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetAccountId indicates an expected call of GetAccountId.
-func (mr *MockCloudflareClientMockRecorder) GetAccountId() *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) GetAccountId(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAccountId", reflect.TypeOf((*MockCloudflareClient)(nil).GetAccountId))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAccountId", reflect.TypeOf((*MockCloudflareClient)(nil).GetAccountId), ctx)
 }
 
 // GetDNSCNameId mocks base method.
-func (m *MockCloudflareClient) GetDNSCNameId(fqdn string) (string, error) {
+func (m *MockCloudflareClient) GetDNSCNameId(ctx context.Context, fqdn string) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetDNSCNameId", fqdn)
+	ret := m.ctrl.Call(m, "GetDNSCNameId", ctx, fqdn)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetDNSCNameId indicates an expected call of GetDNSCNameId.
-func (mr *MockCloudflareClientMockRecorder) GetDNSCNameId(fqdn any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) GetDNSCNameId(ctx, fqdn any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDNSCNameId", reflect.TypeOf((*MockCloudflareClient)(nil).GetDNSCNameId), fqdn)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDNSCNameId", reflect.TypeOf((*MockCloudflareClient)(nil).GetDNSCNameId), ctx, fqdn)
 }
 
 // GetDNSRecord mocks base method.
-func (m *MockCloudflareClient) GetDNSRecord(zoneID, recordID string) (*cf.DNSRecordResult, error) {
+func (m *MockCloudflareClient) GetDNSRecord(ctx context.Context, zoneID, recordID string) (*cf.DNSRecordResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetDNSRecord", zoneID, recordID)
+	ret := m.ctrl.Call(m, "GetDNSRecord", ctx, zoneID, recordID)
 	ret0, _ := ret[0].(*cf.DNSRecordResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetDNSRecord indicates an expected call of GetDNSRecord.
-func (mr *MockCloudflareClientMockRecorder) GetDNSRecord(zoneID, recordID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) GetDNSRecord(ctx, zoneID, recordID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDNSRecord", reflect.TypeOf((*MockCloudflareClient)(nil).GetDNSRecord), zoneID, recordID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDNSRecord", reflect.TypeOf((*MockCloudflareClient)(nil).GetDNSRecord), ctx, zoneID, recordID)
 }
 
 // GetDevicePostureRule mocks base method.
-func (m *MockCloudflareClient) GetDevicePostureRule(ruleID string) (*cf.DevicePostureRuleResult, error) {
+func (m *MockCloudflareClient) GetDevicePostureRule(ctx context.Context, ruleID string) (*cf.DevicePostureRuleResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetDevicePostureRule", ruleID)
+	ret := m.ctrl.Call(m, "GetDevicePostureRule", ctx, ruleID)
 	ret0, _ := ret[0].(*cf.DevicePostureRuleResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetDevicePostureRule indicates an expected call of GetDevicePostureRule.
-func (mr *MockCloudflareClientMockRecorder) GetDevicePostureRule(ruleID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) GetDevicePostureRule(ctx, ruleID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDevicePostureRule", reflect.TypeOf((*MockCloudflareClient)(nil).GetDevicePostureRule), ruleID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDevicePostureRule", reflect.TypeOf((*MockCloudflareClient)(nil).GetDevicePostureRule), ctx, ruleID)
 }
 
 // GetFallbackDomains mocks base method.
-func (m *MockCloudflareClient) GetFallbackDomains() ([]cf.FallbackDomainEntry, error) {
+func (m *MockCloudflareClient) GetFallbackDomains(ctx context.Context) ([]cf.FallbackDomainEntry, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetFallbackDomains")
+	ret := m.ctrl.Call(m, "GetFallbackDomains", ctx)
 	ret0, _ := ret[0].([]cf.FallbackDomainEntry)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetFallbackDomains indicates an expected call of GetFallbackDomains.
-func (mr *MockCloudflareClientMockRecorder) GetFallbackDomains() *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) GetFallbackDomains(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetFallbackDomains", reflect.TypeOf((*MockCloudflareClient)(nil).GetFallbackDomains))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetFallbackDomains", reflect.TypeOf((*MockCloudflareClient)(nil).GetFallbackDomains), ctx)
 }
 
 // GetGatewayList mocks base method.
-func (m *MockCloudflareClient) GetGatewayList(listID string) (*cf.GatewayListResult, error) {
+func (m *MockCloudflareClient) GetGatewayList(ctx context.Context, listID string) (*cf.GatewayListResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetGatewayList", listID)
+	ret := m.ctrl.Call(m, "GetGatewayList", ctx, listID)
 	ret0, _ := ret[0].(*cf.GatewayListResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetGatewayList indicates an expected call of GetGatewayList.
-func (mr *MockCloudflareClientMockRecorder) GetGatewayList(listID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) GetGatewayList(ctx, listID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetGatewayList", reflect.TypeOf((*MockCloudflareClient)(nil).GetGatewayList), listID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetGatewayList", reflect.TypeOf((*MockCloudflareClient)(nil).GetGatewayList), ctx, listID)
 }
 
 // GetGatewayRule mocks base method.
-func (m *MockCloudflareClient) GetGatewayRule(ruleID string) (*cf.GatewayRuleResult, error) {
+func (m *MockCloudflareClient) GetGatewayRule(ctx context.Context, ruleID string) (*cf.GatewayRuleResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetGatewayRule", ruleID)
+	ret := m.ctrl.Call(m, "GetGatewayRule", ctx, ruleID)
 	ret0, _ := ret[0].(*cf.GatewayRuleResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetGatewayRule indicates an expected call of GetGatewayRule.
-func (mr *MockCloudflareClientMockRecorder) GetGatewayRule(ruleID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) GetGatewayRule(ctx, ruleID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetGatewayRule", reflect.TypeOf((*MockCloudflareClient)(nil).GetGatewayRule), ruleID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetGatewayRule", reflect.TypeOf((*MockCloudflareClient)(nil).GetGatewayRule), ctx, ruleID)
 }
 
 // GetManagedDnsTxt mocks base method.
-func (m *MockCloudflareClient) GetManagedDnsTxt(fqdn string) (string, cf.DnsManagedRecordTxt, bool, error) {
+func (m *MockCloudflareClient) GetManagedDnsTxt(ctx context.Context, fqdn string) (string, cf.DnsManagedRecordTxt, bool, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetManagedDnsTxt", fqdn)
+	ret := m.ctrl.Call(m, "GetManagedDnsTxt", ctx, fqdn)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(cf.DnsManagedRecordTxt)
 	ret2, _ := ret[2].(bool)
@@ -624,527 +625,527 @@ func (m *MockCloudflareClient) GetManagedDnsTxt(fqdn string) (string, cf.DnsMana
 }
 
 // GetManagedDnsTxt indicates an expected call of GetManagedDnsTxt.
-func (mr *MockCloudflareClientMockRecorder) GetManagedDnsTxt(fqdn any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) GetManagedDnsTxt(ctx, fqdn any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetManagedDnsTxt", reflect.TypeOf((*MockCloudflareClient)(nil).GetManagedDnsTxt), fqdn)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetManagedDnsTxt", reflect.TypeOf((*MockCloudflareClient)(nil).GetManagedDnsTxt), ctx, fqdn)
 }
 
 // GetSplitTunnelExclude mocks base method.
-func (m *MockCloudflareClient) GetSplitTunnelExclude() ([]cf.SplitTunnelEntry, error) {
+func (m *MockCloudflareClient) GetSplitTunnelExclude(ctx context.Context) ([]cf.SplitTunnelEntry, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetSplitTunnelExclude")
+	ret := m.ctrl.Call(m, "GetSplitTunnelExclude", ctx)
 	ret0, _ := ret[0].([]cf.SplitTunnelEntry)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetSplitTunnelExclude indicates an expected call of GetSplitTunnelExclude.
-func (mr *MockCloudflareClientMockRecorder) GetSplitTunnelExclude() *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) GetSplitTunnelExclude(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSplitTunnelExclude", reflect.TypeOf((*MockCloudflareClient)(nil).GetSplitTunnelExclude))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSplitTunnelExclude", reflect.TypeOf((*MockCloudflareClient)(nil).GetSplitTunnelExclude), ctx)
 }
 
 // GetSplitTunnelInclude mocks base method.
-func (m *MockCloudflareClient) GetSplitTunnelInclude() ([]cf.SplitTunnelEntry, error) {
+func (m *MockCloudflareClient) GetSplitTunnelInclude(ctx context.Context) ([]cf.SplitTunnelEntry, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetSplitTunnelInclude")
+	ret := m.ctrl.Call(m, "GetSplitTunnelInclude", ctx)
 	ret0, _ := ret[0].([]cf.SplitTunnelEntry)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetSplitTunnelInclude indicates an expected call of GetSplitTunnelInclude.
-func (mr *MockCloudflareClientMockRecorder) GetSplitTunnelInclude() *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) GetSplitTunnelInclude(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSplitTunnelInclude", reflect.TypeOf((*MockCloudflareClient)(nil).GetSplitTunnelInclude))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSplitTunnelInclude", reflect.TypeOf((*MockCloudflareClient)(nil).GetSplitTunnelInclude), ctx)
 }
 
 // GetTunnelCreds mocks base method.
-func (m *MockCloudflareClient) GetTunnelCreds(tunnelSecret string) (string, error) {
+func (m *MockCloudflareClient) GetTunnelCreds(ctx context.Context, tunnelSecret string) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetTunnelCreds", tunnelSecret)
+	ret := m.ctrl.Call(m, "GetTunnelCreds", ctx, tunnelSecret)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetTunnelCreds indicates an expected call of GetTunnelCreds.
-func (mr *MockCloudflareClientMockRecorder) GetTunnelCreds(tunnelSecret any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) GetTunnelCreds(ctx, tunnelSecret any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTunnelCreds", reflect.TypeOf((*MockCloudflareClient)(nil).GetTunnelCreds), tunnelSecret)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTunnelCreds", reflect.TypeOf((*MockCloudflareClient)(nil).GetTunnelCreds), ctx, tunnelSecret)
 }
 
 // GetTunnelId mocks base method.
-func (m *MockCloudflareClient) GetTunnelId() (string, error) {
+func (m *MockCloudflareClient) GetTunnelId(ctx context.Context) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetTunnelId")
+	ret := m.ctrl.Call(m, "GetTunnelId", ctx)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetTunnelId indicates an expected call of GetTunnelId.
-func (mr *MockCloudflareClientMockRecorder) GetTunnelId() *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) GetTunnelId(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTunnelId", reflect.TypeOf((*MockCloudflareClient)(nil).GetTunnelId))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTunnelId", reflect.TypeOf((*MockCloudflareClient)(nil).GetTunnelId), ctx)
 }
 
 // GetTunnelRoute mocks base method.
-func (m *MockCloudflareClient) GetTunnelRoute(network, virtualNetworkID string) (*cf.TunnelRouteResult, error) {
+func (m *MockCloudflareClient) GetTunnelRoute(ctx context.Context, network, virtualNetworkID string) (*cf.TunnelRouteResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetTunnelRoute", network, virtualNetworkID)
+	ret := m.ctrl.Call(m, "GetTunnelRoute", ctx, network, virtualNetworkID)
 	ret0, _ := ret[0].(*cf.TunnelRouteResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetTunnelRoute indicates an expected call of GetTunnelRoute.
-func (mr *MockCloudflareClientMockRecorder) GetTunnelRoute(network, virtualNetworkID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) GetTunnelRoute(ctx, network, virtualNetworkID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTunnelRoute", reflect.TypeOf((*MockCloudflareClient)(nil).GetTunnelRoute), network, virtualNetworkID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTunnelRoute", reflect.TypeOf((*MockCloudflareClient)(nil).GetTunnelRoute), ctx, network, virtualNetworkID)
 }
 
 // GetVirtualNetwork mocks base method.
-func (m *MockCloudflareClient) GetVirtualNetwork(virtualNetworkID string) (*cf.VirtualNetworkResult, error) {
+func (m *MockCloudflareClient) GetVirtualNetwork(ctx context.Context, virtualNetworkID string) (*cf.VirtualNetworkResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetVirtualNetwork", virtualNetworkID)
+	ret := m.ctrl.Call(m, "GetVirtualNetwork", ctx, virtualNetworkID)
 	ret0, _ := ret[0].(*cf.VirtualNetworkResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetVirtualNetwork indicates an expected call of GetVirtualNetwork.
-func (mr *MockCloudflareClientMockRecorder) GetVirtualNetwork(virtualNetworkID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) GetVirtualNetwork(ctx, virtualNetworkID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetVirtualNetwork", reflect.TypeOf((*MockCloudflareClient)(nil).GetVirtualNetwork), virtualNetworkID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetVirtualNetwork", reflect.TypeOf((*MockCloudflareClient)(nil).GetVirtualNetwork), ctx, virtualNetworkID)
 }
 
 // GetVirtualNetworkByName mocks base method.
-func (m *MockCloudflareClient) GetVirtualNetworkByName(name string) (*cf.VirtualNetworkResult, error) {
+func (m *MockCloudflareClient) GetVirtualNetworkByName(ctx context.Context, name string) (*cf.VirtualNetworkResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetVirtualNetworkByName", name)
+	ret := m.ctrl.Call(m, "GetVirtualNetworkByName", ctx, name)
 	ret0, _ := ret[0].(*cf.VirtualNetworkResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetVirtualNetworkByName indicates an expected call of GetVirtualNetworkByName.
-func (mr *MockCloudflareClientMockRecorder) GetVirtualNetworkByName(name any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) GetVirtualNetworkByName(ctx, name any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetVirtualNetworkByName", reflect.TypeOf((*MockCloudflareClient)(nil).GetVirtualNetworkByName), name)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetVirtualNetworkByName", reflect.TypeOf((*MockCloudflareClient)(nil).GetVirtualNetworkByName), ctx, name)
 }
 
 // GetWARPConnectorToken mocks base method.
-func (m *MockCloudflareClient) GetWARPConnectorToken(connectorID string) (*cf.WARPConnectorTokenResult, error) {
+func (m *MockCloudflareClient) GetWARPConnectorToken(ctx context.Context, connectorID string) (*cf.WARPConnectorTokenResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetWARPConnectorToken", connectorID)
+	ret := m.ctrl.Call(m, "GetWARPConnectorToken", ctx, connectorID)
 	ret0, _ := ret[0].(*cf.WARPConnectorTokenResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetWARPConnectorToken indicates an expected call of GetWARPConnectorToken.
-func (mr *MockCloudflareClientMockRecorder) GetWARPConnectorToken(connectorID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) GetWARPConnectorToken(ctx, connectorID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetWARPConnectorToken", reflect.TypeOf((*MockCloudflareClient)(nil).GetWARPConnectorToken), connectorID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetWARPConnectorToken", reflect.TypeOf((*MockCloudflareClient)(nil).GetWARPConnectorToken), ctx, connectorID)
 }
 
 // GetZoneId mocks base method.
-func (m *MockCloudflareClient) GetZoneId() (string, error) {
+func (m *MockCloudflareClient) GetZoneId(ctx context.Context) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetZoneId")
+	ret := m.ctrl.Call(m, "GetZoneId", ctx)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetZoneId indicates an expected call of GetZoneId.
-func (mr *MockCloudflareClientMockRecorder) GetZoneId() *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) GetZoneId(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetZoneId", reflect.TypeOf((*MockCloudflareClient)(nil).GetZoneId))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetZoneId", reflect.TypeOf((*MockCloudflareClient)(nil).GetZoneId), ctx)
 }
 
 // InsertOrUpdateCName mocks base method.
-func (m *MockCloudflareClient) InsertOrUpdateCName(fqdn, dnsID string) (string, error) {
+func (m *MockCloudflareClient) InsertOrUpdateCName(ctx context.Context, fqdn, dnsID string) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "InsertOrUpdateCName", fqdn, dnsID)
+	ret := m.ctrl.Call(m, "InsertOrUpdateCName", ctx, fqdn, dnsID)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // InsertOrUpdateCName indicates an expected call of InsertOrUpdateCName.
-func (mr *MockCloudflareClientMockRecorder) InsertOrUpdateCName(fqdn, dnsID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) InsertOrUpdateCName(ctx, fqdn, dnsID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertOrUpdateCName", reflect.TypeOf((*MockCloudflareClient)(nil).InsertOrUpdateCName), fqdn, dnsID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertOrUpdateCName", reflect.TypeOf((*MockCloudflareClient)(nil).InsertOrUpdateCName), ctx, fqdn, dnsID)
 }
 
 // InsertOrUpdateTXT mocks base method.
-func (m *MockCloudflareClient) InsertOrUpdateTXT(fqdn, txtID, dnsID string) error {
+func (m *MockCloudflareClient) InsertOrUpdateTXT(ctx context.Context, fqdn, txtID, dnsID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "InsertOrUpdateTXT", fqdn, txtID, dnsID)
+	ret := m.ctrl.Call(m, "InsertOrUpdateTXT", ctx, fqdn, txtID, dnsID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // InsertOrUpdateTXT indicates an expected call of InsertOrUpdateTXT.
-func (mr *MockCloudflareClientMockRecorder) InsertOrUpdateTXT(fqdn, txtID, dnsID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) InsertOrUpdateTXT(ctx, fqdn, txtID, dnsID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertOrUpdateTXT", reflect.TypeOf((*MockCloudflareClient)(nil).InsertOrUpdateTXT), fqdn, txtID, dnsID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertOrUpdateTXT", reflect.TypeOf((*MockCloudflareClient)(nil).InsertOrUpdateTXT), ctx, fqdn, txtID, dnsID)
 }
 
 // ListAccessApplicationsByName mocks base method.
-func (m *MockCloudflareClient) ListAccessApplicationsByName(name string) (*cf.AccessApplicationResult, error) {
+func (m *MockCloudflareClient) ListAccessApplicationsByName(ctx context.Context, name string) (*cf.AccessApplicationResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListAccessApplicationsByName", name)
+	ret := m.ctrl.Call(m, "ListAccessApplicationsByName", ctx, name)
 	ret0, _ := ret[0].(*cf.AccessApplicationResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListAccessApplicationsByName indicates an expected call of ListAccessApplicationsByName.
-func (mr *MockCloudflareClientMockRecorder) ListAccessApplicationsByName(name any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) ListAccessApplicationsByName(ctx, name any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAccessApplicationsByName", reflect.TypeOf((*MockCloudflareClient)(nil).ListAccessApplicationsByName), name)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAccessApplicationsByName", reflect.TypeOf((*MockCloudflareClient)(nil).ListAccessApplicationsByName), ctx, name)
 }
 
 // ListAccessGroupsByName mocks base method.
-func (m *MockCloudflareClient) ListAccessGroupsByName(name string) (*cf.AccessGroupResult, error) {
+func (m *MockCloudflareClient) ListAccessGroupsByName(ctx context.Context, name string) (*cf.AccessGroupResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListAccessGroupsByName", name)
+	ret := m.ctrl.Call(m, "ListAccessGroupsByName", ctx, name)
 	ret0, _ := ret[0].(*cf.AccessGroupResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListAccessGroupsByName indicates an expected call of ListAccessGroupsByName.
-func (mr *MockCloudflareClientMockRecorder) ListAccessGroupsByName(name any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) ListAccessGroupsByName(ctx, name any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAccessGroupsByName", reflect.TypeOf((*MockCloudflareClient)(nil).ListAccessGroupsByName), name)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAccessGroupsByName", reflect.TypeOf((*MockCloudflareClient)(nil).ListAccessGroupsByName), ctx, name)
 }
 
 // ListAccessIdentityProvidersByName mocks base method.
-func (m *MockCloudflareClient) ListAccessIdentityProvidersByName(name string) (*cf.AccessIdentityProviderResult, error) {
+func (m *MockCloudflareClient) ListAccessIdentityProvidersByName(ctx context.Context, name string) (*cf.AccessIdentityProviderResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListAccessIdentityProvidersByName", name)
+	ret := m.ctrl.Call(m, "ListAccessIdentityProvidersByName", ctx, name)
 	ret0, _ := ret[0].(*cf.AccessIdentityProviderResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListAccessIdentityProvidersByName indicates an expected call of ListAccessIdentityProvidersByName.
-func (mr *MockCloudflareClientMockRecorder) ListAccessIdentityProvidersByName(name any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) ListAccessIdentityProvidersByName(ctx, name any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAccessIdentityProvidersByName", reflect.TypeOf((*MockCloudflareClient)(nil).ListAccessIdentityProvidersByName), name)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAccessIdentityProvidersByName", reflect.TypeOf((*MockCloudflareClient)(nil).ListAccessIdentityProvidersByName), ctx, name)
 }
 
 // ListAccessPolicies mocks base method.
-func (m *MockCloudflareClient) ListAccessPolicies(applicationID string) ([]cf.AccessPolicyResult, error) {
+func (m *MockCloudflareClient) ListAccessPolicies(ctx context.Context, applicationID string) ([]cf.AccessPolicyResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListAccessPolicies", applicationID)
+	ret := m.ctrl.Call(m, "ListAccessPolicies", ctx, applicationID)
 	ret0, _ := ret[0].([]cf.AccessPolicyResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListAccessPolicies indicates an expected call of ListAccessPolicies.
-func (mr *MockCloudflareClientMockRecorder) ListAccessPolicies(applicationID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) ListAccessPolicies(ctx, applicationID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAccessPolicies", reflect.TypeOf((*MockCloudflareClient)(nil).ListAccessPolicies), applicationID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAccessPolicies", reflect.TypeOf((*MockCloudflareClient)(nil).ListAccessPolicies), ctx, applicationID)
 }
 
 // ListDevicePostureRulesByName mocks base method.
-func (m *MockCloudflareClient) ListDevicePostureRulesByName(name string) (*cf.DevicePostureRuleResult, error) {
+func (m *MockCloudflareClient) ListDevicePostureRulesByName(ctx context.Context, name string) (*cf.DevicePostureRuleResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListDevicePostureRulesByName", name)
+	ret := m.ctrl.Call(m, "ListDevicePostureRulesByName", ctx, name)
 	ret0, _ := ret[0].(*cf.DevicePostureRuleResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListDevicePostureRulesByName indicates an expected call of ListDevicePostureRulesByName.
-func (mr *MockCloudflareClientMockRecorder) ListDevicePostureRulesByName(name any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) ListDevicePostureRulesByName(ctx, name any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListDevicePostureRulesByName", reflect.TypeOf((*MockCloudflareClient)(nil).ListDevicePostureRulesByName), name)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListDevicePostureRulesByName", reflect.TypeOf((*MockCloudflareClient)(nil).ListDevicePostureRulesByName), ctx, name)
 }
 
 // ListGatewayListsByName mocks base method.
-func (m *MockCloudflareClient) ListGatewayListsByName(name string) (*cf.GatewayListResult, error) {
+func (m *MockCloudflareClient) ListGatewayListsByName(ctx context.Context, name string) (*cf.GatewayListResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListGatewayListsByName", name)
+	ret := m.ctrl.Call(m, "ListGatewayListsByName", ctx, name)
 	ret0, _ := ret[0].(*cf.GatewayListResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListGatewayListsByName indicates an expected call of ListGatewayListsByName.
-func (mr *MockCloudflareClientMockRecorder) ListGatewayListsByName(name any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) ListGatewayListsByName(ctx, name any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListGatewayListsByName", reflect.TypeOf((*MockCloudflareClient)(nil).ListGatewayListsByName), name)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListGatewayListsByName", reflect.TypeOf((*MockCloudflareClient)(nil).ListGatewayListsByName), ctx, name)
 }
 
 // ListGatewayRulesByName mocks base method.
-func (m *MockCloudflareClient) ListGatewayRulesByName(name string) (*cf.GatewayRuleResult, error) {
+func (m *MockCloudflareClient) ListGatewayRulesByName(ctx context.Context, name string) (*cf.GatewayRuleResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListGatewayRulesByName", name)
+	ret := m.ctrl.Call(m, "ListGatewayRulesByName", ctx, name)
 	ret0, _ := ret[0].(*cf.GatewayRuleResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListGatewayRulesByName indicates an expected call of ListGatewayRulesByName.
-func (mr *MockCloudflareClientMockRecorder) ListGatewayRulesByName(name any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) ListGatewayRulesByName(ctx, name any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListGatewayRulesByName", reflect.TypeOf((*MockCloudflareClient)(nil).ListGatewayRulesByName), name)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListGatewayRulesByName", reflect.TypeOf((*MockCloudflareClient)(nil).ListGatewayRulesByName), ctx, name)
 }
 
 // RefreshAccessServiceToken mocks base method.
-func (m *MockCloudflareClient) RefreshAccessServiceToken(tokenID string) (*cf.AccessServiceTokenResult, error) {
+func (m *MockCloudflareClient) RefreshAccessServiceToken(ctx context.Context, tokenID string) (*cf.AccessServiceTokenResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "RefreshAccessServiceToken", tokenID)
+	ret := m.ctrl.Call(m, "RefreshAccessServiceToken", ctx, tokenID)
 	ret0, _ := ret[0].(*cf.AccessServiceTokenResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // RefreshAccessServiceToken indicates an expected call of RefreshAccessServiceToken.
-func (mr *MockCloudflareClientMockRecorder) RefreshAccessServiceToken(tokenID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) RefreshAccessServiceToken(ctx, tokenID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RefreshAccessServiceToken", reflect.TypeOf((*MockCloudflareClient)(nil).RefreshAccessServiceToken), tokenID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RefreshAccessServiceToken", reflect.TypeOf((*MockCloudflareClient)(nil).RefreshAccessServiceToken), ctx, tokenID)
 }
 
 // UpdateAccessApplication mocks base method.
-func (m *MockCloudflareClient) UpdateAccessApplication(applicationID string, params cf.AccessApplicationParams) (*cf.AccessApplicationResult, error) {
+func (m *MockCloudflareClient) UpdateAccessApplication(ctx context.Context, applicationID string, params cf.AccessApplicationParams) (*cf.AccessApplicationResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateAccessApplication", applicationID, params)
+	ret := m.ctrl.Call(m, "UpdateAccessApplication", ctx, applicationID, params)
 	ret0, _ := ret[0].(*cf.AccessApplicationResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // UpdateAccessApplication indicates an expected call of UpdateAccessApplication.
-func (mr *MockCloudflareClientMockRecorder) UpdateAccessApplication(applicationID, params any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) UpdateAccessApplication(ctx, applicationID, params any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateAccessApplication", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateAccessApplication), applicationID, params)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateAccessApplication", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateAccessApplication), ctx, applicationID, params)
 }
 
 // UpdateAccessGroup mocks base method.
-func (m *MockCloudflareClient) UpdateAccessGroup(groupID string, params cf.AccessGroupParams) (*cf.AccessGroupResult, error) {
+func (m *MockCloudflareClient) UpdateAccessGroup(ctx context.Context, groupID string, params cf.AccessGroupParams) (*cf.AccessGroupResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateAccessGroup", groupID, params)
+	ret := m.ctrl.Call(m, "UpdateAccessGroup", ctx, groupID, params)
 	ret0, _ := ret[0].(*cf.AccessGroupResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // UpdateAccessGroup indicates an expected call of UpdateAccessGroup.
-func (mr *MockCloudflareClientMockRecorder) UpdateAccessGroup(groupID, params any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) UpdateAccessGroup(ctx, groupID, params any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateAccessGroup", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateAccessGroup), groupID, params)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateAccessGroup", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateAccessGroup), ctx, groupID, params)
 }
 
 // UpdateAccessIdentityProvider mocks base method.
-func (m *MockCloudflareClient) UpdateAccessIdentityProvider(idpID string, params cf.AccessIdentityProviderParams) (*cf.AccessIdentityProviderResult, error) {
+func (m *MockCloudflareClient) UpdateAccessIdentityProvider(ctx context.Context, idpID string, params cf.AccessIdentityProviderParams) (*cf.AccessIdentityProviderResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateAccessIdentityProvider", idpID, params)
+	ret := m.ctrl.Call(m, "UpdateAccessIdentityProvider", ctx, idpID, params)
 	ret0, _ := ret[0].(*cf.AccessIdentityProviderResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // UpdateAccessIdentityProvider indicates an expected call of UpdateAccessIdentityProvider.
-func (mr *MockCloudflareClientMockRecorder) UpdateAccessIdentityProvider(idpID, params any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) UpdateAccessIdentityProvider(ctx, idpID, params any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateAccessIdentityProvider", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateAccessIdentityProvider), idpID, params)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateAccessIdentityProvider", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateAccessIdentityProvider), ctx, idpID, params)
 }
 
 // UpdateAccessPolicy mocks base method.
-func (m *MockCloudflareClient) UpdateAccessPolicy(policyID string, params cf.AccessPolicyParams) (*cf.AccessPolicyResult, error) {
+func (m *MockCloudflareClient) UpdateAccessPolicy(ctx context.Context, policyID string, params cf.AccessPolicyParams) (*cf.AccessPolicyResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateAccessPolicy", policyID, params)
+	ret := m.ctrl.Call(m, "UpdateAccessPolicy", ctx, policyID, params)
 	ret0, _ := ret[0].(*cf.AccessPolicyResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // UpdateAccessPolicy indicates an expected call of UpdateAccessPolicy.
-func (mr *MockCloudflareClientMockRecorder) UpdateAccessPolicy(policyID, params any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) UpdateAccessPolicy(ctx, policyID, params any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateAccessPolicy", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateAccessPolicy), policyID, params)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateAccessPolicy", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateAccessPolicy), ctx, policyID, params)
 }
 
 // UpdateAccessServiceToken mocks base method.
-func (m *MockCloudflareClient) UpdateAccessServiceToken(tokenID, name, duration string) (*cf.AccessServiceTokenResult, error) {
+func (m *MockCloudflareClient) UpdateAccessServiceToken(ctx context.Context, tokenID, name, duration string) (*cf.AccessServiceTokenResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateAccessServiceToken", tokenID, name, duration)
+	ret := m.ctrl.Call(m, "UpdateAccessServiceToken", ctx, tokenID, name, duration)
 	ret0, _ := ret[0].(*cf.AccessServiceTokenResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // UpdateAccessServiceToken indicates an expected call of UpdateAccessServiceToken.
-func (mr *MockCloudflareClientMockRecorder) UpdateAccessServiceToken(tokenID, name, duration any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) UpdateAccessServiceToken(ctx, tokenID, name, duration any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateAccessServiceToken", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateAccessServiceToken), tokenID, name, duration)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateAccessServiceToken", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateAccessServiceToken), ctx, tokenID, name, duration)
 }
 
 // UpdateDNSRecord mocks base method.
-func (m *MockCloudflareClient) UpdateDNSRecord(zoneID, recordID string, params cf.DNSRecordParams) (*cf.DNSRecordResult, error) {
+func (m *MockCloudflareClient) UpdateDNSRecord(ctx context.Context, zoneID, recordID string, params cf.DNSRecordParams) (*cf.DNSRecordResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateDNSRecord", zoneID, recordID, params)
+	ret := m.ctrl.Call(m, "UpdateDNSRecord", ctx, zoneID, recordID, params)
 	ret0, _ := ret[0].(*cf.DNSRecordResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // UpdateDNSRecord indicates an expected call of UpdateDNSRecord.
-func (mr *MockCloudflareClientMockRecorder) UpdateDNSRecord(zoneID, recordID, params any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) UpdateDNSRecord(ctx, zoneID, recordID, params any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateDNSRecord", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateDNSRecord), zoneID, recordID, params)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateDNSRecord", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateDNSRecord), ctx, zoneID, recordID, params)
 }
 
 // UpdateDevicePostureRule mocks base method.
-func (m *MockCloudflareClient) UpdateDevicePostureRule(ruleID string, params cf.DevicePostureRuleParams) (*cf.DevicePostureRuleResult, error) {
+func (m *MockCloudflareClient) UpdateDevicePostureRule(ctx context.Context, ruleID string, params cf.DevicePostureRuleParams) (*cf.DevicePostureRuleResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateDevicePostureRule", ruleID, params)
+	ret := m.ctrl.Call(m, "UpdateDevicePostureRule", ctx, ruleID, params)
 	ret0, _ := ret[0].(*cf.DevicePostureRuleResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // UpdateDevicePostureRule indicates an expected call of UpdateDevicePostureRule.
-func (mr *MockCloudflareClientMockRecorder) UpdateDevicePostureRule(ruleID, params any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) UpdateDevicePostureRule(ctx, ruleID, params any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateDevicePostureRule", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateDevicePostureRule), ruleID, params)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateDevicePostureRule", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateDevicePostureRule), ctx, ruleID, params)
 }
 
 // UpdateFallbackDomains mocks base method.
-func (m *MockCloudflareClient) UpdateFallbackDomains(entries []cf.FallbackDomainEntry) error {
+func (m *MockCloudflareClient) UpdateFallbackDomains(ctx context.Context, entries []cf.FallbackDomainEntry) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateFallbackDomains", entries)
+	ret := m.ctrl.Call(m, "UpdateFallbackDomains", ctx, entries)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // UpdateFallbackDomains indicates an expected call of UpdateFallbackDomains.
-func (mr *MockCloudflareClientMockRecorder) UpdateFallbackDomains(entries any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) UpdateFallbackDomains(ctx, entries any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateFallbackDomains", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateFallbackDomains), entries)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateFallbackDomains", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateFallbackDomains), ctx, entries)
 }
 
 // UpdateGatewayConfiguration mocks base method.
-func (m *MockCloudflareClient) UpdateGatewayConfiguration(params cf.GatewayConfigurationParams) (*cf.GatewayConfigurationResult, error) {
+func (m *MockCloudflareClient) UpdateGatewayConfiguration(ctx context.Context, params cf.GatewayConfigurationParams) (*cf.GatewayConfigurationResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateGatewayConfiguration", params)
+	ret := m.ctrl.Call(m, "UpdateGatewayConfiguration", ctx, params)
 	ret0, _ := ret[0].(*cf.GatewayConfigurationResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // UpdateGatewayConfiguration indicates an expected call of UpdateGatewayConfiguration.
-func (mr *MockCloudflareClientMockRecorder) UpdateGatewayConfiguration(params any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) UpdateGatewayConfiguration(ctx, params any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateGatewayConfiguration", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateGatewayConfiguration), params)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateGatewayConfiguration", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateGatewayConfiguration), ctx, params)
 }
 
 // UpdateGatewayList mocks base method.
-func (m *MockCloudflareClient) UpdateGatewayList(listID string, params cf.GatewayListParams) (*cf.GatewayListResult, error) {
+func (m *MockCloudflareClient) UpdateGatewayList(ctx context.Context, listID string, params cf.GatewayListParams) (*cf.GatewayListResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateGatewayList", listID, params)
+	ret := m.ctrl.Call(m, "UpdateGatewayList", ctx, listID, params)
 	ret0, _ := ret[0].(*cf.GatewayListResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // UpdateGatewayList indicates an expected call of UpdateGatewayList.
-func (mr *MockCloudflareClientMockRecorder) UpdateGatewayList(listID, params any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) UpdateGatewayList(ctx, listID, params any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateGatewayList", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateGatewayList), listID, params)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateGatewayList", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateGatewayList), ctx, listID, params)
 }
 
 // UpdateGatewayRule mocks base method.
-func (m *MockCloudflareClient) UpdateGatewayRule(ruleID string, params cf.GatewayRuleParams) (*cf.GatewayRuleResult, error) {
+func (m *MockCloudflareClient) UpdateGatewayRule(ctx context.Context, ruleID string, params cf.GatewayRuleParams) (*cf.GatewayRuleResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateGatewayRule", ruleID, params)
+	ret := m.ctrl.Call(m, "UpdateGatewayRule", ctx, ruleID, params)
 	ret0, _ := ret[0].(*cf.GatewayRuleResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // UpdateGatewayRule indicates an expected call of UpdateGatewayRule.
-func (mr *MockCloudflareClientMockRecorder) UpdateGatewayRule(ruleID, params any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) UpdateGatewayRule(ctx, ruleID, params any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateGatewayRule", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateGatewayRule), ruleID, params)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateGatewayRule", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateGatewayRule), ctx, ruleID, params)
 }
 
 // UpdateSplitTunnelExclude mocks base method.
-func (m *MockCloudflareClient) UpdateSplitTunnelExclude(entries []cf.SplitTunnelEntry) error {
+func (m *MockCloudflareClient) UpdateSplitTunnelExclude(ctx context.Context, entries []cf.SplitTunnelEntry) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateSplitTunnelExclude", entries)
+	ret := m.ctrl.Call(m, "UpdateSplitTunnelExclude", ctx, entries)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // UpdateSplitTunnelExclude indicates an expected call of UpdateSplitTunnelExclude.
-func (mr *MockCloudflareClientMockRecorder) UpdateSplitTunnelExclude(entries any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) UpdateSplitTunnelExclude(ctx, entries any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSplitTunnelExclude", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateSplitTunnelExclude), entries)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSplitTunnelExclude", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateSplitTunnelExclude), ctx, entries)
 }
 
 // UpdateSplitTunnelInclude mocks base method.
-func (m *MockCloudflareClient) UpdateSplitTunnelInclude(entries []cf.SplitTunnelEntry) error {
+func (m *MockCloudflareClient) UpdateSplitTunnelInclude(ctx context.Context, entries []cf.SplitTunnelEntry) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateSplitTunnelInclude", entries)
+	ret := m.ctrl.Call(m, "UpdateSplitTunnelInclude", ctx, entries)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // UpdateSplitTunnelInclude indicates an expected call of UpdateSplitTunnelInclude.
-func (mr *MockCloudflareClientMockRecorder) UpdateSplitTunnelInclude(entries any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) UpdateSplitTunnelInclude(ctx, entries any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSplitTunnelInclude", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateSplitTunnelInclude), entries)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSplitTunnelInclude", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateSplitTunnelInclude), ctx, entries)
 }
 
 // UpdateTunnelRoute mocks base method.
-func (m *MockCloudflareClient) UpdateTunnelRoute(network string, params cf.TunnelRouteParams) (*cf.TunnelRouteResult, error) {
+func (m *MockCloudflareClient) UpdateTunnelRoute(ctx context.Context, network string, params cf.TunnelRouteParams) (*cf.TunnelRouteResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateTunnelRoute", network, params)
+	ret := m.ctrl.Call(m, "UpdateTunnelRoute", ctx, network, params)
 	ret0, _ := ret[0].(*cf.TunnelRouteResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // UpdateTunnelRoute indicates an expected call of UpdateTunnelRoute.
-func (mr *MockCloudflareClientMockRecorder) UpdateTunnelRoute(network, params any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) UpdateTunnelRoute(ctx, network, params any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateTunnelRoute", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateTunnelRoute), network, params)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateTunnelRoute", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateTunnelRoute), ctx, network, params)
 }
 
 // UpdateVirtualNetwork mocks base method.
-func (m *MockCloudflareClient) UpdateVirtualNetwork(virtualNetworkID string, params cf.VirtualNetworkParams) (*cf.VirtualNetworkResult, error) {
+func (m *MockCloudflareClient) UpdateVirtualNetwork(ctx context.Context, virtualNetworkID string, params cf.VirtualNetworkParams) (*cf.VirtualNetworkResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateVirtualNetwork", virtualNetworkID, params)
+	ret := m.ctrl.Call(m, "UpdateVirtualNetwork", ctx, virtualNetworkID, params)
 	ret0, _ := ret[0].(*cf.VirtualNetworkResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // UpdateVirtualNetwork indicates an expected call of UpdateVirtualNetwork.
-func (mr *MockCloudflareClientMockRecorder) UpdateVirtualNetwork(virtualNetworkID, params any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) UpdateVirtualNetwork(ctx, virtualNetworkID, params any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateVirtualNetwork", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateVirtualNetwork), virtualNetworkID, params)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateVirtualNetwork", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateVirtualNetwork), ctx, virtualNetworkID, params)
 }
 
 // ValidateAll mocks base method.
-func (m *MockCloudflareClient) ValidateAll() error {
+func (m *MockCloudflareClient) ValidateAll(ctx context.Context) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ValidateAll")
+	ret := m.ctrl.Call(m, "ValidateAll", ctx)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // ValidateAll indicates an expected call of ValidateAll.
-func (mr *MockCloudflareClientMockRecorder) ValidateAll() *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) ValidateAll(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ValidateAll", reflect.TypeOf((*MockCloudflareClient)(nil).ValidateAll))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ValidateAll", reflect.TypeOf((*MockCloudflareClient)(nil).ValidateAll), ctx)
 }

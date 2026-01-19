@@ -367,7 +367,9 @@ spec:
                 description: PathCookieAttribute sets the Path attribute on the cookie.
                 type: boolean
               policies:
-                description: Policies defines the access policies for this application.
+                description: |-
+                  Policies defines the inline access policies for this application.
+                  These policies are defined directly within the AccessApplication.
                 items:
                   description: |-
                     AccessPolicyRef references an access policy or defines an inline policy.
@@ -427,6 +429,48 @@ spec:
               privateAddress:
                 description: PrivateAddress is the private address for private applications.
                 type: string
+              reusablePolicyRefs:
+                description: |-
+                  ReusablePolicyRefs references reusable AccessPolicy resources.
+                  These policies are managed independently and can be shared across multiple applications.
+                  Reusable policies are applied in addition to inline policies.
+                items:
+                  description: |-
+                    ReusablePolicyRef references a reusable AccessPolicy resource.
+                    Exactly one of name, cloudflareId, or cloudflareName must be specified.
+                  properties:
+                    cloudflareId:
+                      description: |-
+                        CloudflareID is the UUID of an existing Cloudflare reusable Access Policy.
+                        Use this to directly reference a Cloudflare-managed policy
+                        without creating a corresponding Kubernetes AccessPolicy resource.
+                        Mutually exclusive with name and cloudflareName.
+                      pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                      type: string
+                    cloudflareName:
+                      description: |-
+                        CloudflareName is the display name of an existing Cloudflare reusable Access Policy.
+                        The controller will resolve this name to a PolicyID via the Cloudflare API.
+                        Use this when you want to reference a Cloudflare policy by name
+                        (e.g., policies created via Terraform or the Cloudflare dashboard).
+                        Mutually exclusive with name and cloudflareId.
+                      maxLength: 255
+                      type: string
+                    name:
+                      description: |-
+                        Name is the name of a K8s AccessPolicy resource.
+                        The controller will look up the AccessPolicy CR and use its PolicyID.
+                        Mutually exclusive with cloudflareId and cloudflareName.
+                      maxLength: 253
+                      type: string
+                    precedence:
+                      description: |-
+                        Precedence overrides the policy's default precedence when attached to this application.
+                        If not specified, the policy's own precedence value is used.
+                      minimum: 1
+                      type: integer
+                  type: object
+                type: array
               saasApp:
                 description: SaasApp configures the SaaS application settings (for
                   type=saas).
@@ -864,7 +908,7 @@ spec:
                 type: integer
               resolvedPolicies:
                 description: |-
-                  ResolvedPolicies contains the resolved policy information for each policy.
+                  ResolvedPolicies contains the resolved policy information for each inline policy.
                   This helps with debugging and understanding policy state.
                 items:
                   description: ResolvedPolicyStatus contains resolved policy information
@@ -904,6 +948,40 @@ spec:
                 x-kubernetes-list-map-keys:
                 - precedence
                 x-kubernetes-list-type: map
+              resolvedReusablePolicies:
+                description: |-
+                  ResolvedReusablePolicies contains the resolved reusable policy information.
+                  These are policies referenced via reusablePolicyRefs.
+                items:
+                  description: ResolvedReusablePolicyStatus contains resolved reusable
+                    policy information.
+                  properties:
+                    decision:
+                      description: Decision is the policy decision (allow, deny, bypass,
+                        non_identity).
+                      type: string
+                    policyId:
+                      description: PolicyID is the Cloudflare reusable policy ID.
+                      type: string
+                    policyName:
+                      description: PolicyName is the name of the reusable policy (for
+                        display purposes).
+                      type: string
+                    precedence:
+                      description: Precedence is the policy precedence when attached
+                        to this application.
+                      type: integer
+                    source:
+                      description: |-
+                        Source indicates how the policy was resolved.
+                        Possible values: k8s, cloudflareId, cloudflareName
+                      enum:
+                      - k8s
+                      - cloudflareId
+                      - cloudflareName
+                      type: string
+                  type: object
+                type: array
               saasAppClientId:
                 description: SaasAppClientID is the OIDC client ID (for SaaS applications
                   with OIDC).

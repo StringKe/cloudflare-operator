@@ -55,7 +55,7 @@ func (api *API) AttachR2CustomDomain(
 		return nil, errClientNotInitialized
 	}
 
-	accountID, err := api.GetAccountId()
+	accountID, err := api.GetAccountId(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get account ID: %w", err)
 	}
@@ -83,7 +83,7 @@ func (api *API) GetR2CustomDomain(
 		return nil, errClientNotInitialized
 	}
 
-	accountID, err := api.GetAccountId()
+	accountID, err := api.GetAccountId(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get account ID: %w", err)
 	}
@@ -114,7 +114,7 @@ func (api *API) ListR2CustomDomains(
 		return nil, errClientNotInitialized
 	}
 
-	accountID, err := api.GetAccountId()
+	accountID, err := api.GetAccountId(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get account ID: %w", err)
 	}
@@ -142,7 +142,7 @@ func (api *API) UpdateR2CustomDomain(
 		return nil, errClientNotInitialized
 	}
 
-	accountID, err := api.GetAccountId()
+	accountID, err := api.GetAccountId(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get account ID: %w", err)
 	}
@@ -172,7 +172,7 @@ func (api *API) DeleteR2CustomDomain(ctx context.Context, bucketName, domain str
 		return errClientNotInitialized
 	}
 
-	accountID, err := api.GetAccountId()
+	accountID, err := api.GetAccountId(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get account ID: %w", err)
 	}
@@ -200,7 +200,7 @@ func (api *API) EnableR2PublicAccess(ctx context.Context, bucketName string, ena
 		return errClientNotInitialized
 	}
 
-	accountID, err := api.GetAccountId()
+	accountID, err := api.GetAccountId(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get account ID: %w", err)
 	}

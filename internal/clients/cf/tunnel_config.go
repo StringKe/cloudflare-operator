@@ -12,13 +12,12 @@ import (
 
 // GetTunnelConfiguration retrieves the Tunnel configuration from Cloudflare API.
 // This returns the remotely-managed tunnel configuration including public hostnames.
-func (c *API) GetTunnelConfiguration(tunnelID string) (*cloudflare.TunnelConfigurationResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) GetTunnelConfiguration(ctx context.Context, tunnelID string) (*cloudflare.TunnelConfigurationResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error in getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	result, err := c.CloudflareClient.GetTunnelConfiguration(ctx, rc, tunnelID)
@@ -34,13 +33,16 @@ func (c *API) GetTunnelConfiguration(tunnelID string) (*cloudflare.TunnelConfigu
 // UpdateTunnelConfiguration updates the Tunnel configuration in Cloudflare API.
 // This syncs the local ingress rules to Cloudflare, making domains available
 // for Access Applications validation.
-func (c *API) UpdateTunnelConfiguration(tunnelID string, config cloudflare.TunnelConfiguration) (*cloudflare.TunnelConfigurationResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) UpdateTunnelConfiguration(
+	ctx context.Context,
+	tunnelID string,
+	config cloudflare.TunnelConfiguration,
+) (*cloudflare.TunnelConfigurationResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error in getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	params := cloudflare.TunnelConfigurationParams{
@@ -166,7 +168,12 @@ func convertOriginRequest(local OriginRequestConfig) *cloudflare.OriginRequestCo
 // - nil: don't change existing warp-routing state (backward compatible)
 // - &WarpRoutingConfig{Enabled: true}: explicitly enable warp-routing
 // - &WarpRoutingConfig{Enabled: false}: explicitly disable warp-routing
-func (c *API) SyncTunnelConfigurationToAPI(tunnelID string, localRules []UnvalidatedIngressRule, warpRouting *WarpRoutingConfig) error {
+func (c *API) SyncTunnelConfigurationToAPI(
+	ctx context.Context,
+	tunnelID string,
+	localRules []UnvalidatedIngressRule,
+	warpRouting *WarpRoutingConfig,
+) error {
 	// Convert local rules to SDK types
 	sdkRules := ConvertLocalRulesToSDK(localRules)
 
@@ -185,7 +192,7 @@ func (c *API) SyncTunnelConfigurationToAPI(tunnelID string, localRules []Unvalid
 	}
 
 	// Update the configuration
-	_, err := c.UpdateTunnelConfiguration(tunnelID, config)
+	_, err := c.UpdateTunnelConfiguration(ctx, tunnelID, config)
 	if err != nil {
 		return fmt.Errorf("failed to sync tunnel configuration to API: %w", err)
 	}
@@ -239,12 +246,12 @@ type MergeOptions struct {
 //
 // This approach prevents race conditions where multiple controllers overwrite
 // each other's configurations.
-func (c *API) MergeAndSync(tunnelID string, opts MergeOptions) (*MergeSyncResult, error) {
+func (c *API) MergeAndSync(ctx context.Context, tunnelID string, opts MergeOptions) (*MergeSyncResult, error) {
 	c.Log.Info("MergeAndSync: starting", "tunnelId", tunnelID, "source", opts.Source,
 		"previousHostnames", opts.PreviousHostnames, "currentRulesCount", len(opts.CurrentRules))
 
 	// Step 1: Read current configuration from Cloudflare
-	currentConfig, err := c.GetTunnelConfiguration(tunnelID)
+	currentConfig, err := c.GetTunnelConfiguration(ctx, tunnelID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get current tunnel configuration: %w", err)
 	}
@@ -253,7 +260,7 @@ func (c *API) MergeAndSync(tunnelID string, opts MergeOptions) (*MergeSyncResult
 	mergedConfig := c.mergeConfiguration(currentConfig, opts)
 
 	// Step 3: Write merged configuration back to Cloudflare
-	result, err := c.UpdateTunnelConfiguration(tunnelID, mergedConfig)
+	result, err := c.UpdateTunnelConfiguration(ctx, tunnelID, mergedConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update tunnel configuration: %w", err)
 	}

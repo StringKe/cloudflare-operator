@@ -129,8 +129,18 @@ type DevicePostureInput struct {
 	CheckPrivateKey *bool `json:"checkPrivateKey,omitempty"`
 	// ExtendedKeyUsage is the extended key usage
 	ExtendedKeyUsage []string `json:"extendedKeyUsage,omitempty"`
+	// Locations for location-based checks
+	Locations []DevicePostureLocation `json:"locations,omitempty"`
 	// CheckDisks contains disk paths to check (string list)
 	CheckDisks []string `json:"checkDisks,omitempty"`
+}
+
+// DevicePostureLocation for location-based posture checks.
+type DevicePostureLocation struct {
+	// Paths for location paths
+	Paths []string `json:"paths,omitempty"`
+	// TrustStores for trust store locations
+	TrustStores []string `json:"trustStores,omitempty"`
 }
 
 // DeviceSettingsPolicyConfig contains the configuration for Device Settings Policy.

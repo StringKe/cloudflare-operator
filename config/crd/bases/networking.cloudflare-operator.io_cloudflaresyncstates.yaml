@@ -99,6 +99,7 @@ spec:
                 - DNSRecord
                 - AccessApplication
                 - AccessGroup
+                - AccessPolicy
                 - AccessServiceToken
                 - AccessIdentityProvider
                 - VirtualNetwork

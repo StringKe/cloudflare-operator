@@ -132,6 +132,10 @@ type WildcardRedirectRuleConfig struct {
 	StatusCode int `json:"statusCode,omitempty"`
 	// PreserveQueryString indicates whether to preserve query string
 	PreserveQueryString bool `json:"preserveQueryString,omitempty"`
+	// IncludeSubdomains applies the redirect to subdomains
+	IncludeSubdomains bool `json:"includeSubdomains,omitempty"`
+	// SubpathMatching enables matching of subpaths
+	SubpathMatching bool `json:"subpathMatching,omitempty"`
 }
 
 // ZoneRulesetRegisterOptions contains options for registering a ZoneRuleset.

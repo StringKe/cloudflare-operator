@@ -5,6 +5,8 @@
 
 package cf
 
+import "context"
+
 // CloudflareClient defines the interface for interacting with the Cloudflare API.
 // This interface enables dependency injection and mocking for unit tests.
 // The interface is intentionally large to cover all Cloudflare API operations.
@@ -12,113 +14,113 @@ package cf
 //nolint:interfacebloat // Cloudflare API requires many methods for full coverage
 type CloudflareClient interface {
 	// Tunnel operations
-	CreateTunnel() (string, string, error)
-	DeleteTunnel() error
-	ValidateAll() error
-	GetAccountId() (string, error)
-	GetTunnelId() (string, error)
-	GetTunnelCreds(tunnelSecret string) (string, error)
-	GetZoneId() (string, error)
+	CreateTunnel(ctx context.Context) (string, string, error)
+	DeleteTunnel(ctx context.Context) error
+	ValidateAll(ctx context.Context) error
+	GetAccountId(ctx context.Context) (string, error)
+	GetTunnelId(ctx context.Context) (string, error)
+	GetTunnelCreds(ctx context.Context, tunnelSecret string) (string, error)
+	GetZoneId(ctx context.Context) (string, error)
 
 	// DNS operations (api.go - CNAME/TXT for tunnels)
-	InsertOrUpdateCName(fqdn, dnsID string) (string, error)
-	DeleteDNSId(fqdn, dnsID string, created bool) error
-	GetDNSCNameId(fqdn string) (string, error)
-	GetManagedDnsTxt(fqdn string) (string, DnsManagedRecordTxt, bool, error)
-	InsertOrUpdateTXT(fqdn, txtID, dnsID string) error
+	InsertOrUpdateCName(ctx context.Context, fqdn, dnsID string) (string, error)
+	DeleteDNSId(ctx context.Context, fqdn, dnsID string, created bool) error
+	GetDNSCNameId(ctx context.Context, fqdn string) (string, error)
+	GetManagedDnsTxt(ctx context.Context, fqdn string) (string, DnsManagedRecordTxt, bool, error)
+	InsertOrUpdateTXT(ctx context.Context, fqdn, txtID, dnsID string) error
 
 	// DNS operations (dns.go - Generic DNS records)
-	CreateDNSRecord(params DNSRecordParams) (*DNSRecordResult, error)
-	GetDNSRecord(zoneID, recordID string) (*DNSRecordResult, error)
-	UpdateDNSRecord(zoneID, recordID string, params DNSRecordParams) (*DNSRecordResult, error)
-	DeleteDNSRecord(zoneID, recordID string) error
+	CreateDNSRecord(ctx context.Context, params DNSRecordParams) (*DNSRecordResult, error)
+	GetDNSRecord(ctx context.Context, zoneID, recordID string) (*DNSRecordResult, error)
+	UpdateDNSRecord(ctx context.Context, zoneID, recordID string, params DNSRecordParams) (*DNSRecordResult, error)
+	DeleteDNSRecord(ctx context.Context, zoneID, recordID string) error
 
 	// Virtual Network operations
-	CreateVirtualNetwork(params VirtualNetworkParams) (*VirtualNetworkResult, error)
-	GetVirtualNetwork(virtualNetworkID string) (*VirtualNetworkResult, error)
-	GetVirtualNetworkByName(name string) (*VirtualNetworkResult, error)
-	UpdateVirtualNetwork(virtualNetworkID string, params VirtualNetworkParams) (*VirtualNetworkResult, error)
-	DeleteVirtualNetwork(virtualNetworkID string) error
+	CreateVirtualNetwork(ctx context.Context, params VirtualNetworkParams) (*VirtualNetworkResult, error)
+	GetVirtualNetwork(ctx context.Context, virtualNetworkID string) (*VirtualNetworkResult, error)
+	GetVirtualNetworkByName(ctx context.Context, name string) (*VirtualNetworkResult, error)
+	UpdateVirtualNetwork(ctx context.Context, virtualNetworkID string, params VirtualNetworkParams) (*VirtualNetworkResult, error)
+	DeleteVirtualNetwork(ctx context.Context, virtualNetworkID string) error
 
 	// Tunnel Route operations
-	CreateTunnelRoute(params TunnelRouteParams) (*TunnelRouteResult, error)
-	GetTunnelRoute(network, virtualNetworkID string) (*TunnelRouteResult, error)
-	UpdateTunnelRoute(network string, params TunnelRouteParams) (*TunnelRouteResult, error)
-	DeleteTunnelRoute(network, virtualNetworkID string) error
+	CreateTunnelRoute(ctx context.Context, params TunnelRouteParams) (*TunnelRouteResult, error)
+	GetTunnelRoute(ctx context.Context, network, virtualNetworkID string) (*TunnelRouteResult, error)
+	UpdateTunnelRoute(ctx context.Context, network string, params TunnelRouteParams) (*TunnelRouteResult, error)
+	DeleteTunnelRoute(ctx context.Context, network, virtualNetworkID string) error
 
 	// Access Application operations
-	CreateAccessApplication(params AccessApplicationParams) (*AccessApplicationResult, error)
-	GetAccessApplication(applicationID string) (*AccessApplicationResult, error)
-	UpdateAccessApplication(applicationID string, params AccessApplicationParams) (*AccessApplicationResult, error)
-	DeleteAccessApplication(applicationID string) error
-	ListAccessApplicationsByName(name string) (*AccessApplicationResult, error)
+	CreateAccessApplication(ctx context.Context, params AccessApplicationParams) (*AccessApplicationResult, error)
+	GetAccessApplication(ctx context.Context, applicationID string) (*AccessApplicationResult, error)
+	UpdateAccessApplication(ctx context.Context, applicationID string, params AccessApplicationParams) (*AccessApplicationResult, error)
+	DeleteAccessApplication(ctx context.Context, applicationID string) error
+	ListAccessApplicationsByName(ctx context.Context, name string) (*AccessApplicationResult, error)
 
 	// Access Policy operations
-	CreateAccessPolicy(params AccessPolicyParams) (*AccessPolicyResult, error)
-	GetAccessPolicy(applicationID, policyID string) (*AccessPolicyResult, error)
-	UpdateAccessPolicy(policyID string, params AccessPolicyParams) (*AccessPolicyResult, error)
-	DeleteAccessPolicy(applicationID, policyID string) error
-	ListAccessPolicies(applicationID string) ([]AccessPolicyResult, error)
+	CreateAccessPolicy(ctx context.Context, params AccessPolicyParams) (*AccessPolicyResult, error)
+	GetAccessPolicy(ctx context.Context, applicationID, policyID string) (*AccessPolicyResult, error)
+	UpdateAccessPolicy(ctx context.Context, policyID string, params AccessPolicyParams) (*AccessPolicyResult, error)
+	DeleteAccessPolicy(ctx context.Context, applicationID, policyID string) error
+	ListAccessPolicies(ctx context.Context, applicationID string) ([]AccessPolicyResult, error)
 
 	// Access Group operations
-	CreateAccessGroup(params AccessGroupParams) (*AccessGroupResult, error)
-	GetAccessGroup(groupID string) (*AccessGroupResult, error)
-	UpdateAccessGroup(groupID string, params AccessGroupParams) (*AccessGroupResult, error)
-	DeleteAccessGroup(groupID string) error
-	ListAccessGroupsByName(name string) (*AccessGroupResult, error)
+	CreateAccessGroup(ctx context.Context, params AccessGroupParams) (*AccessGroupResult, error)
+	GetAccessGroup(ctx context.Context, groupID string) (*AccessGroupResult, error)
+	UpdateAccessGroup(ctx context.Context, groupID string, params AccessGroupParams) (*AccessGroupResult, error)
+	DeleteAccessGroup(ctx context.Context, groupID string) error
+	ListAccessGroupsByName(ctx context.Context, name string) (*AccessGroupResult, error)
 
 	// Access Identity Provider operations
-	CreateAccessIdentityProvider(params AccessIdentityProviderParams) (*AccessIdentityProviderResult, error)
-	GetAccessIdentityProvider(idpID string) (*AccessIdentityProviderResult, error)
-	UpdateAccessIdentityProvider(idpID string, params AccessIdentityProviderParams) (*AccessIdentityProviderResult, error)
-	DeleteAccessIdentityProvider(idpID string) error
-	ListAccessIdentityProvidersByName(name string) (*AccessIdentityProviderResult, error)
+	CreateAccessIdentityProvider(ctx context.Context, params AccessIdentityProviderParams) (*AccessIdentityProviderResult, error)
+	GetAccessIdentityProvider(ctx context.Context, idpID string) (*AccessIdentityProviderResult, error)
+	UpdateAccessIdentityProvider(ctx context.Context, idpID string, params AccessIdentityProviderParams) (*AccessIdentityProviderResult, error)
+	DeleteAccessIdentityProvider(ctx context.Context, idpID string) error
+	ListAccessIdentityProvidersByName(ctx context.Context, name string) (*AccessIdentityProviderResult, error)
 
 	// Access Service Token operations
-	GetAccessServiceTokenByName(name string) (*AccessServiceTokenResult, error)
-	CreateAccessServiceToken(name string, duration string) (*AccessServiceTokenResult, error)
-	UpdateAccessServiceToken(tokenID string, name string, duration string) (*AccessServiceTokenResult, error)
-	RefreshAccessServiceToken(tokenID string) (*AccessServiceTokenResult, error)
-	DeleteAccessServiceToken(tokenID string) error
+	GetAccessServiceTokenByName(ctx context.Context, name string) (*AccessServiceTokenResult, error)
+	CreateAccessServiceToken(ctx context.Context, name string, duration string) (*AccessServiceTokenResult, error)
+	UpdateAccessServiceToken(ctx context.Context, tokenID string, name string, duration string) (*AccessServiceTokenResult, error)
+	RefreshAccessServiceToken(ctx context.Context, tokenID string) (*AccessServiceTokenResult, error)
+	DeleteAccessServiceToken(ctx context.Context, tokenID string) error
 
 	// Device Posture Rule operations
-	CreateDevicePostureRule(params DevicePostureRuleParams) (*DevicePostureRuleResult, error)
-	GetDevicePostureRule(ruleID string) (*DevicePostureRuleResult, error)
-	UpdateDevicePostureRule(ruleID string, params DevicePostureRuleParams) (*DevicePostureRuleResult, error)
-	DeleteDevicePostureRule(ruleID string) error
-	ListDevicePostureRulesByName(name string) (*DevicePostureRuleResult, error)
+	CreateDevicePostureRule(ctx context.Context, params DevicePostureRuleParams) (*DevicePostureRuleResult, error)
+	GetDevicePostureRule(ctx context.Context, ruleID string) (*DevicePostureRuleResult, error)
+	UpdateDevicePostureRule(ctx context.Context, ruleID string, params DevicePostureRuleParams) (*DevicePostureRuleResult, error)
+	DeleteDevicePostureRule(ctx context.Context, ruleID string) error
+	ListDevicePostureRulesByName(ctx context.Context, name string) (*DevicePostureRuleResult, error)
 
 	// Gateway Rule operations
-	CreateGatewayRule(params GatewayRuleParams) (*GatewayRuleResult, error)
-	GetGatewayRule(ruleID string) (*GatewayRuleResult, error)
-	UpdateGatewayRule(ruleID string, params GatewayRuleParams) (*GatewayRuleResult, error)
-	DeleteGatewayRule(ruleID string) error
-	ListGatewayRulesByName(name string) (*GatewayRuleResult, error)
+	CreateGatewayRule(ctx context.Context, params GatewayRuleParams) (*GatewayRuleResult, error)
+	GetGatewayRule(ctx context.Context, ruleID string) (*GatewayRuleResult, error)
+	UpdateGatewayRule(ctx context.Context, ruleID string, params GatewayRuleParams) (*GatewayRuleResult, error)
+	DeleteGatewayRule(ctx context.Context, ruleID string) error
+	ListGatewayRulesByName(ctx context.Context, name string) (*GatewayRuleResult, error)
 
 	// Gateway List operations
-	CreateGatewayList(params GatewayListParams) (*GatewayListResult, error)
-	GetGatewayList(listID string) (*GatewayListResult, error)
-	UpdateGatewayList(listID string, params GatewayListParams) (*GatewayListResult, error)
-	DeleteGatewayList(listID string) error
-	ListGatewayListsByName(name string) (*GatewayListResult, error)
+	CreateGatewayList(ctx context.Context, params GatewayListParams) (*GatewayListResult, error)
+	GetGatewayList(ctx context.Context, listID string) (*GatewayListResult, error)
+	UpdateGatewayList(ctx context.Context, listID string, params GatewayListParams) (*GatewayListResult, error)
+	DeleteGatewayList(ctx context.Context, listID string) error
+	ListGatewayListsByName(ctx context.Context, name string) (*GatewayListResult, error)
 
 	// Split Tunnel operations
-	GetSplitTunnelExclude() ([]SplitTunnelEntry, error)
-	UpdateSplitTunnelExclude(entries []SplitTunnelEntry) error
-	GetSplitTunnelInclude() ([]SplitTunnelEntry, error)
-	UpdateSplitTunnelInclude(entries []SplitTunnelEntry) error
+	GetSplitTunnelExclude(ctx context.Context) ([]SplitTunnelEntry, error)
+	UpdateSplitTunnelExclude(ctx context.Context, entries []SplitTunnelEntry) error
+	GetSplitTunnelInclude(ctx context.Context) ([]SplitTunnelEntry, error)
+	UpdateSplitTunnelInclude(ctx context.Context, entries []SplitTunnelEntry) error
 
 	// Fallback Domain operations
-	GetFallbackDomains() ([]FallbackDomainEntry, error)
-	UpdateFallbackDomains(entries []FallbackDomainEntry) error
+	GetFallbackDomains(ctx context.Context) ([]FallbackDomainEntry, error)
+	UpdateFallbackDomains(ctx context.Context, entries []FallbackDomainEntry) error
 
 	// WARP Connector operations
-	CreateWARPConnector(name string) (*WARPConnectorResult, error)
-	GetWARPConnectorToken(connectorID string) (*WARPConnectorTokenResult, error)
-	DeleteWARPConnector(connectorID string) error
+	CreateWARPConnector(ctx context.Context, name string) (*WARPConnectorResult, error)
+	GetWARPConnectorToken(ctx context.Context, connectorID string) (*WARPConnectorTokenResult, error)
+	DeleteWARPConnector(ctx context.Context, connectorID string) error
 
 	// Gateway Configuration operations
-	UpdateGatewayConfiguration(params GatewayConfigurationParams) (*GatewayConfigurationResult, error)
+	UpdateGatewayConfiguration(ctx context.Context, params GatewayConfigurationParams) (*GatewayConfigurationResult, error)
 }
 
 // Ensure API implements CloudflareClient

@@ -152,13 +152,54 @@ type AccessApplicationSpec struct {
 	// +kubebuilder:validation:Optional
 	TargetContexts []AccessInfrastructureTargetContext `json:"targetContexts,omitempty"`
 
-	// Policies defines the access policies for this application.
+	// Policies defines the inline access policies for this application.
+	// These policies are defined directly within the AccessApplication.
 	// +kubebuilder:validation:Optional
 	Policies []AccessPolicyRef `json:"policies,omitempty"`
+
+	// ReusablePolicyRefs references reusable AccessPolicy resources.
+	// These policies are managed independently and can be shared across multiple applications.
+	// Reusable policies are applied in addition to inline policies.
+	// +kubebuilder:validation:Optional
+	ReusablePolicyRefs []ReusablePolicyRef `json:"reusablePolicyRefs,omitempty"`
 
 	// Cloudflare contains the Cloudflare API credentials and account information.
 	// +kubebuilder:validation:Required
 	Cloudflare CloudflareDetails `json:"cloudflare"`
+}
+
+// ReusablePolicyRef references a reusable AccessPolicy resource.
+// Exactly one of name, cloudflareId, or cloudflareName must be specified.
+type ReusablePolicyRef struct {
+	// Name is the name of a K8s AccessPolicy resource.
+	// The controller will look up the AccessPolicy CR and use its PolicyID.
+	// Mutually exclusive with cloudflareId and cloudflareName.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name,omitempty"`
+
+	// CloudflareID is the UUID of an existing Cloudflare reusable Access Policy.
+	// Use this to directly reference a Cloudflare-managed policy
+	// without creating a corresponding Kubernetes AccessPolicy resource.
+	// Mutually exclusive with name and cloudflareName.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`
+	CloudflareID string `json:"cloudflareId,omitempty"`
+
+	// CloudflareName is the display name of an existing Cloudflare reusable Access Policy.
+	// The controller will resolve this name to a PolicyID via the Cloudflare API.
+	// Use this when you want to reference a Cloudflare policy by name
+	// (e.g., policies created via Terraform or the Cloudflare dashboard).
+	// Mutually exclusive with name and cloudflareId.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=255
+	CloudflareName string `json:"cloudflareName,omitempty"`
+
+	// Precedence overrides the policy's default precedence when attached to this application.
+	// If not specified, the policy's own precedence value is used.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=1
+	Precedence *int `json:"precedence,omitempty"`
 }
 
 // AccessDestination represents a destination for an Access Application.
@@ -680,6 +721,31 @@ type ResolvedPolicyStatus struct {
 	Decision string `json:"decision,omitempty"`
 }
 
+// ResolvedReusablePolicyStatus contains resolved reusable policy information.
+type ResolvedReusablePolicyStatus struct {
+	// PolicyID is the Cloudflare reusable policy ID.
+	// +kubebuilder:validation:Optional
+	PolicyID string `json:"policyId,omitempty"`
+
+	// PolicyName is the name of the reusable policy (for display purposes).
+	// +kubebuilder:validation:Optional
+	PolicyName string `json:"policyName,omitempty"`
+
+	// Source indicates how the policy was resolved.
+	// Possible values: k8s, cloudflareId, cloudflareName
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=k8s;cloudflareId;cloudflareName
+	Source string `json:"source,omitempty"`
+
+	// Precedence is the policy precedence when attached to this application.
+	// +kubebuilder:validation:Optional
+	Precedence int `json:"precedence,omitempty"`
+
+	// Decision is the policy decision (allow, deny, bypass, non_identity).
+	// +kubebuilder:validation:Optional
+	Decision string `json:"decision,omitempty"`
+}
+
 // AccessApplicationStatus defines the observed state of AccessApplication
 type AccessApplicationStatus struct {
 	// ApplicationID is the Cloudflare ID of the Access Application.
@@ -710,12 +776,17 @@ type AccessApplicationStatus struct {
 	// +kubebuilder:validation:Optional
 	SaasAppClientID string `json:"saasAppClientId,omitempty"`
 
-	// ResolvedPolicies contains the resolved policy information for each policy.
+	// ResolvedPolicies contains the resolved policy information for each inline policy.
 	// This helps with debugging and understanding policy state.
 	// +kubebuilder:validation:Optional
 	// +listType=map
 	// +listMapKey=precedence
 	ResolvedPolicies []ResolvedPolicyStatus `json:"resolvedPolicies,omitempty"`
+
+	// ResolvedReusablePolicies contains the resolved reusable policy information.
+	// These are policies referenced via reusablePolicyRefs.
+	// +kubebuilder:validation:Optional
+	ResolvedReusablePolicies []ResolvedReusablePolicyStatus `json:"resolvedReusablePolicies,omitempty"`
 
 	// Conditions represent the latest available observations.
 	// +kubebuilder:validation:Optional

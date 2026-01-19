@@ -9,7 +9,7 @@ import (
 )
 
 // SyncResourceType defines the type of Cloudflare resource being synced
-// +kubebuilder:validation:Enum=TunnelConfiguration;TunnelLifecycle;DNSRecord;AccessApplication;AccessGroup;AccessServiceToken;AccessIdentityProvider;VirtualNetwork;NetworkRoute;PrivateService;R2Bucket;R2BucketDomain;R2BucketNotification;ZoneRuleset;TransformRule;RedirectRule;GatewayRule;GatewayList;GatewayConfiguration;OriginCACertificate;CloudflareDomain;DomainRegistration;DevicePostureRule;DeviceSettingsPolicy;WARPConnector
+// +kubebuilder:validation:Enum=TunnelConfiguration;TunnelLifecycle;DNSRecord;AccessApplication;AccessGroup;AccessPolicy;AccessServiceToken;AccessIdentityProvider;VirtualNetwork;NetworkRoute;PrivateService;R2Bucket;R2BucketDomain;R2BucketNotification;ZoneRuleset;TransformRule;RedirectRule;GatewayRule;GatewayList;GatewayConfiguration;OriginCACertificate;CloudflareDomain;DomainRegistration;DevicePostureRule;DeviceSettingsPolicy;WARPConnector
 type SyncResourceType string
 
 const (
@@ -23,6 +23,8 @@ const (
 	SyncResourceAccessApplication SyncResourceType = "AccessApplication"
 	// SyncResourceAccessGroup represents a Cloudflare Access group
 	SyncResourceAccessGroup SyncResourceType = "AccessGroup"
+	// SyncResourceAccessPolicy represents a Cloudflare reusable Access policy
+	SyncResourceAccessPolicy SyncResourceType = "AccessPolicy"
 	// SyncResourceAccessServiceToken represents a Cloudflare Access service token
 	SyncResourceAccessServiceToken SyncResourceType = "AccessServiceToken"
 	// SyncResourceAccessIdentityProvider represents a Cloudflare Access identity provider

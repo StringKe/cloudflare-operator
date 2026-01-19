@@ -192,27 +192,38 @@ func TestGatewayListConfig(t *testing.T) {
 	listTypes := []struct {
 		name     string
 		listType string
-		items    []string
+		items    []GatewayListItem
 	}{
 		{
 			name:     "domain list",
 			listType: "DOMAIN",
-			items:    []string{"example.com", "test.com"},
+			items: []GatewayListItem{
+				{Value: "example.com", Description: "Example domain"},
+				{Value: "test.com"},
+			},
 		},
 		{
 			name:     "IP list",
 			listType: "IP",
-			items:    []string{"10.0.0.1", "10.0.0.2"},
+			items: []GatewayListItem{
+				{Value: "10.0.0.1", Description: "Server 1"},
+				{Value: "10.0.0.2", Description: "Server 2"},
+			},
 		},
 		{
 			name:     "URL list",
 			listType: "URL",
-			items:    []string{"https://example.com/path"},
+			items: []GatewayListItem{
+				{Value: "https://example.com/path"},
+			},
 		},
 		{
 			name:     "serial number list",
 			listType: "SERIAL",
-			items:    []string{"ABC123", "XYZ789"},
+			items: []GatewayListItem{
+				{Value: "ABC123"},
+				{Value: "XYZ789", Description: "Device XYZ"},
+			},
 		},
 	}
 
@@ -229,6 +240,23 @@ func TestGatewayListConfig(t *testing.T) {
 			assert.Equal(t, tt.items, config.Items)
 		})
 	}
+}
+
+func TestGatewayListItem(t *testing.T) {
+	// Test item with description
+	itemWithDesc := GatewayListItem{
+		Value:       "example.com",
+		Description: "Main website",
+	}
+	assert.Equal(t, "example.com", itemWithDesc.Value)
+	assert.Equal(t, "Main website", itemWithDesc.Description)
+
+	// Test item without description
+	itemWithoutDesc := GatewayListItem{
+		Value: "test.com",
+	}
+	assert.Equal(t, "test.com", itemWithoutDesc.Value)
+	assert.Empty(t, itemWithoutDesc.Description)
 }
 
 func TestGatewayConfigurationConfig(t *testing.T) {

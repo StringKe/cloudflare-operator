@@ -17,6 +17,8 @@ const (
 	ResourceTypeAccessApplication = v1alpha2.SyncResourceType("AccessApplication")
 	// ResourceTypeAccessGroup is the SyncState resource type for AccessGroup
 	ResourceTypeAccessGroup = v1alpha2.SyncResourceType("AccessGroup")
+	// ResourceTypeAccessPolicy is the SyncState resource type for reusable AccessPolicy
+	ResourceTypeAccessPolicy = v1alpha2.SyncResourceType("AccessPolicy")
 	// ResourceTypeAccessServiceToken is the SyncState resource type for AccessServiceToken
 	ResourceTypeAccessServiceToken = v1alpha2.SyncResourceType("AccessServiceToken")
 	// ResourceTypeAccessIdentityProvider is the SyncState resource type for AccessIdentityProvider
@@ -25,6 +27,7 @@ const (
 	// Priority constants
 	PriorityAccessApplication      = 100
 	PriorityAccessGroup            = 100
+	PriorityAccessPolicy           = 100
 	PriorityAccessServiceToken     = 100
 	PriorityAccessIdentityProvider = 100
 )
@@ -93,8 +96,10 @@ type AccessApplicationConfig struct {
 	AppLauncherCustomization *v1alpha2.AccessAppLauncherCustomization `json:"appLauncherCustomization,omitempty"`
 	// TargetContexts for infrastructure applications
 	TargetContexts []v1alpha2.AccessInfrastructureTargetContext `json:"targetContexts,omitempty"`
-	// Policies defines access policies
+	// Policies defines inline access policies
 	Policies []AccessPolicyConfig `json:"policies,omitempty"`
+	// ReusablePolicyRefs references reusable AccessPolicy resources
+	ReusablePolicyRefs []ReusablePolicyRefConfig `json:"reusablePolicyRefs,omitempty"`
 }
 
 // AccessPolicyConfig contains policy configuration for AccessApplication
@@ -266,4 +271,77 @@ type AccessServiceTokenSyncResult struct {
 // AccessIdentityProviderSyncResult contains AccessIdentityProvider-specific sync result.
 type AccessIdentityProviderSyncResult struct {
 	SyncResult
+}
+
+// ReusableAccessPolicyConfig contains the configuration for a reusable AccessPolicy.
+type ReusableAccessPolicyConfig struct {
+	// Name is the policy name in Cloudflare
+	Name string `json:"name"`
+	// Decision is the policy decision (allow, deny, bypass, non_identity)
+	Decision string `json:"decision"`
+	// Precedence is the order of evaluation
+	Precedence int `json:"precedence,omitempty"`
+	// Include rules (OR logic)
+	Include []v1alpha2.AccessGroupRule `json:"include"`
+	// Exclude rules (NOT logic)
+	Exclude []v1alpha2.AccessGroupRule `json:"exclude,omitempty"`
+	// Require rules (AND logic)
+	Require []v1alpha2.AccessGroupRule `json:"require,omitempty"`
+	// SessionDuration overrides application session duration
+	SessionDuration string `json:"sessionDuration,omitempty"`
+	// IsolationRequired enables browser isolation
+	IsolationRequired *bool `json:"isolationRequired,omitempty"`
+	// PurposeJustificationRequired requires users to provide justification
+	PurposeJustificationRequired *bool `json:"purposeJustificationRequired,omitempty"`
+	// PurposeJustificationPrompt is the prompt shown when justification is required
+	PurposeJustificationPrompt string `json:"purposeJustificationPrompt,omitempty"`
+	// ApprovalRequired requires admin approval for access
+	ApprovalRequired *bool `json:"approvalRequired,omitempty"`
+	// ApprovalGroups defines the groups that can approve access
+	ApprovalGroups []ApprovalGroupConfig `json:"approvalGroups,omitempty"`
+}
+
+// ApprovalGroupConfig contains approval group configuration.
+type ApprovalGroupConfig struct {
+	// EmailAddresses is the list of email addresses that can approve
+	EmailAddresses []string `json:"emailAddresses,omitempty"`
+	// EmailListUUID is the UUID of an email list that can approve
+	EmailListUUID string `json:"emailListUuid,omitempty"`
+	// ApprovalsNeeded is the number of approvals required
+	ApprovalsNeeded int `json:"approvalsNeeded,omitempty"`
+}
+
+// ReusableAccessPolicyRegisterOptions contains options for registering a reusable AccessPolicy.
+type ReusableAccessPolicyRegisterOptions struct {
+	// AccountID is the Cloudflare account ID
+	AccountID string
+	// PolicyID is the existing Cloudflare policy ID (empty for new)
+	PolicyID string
+	// Source is the K8s resource source
+	Source service.Source
+	// Config is the policy configuration
+	Config ReusableAccessPolicyConfig
+	// CredentialsRef references the CloudflareCredentials resource
+	CredentialsRef v1alpha2.CredentialsReference
+}
+
+// ReusableAccessPolicySyncResult contains reusable AccessPolicy-specific sync result.
+type ReusableAccessPolicySyncResult struct {
+	SyncResult
+	// Name is the policy name
+	Name string
+	// Decision is the policy decision
+	Decision string
+}
+
+// ReusablePolicyRefConfig contains a reference to a reusable policy for AccessApplication.
+type ReusablePolicyRefConfig struct {
+	// Name is the K8s AccessPolicy resource name
+	Name string `json:"name,omitempty"`
+	// CloudflareID is a direct Cloudflare policy ID reference
+	CloudflareID string `json:"cloudflareId,omitempty"`
+	// CloudflareName is a Cloudflare policy name to look up
+	CloudflareName string `json:"cloudflareName,omitempty"`
+	// Precedence overrides the policy's default precedence
+	Precedence *int `json:"precedence,omitempty"`
 }

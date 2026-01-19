@@ -209,6 +209,8 @@ func (r *Reconciler) registerRule(
 			TargetURL:           ruleSpec.TargetURL,
 			StatusCode:          int(ruleSpec.StatusCode),
 			PreserveQueryString: ruleSpec.PreserveQueryString,
+			IncludeSubdomains:   ruleSpec.IncludeSubdomains,
+			SubpathMatching:     ruleSpec.SubpathMatching,
 		}
 	}
 

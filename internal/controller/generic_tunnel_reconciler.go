@@ -107,6 +107,7 @@ func setupExistingTunnel(r GenericTunnelReconciler) error {
 	cfAPI.TunnelName = r.GetTunnel().GetSpec().ExistingTunnel.Name
 	cfAPI.TunnelId = r.GetTunnel().GetSpec().ExistingTunnel.Id
 	r.SetCfAPI(cfAPI)
+	ctx := r.GetContext()
 
 	// Read secret for credentials file
 	cfCredFileB64, okCredFile := r.GetCfSecret().Data[r.GetTunnel().GetSpec().Cloudflare.CLOUDFLARE_TUNNEL_CREDENTIAL_FILE]
@@ -122,7 +123,7 @@ func setupExistingTunnel(r GenericTunnelReconciler) error {
 	if okCredFile {
 		r.SetTunnelCreds(string(cfCredFileB64))
 	} else {
-		creds, err := r.GetCfAPI().GetTunnelCreds(string(cfSecretB64))
+		creds, err := r.GetCfAPI().GetTunnelCreds(ctx, string(cfSecretB64))
 		if err != nil {
 			r.GetLog().Error(err, "error getting tunnel credentials from secret")
 			r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning, "ErrSpecApi", "Error in getting Tunnel Credentials from Secret")
@@ -764,14 +765,16 @@ func updateTunnelStatus(r GenericTunnelReconciler) error {
 		return err
 	}
 
+	ctx := r.GetContext()
+
 	// Validate Account and Tunnel (required)
-	if _, err := r.GetCfAPI().GetAccountId(); err != nil {
+	if _, err := r.GetCfAPI().GetAccountId(ctx); err != nil {
 		r.GetLog().Error(err, "Failed to validate Account ID")
 		r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning,
 			"ErrSpecApi", "Error validating Cloudflare Account ID")
 		return err
 	}
-	if _, err := r.GetCfAPI().GetTunnelId(); err != nil {
+	if _, err := r.GetCfAPI().GetTunnelId(ctx); err != nil {
 		r.GetLog().Error(err, "Failed to validate Tunnel ID")
 		r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeWarning,
 			"ErrSpecApi", "Error validating Cloudflare Tunnel ID")
@@ -781,7 +784,7 @@ func updateTunnelStatus(r GenericTunnelReconciler) error {
 	// Validate Zone (optional - only if domain is specified)
 	// Zone is only needed for DNS record management, not for tunnel operation
 	if r.GetCfAPI().Domain != "" {
-		if _, err := r.GetCfAPI().GetZoneId(); err != nil {
+		if _, err := r.GetCfAPI().GetZoneId(ctx); err != nil {
 			r.GetLog().Info("Zone validation failed, DNS features may not work",
 				"domain", r.GetCfAPI().Domain, "error", err.Error())
 			// Don't return error - tunnel can still work without zone

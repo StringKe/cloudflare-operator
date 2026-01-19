@@ -79,10 +79,9 @@ func (r *DomainRegistrationController) Reconcile(ctx context.Context, req ctrl.R
 		return r.handleDeletion(ctx, syncState)
 	}
 
-	// Add finalizer if not present
+	// Add finalizer if not present (with conflict retry)
 	if !controllerutil.ContainsFinalizer(syncState, DomainRegistrationFinalizerName) {
-		controllerutil.AddFinalizer(syncState, DomainRegistrationFinalizerName)
-		if err := r.Client.Update(ctx, syncState); err != nil {
+		if err := common.AddFinalizerWithRetry(ctx, r.Client, syncState, DomainRegistrationFinalizerName); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{Requeue: true}, nil
@@ -327,9 +326,8 @@ func (r *DomainRegistrationController) handleDeletion(
 	logger.Info("DomainRegistration SyncState being deleted - domain registration will be preserved on Cloudflare",
 		"domainId", syncState.Spec.CloudflareID)
 
-	// Remove finalizer
-	controllerutil.RemoveFinalizer(syncState, DomainRegistrationFinalizerName)
-	if err := r.Client.Update(ctx, syncState); err != nil {
+	// Remove finalizer (with conflict retry)
+	if err := common.RemoveFinalizerWithRetry(ctx, r.Client, syncState, DomainRegistrationFinalizerName); err != nil {
 		logger.Error(err, "Failed to remove finalizer")
 		return ctrl.Result{}, err
 	}

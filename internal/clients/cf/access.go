@@ -217,13 +217,12 @@ type AccessApplicationResult struct {
 }
 
 // CreateAccessApplication creates a new Access Application.
-func (c *API) CreateAccessApplication(params AccessApplicationParams) (*AccessApplicationResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) CreateAccessApplication(ctx context.Context, params AccessApplicationParams) (*AccessApplicationResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	createParams := cloudflare.CreateAccessApplicationParams{
@@ -248,76 +247,8 @@ func (c *API) CreateAccessApplication(params AccessApplicationParams) (*AccessAp
 		PrivateAddress:           params.PrivateAddress,
 	}
 
-	// Set domain type
-	if params.DomainType != "" {
-		createParams.DomainType = cloudflare.AccessDestinationType(params.DomainType)
-	}
-
-	// Set destinations (including Domain and SelfHostedDomains as public destinations)
-	// Cloudflare API requires all domains to be in destinations for validation
-	destinations := convertDestinationsToCloudflare(params.Destinations)
-	// Add main domain as public destination if not already included
-	if params.Domain != "" {
-		destinations = append(destinations, cloudflare.AccessDestination{
-			Type: cloudflare.AccessDestinationType("public"),
-			URI:  params.Domain,
-		})
-	}
-	// Convert SelfHostedDomains to public destinations
-	for _, domain := range params.SelfHostedDomains {
-		destinations = append(destinations, cloudflare.AccessDestination{
-			Type: cloudflare.AccessDestinationType("public"),
-			URI:  domain,
-		})
-	}
-	if len(destinations) > 0 {
-		createParams.Destinations = destinations
-	}
-
-	// Set CORS headers
-	if params.CorsHeaders != nil {
-		createParams.CorsHeaders = convertCorsHeadersToCloudflare(params.CorsHeaders)
-	}
-
-	// Set SaaS app configuration
-	if params.SaasApp != nil {
-		createParams.SaasApplication = convertSaasAppToCloudflare(params.SaasApp)
-	}
-
-	// Set SCIM config
-	if params.SCIMConfig != nil {
-		createParams.SCIMConfig = convertSCIMConfigToCloudflare(params.SCIMConfig)
-	}
-
-	// Set app launcher customization
-	if params.AppLauncherCustomization != nil {
-		createParams.AccessAppLauncherCustomization = convertAppLauncherCustomizationToCloudflare(params.AppLauncherCustomization)
-	}
-
-	// Set target contexts for infrastructure apps
-	if len(params.TargetContexts) > 0 {
-		contexts := convertTargetContextsToCloudflare(params.TargetContexts)
-		createParams.TargetContexts = &contexts
-	}
-
-	// Set gateway rules
-	if len(params.GatewayRules) > 0 {
-		gatewayRules := make([]cloudflare.AccessApplicationGatewayRule, 0, len(params.GatewayRules))
-		for _, ruleID := range params.GatewayRules {
-			gatewayRules = append(gatewayRules, cloudflare.AccessApplicationGatewayRule{ID: ruleID})
-		}
-		createParams.GatewayRules = gatewayRules
-	}
-
-	if params.AllowAuthenticateViaWarp != nil {
-		createParams.AllowAuthenticateViaWarp = params.AllowAuthenticateViaWarp
-	}
-	if len(params.Tags) > 0 {
-		createParams.Tags = params.Tags
-	}
-	if len(params.CustomPages) > 0 {
-		createParams.CustomPages = params.CustomPages
-	}
+	// Set optional fields using helper functions
+	applyCreateAccessAppOptionalParams(&createParams, params)
 
 	app, err := c.CloudflareClient.CreateAccessApplication(ctx, rc, createParams)
 	if err != nil {
@@ -331,13 +262,12 @@ func (c *API) CreateAccessApplication(params AccessApplicationParams) (*AccessAp
 }
 
 // GetAccessApplication retrieves an Access Application by ID.
-func (c *API) GetAccessApplication(applicationID string) (*AccessApplicationResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) GetAccessApplication(ctx context.Context, applicationID string) (*AccessApplicationResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	app, err := c.CloudflareClient.GetAccessApplication(ctx, rc, applicationID)
@@ -350,13 +280,12 @@ func (c *API) GetAccessApplication(applicationID string) (*AccessApplicationResu
 }
 
 // UpdateAccessApplication updates an existing Access Application.
-func (c *API) UpdateAccessApplication(applicationID string, params AccessApplicationParams) (*AccessApplicationResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) UpdateAccessApplication(ctx context.Context, applicationID string, params AccessApplicationParams) (*AccessApplicationResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	updateParams := cloudflare.UpdateAccessApplicationParams{
@@ -382,76 +311,8 @@ func (c *API) UpdateAccessApplication(applicationID string, params AccessApplica
 		PrivateAddress:           params.PrivateAddress,
 	}
 
-	// Set domain type
-	if params.DomainType != "" {
-		updateParams.DomainType = cloudflare.AccessDestinationType(params.DomainType)
-	}
-
-	// Set destinations (including Domain and SelfHostedDomains as public destinations)
-	// Cloudflare API requires all domains to be in destinations for validation
-	destinations := convertDestinationsToCloudflare(params.Destinations)
-	// Add main domain as public destination if not already included
-	if params.Domain != "" {
-		destinations = append(destinations, cloudflare.AccessDestination{
-			Type: cloudflare.AccessDestinationType("public"),
-			URI:  params.Domain,
-		})
-	}
-	// Convert SelfHostedDomains to public destinations
-	for _, domain := range params.SelfHostedDomains {
-		destinations = append(destinations, cloudflare.AccessDestination{
-			Type: cloudflare.AccessDestinationType("public"),
-			URI:  domain,
-		})
-	}
-	if len(destinations) > 0 {
-		updateParams.Destinations = destinations
-	}
-
-	// Set CORS headers
-	if params.CorsHeaders != nil {
-		updateParams.CorsHeaders = convertCorsHeadersToCloudflare(params.CorsHeaders)
-	}
-
-	// Set SaaS app configuration
-	if params.SaasApp != nil {
-		updateParams.SaasApplication = convertSaasAppToCloudflare(params.SaasApp)
-	}
-
-	// Set SCIM config
-	if params.SCIMConfig != nil {
-		updateParams.SCIMConfig = convertSCIMConfigToCloudflare(params.SCIMConfig)
-	}
-
-	// Set app launcher customization
-	if params.AppLauncherCustomization != nil {
-		updateParams.AccessAppLauncherCustomization = convertAppLauncherCustomizationToCloudflare(params.AppLauncherCustomization)
-	}
-
-	// Set target contexts for infrastructure apps
-	if len(params.TargetContexts) > 0 {
-		contexts := convertTargetContextsToCloudflare(params.TargetContexts)
-		updateParams.TargetContexts = &contexts
-	}
-
-	// Set gateway rules
-	if len(params.GatewayRules) > 0 {
-		gatewayRules := make([]cloudflare.AccessApplicationGatewayRule, 0, len(params.GatewayRules))
-		for _, ruleID := range params.GatewayRules {
-			gatewayRules = append(gatewayRules, cloudflare.AccessApplicationGatewayRule{ID: ruleID})
-		}
-		updateParams.GatewayRules = gatewayRules
-	}
-
-	if params.AllowAuthenticateViaWarp != nil {
-		updateParams.AllowAuthenticateViaWarp = params.AllowAuthenticateViaWarp
-	}
-	if len(params.Tags) > 0 {
-		updateParams.Tags = params.Tags
-	}
-	if len(params.CustomPages) > 0 {
-		updateParams.CustomPages = params.CustomPages
-	}
+	// Set optional fields using helper functions
+	applyUpdateAccessAppOptionalParams(&updateParams, params)
 
 	app, err := c.CloudflareClient.UpdateAccessApplication(ctx, rc, updateParams)
 	if err != nil {
@@ -466,13 +327,12 @@ func (c *API) UpdateAccessApplication(applicationID string, params AccessApplica
 
 // DeleteAccessApplication deletes an Access Application.
 // This method is idempotent - returns nil if the application is already deleted.
-func (c *API) DeleteAccessApplication(applicationID string) error {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) DeleteAccessApplication(ctx context.Context, applicationID string) error {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	err := c.CloudflareClient.DeleteAccessApplication(ctx, rc, applicationID)
@@ -491,32 +351,33 @@ func (c *API) DeleteAccessApplication(applicationID string) error {
 
 // AccessPolicyParams contains parameters for creating/updating an Access Policy.
 type AccessPolicyParams struct {
-	ApplicationID   string                  // Required: The Application ID this policy belongs to
-	Name            string                  // Policy name
-	Decision        string                  // allow, deny, bypass, non_identity
-	Precedence      int                     // Order of evaluation (lower = higher priority)
-	Include         []AccessGroupRuleParams // Include rules (e.g., group references)
-	Exclude         []AccessGroupRuleParams // Exclude rules
-	Require         []AccessGroupRuleParams // Require rules
-	SessionDuration *string                 // Optional session duration override
+	ApplicationID    string                  // Required: The Application ID this policy belongs to
+	Name             string                  // Policy name
+	Decision         string                  // allow, deny, bypass, non_identity
+	Precedence       int                     // Order of evaluation (lower = higher priority)
+	Include          []AccessGroupRuleParams // Include rules (e.g., group references)
+	Exclude          []AccessGroupRuleParams // Exclude rules
+	Require          []AccessGroupRuleParams // Require rules
+	SessionDuration  *string                 // Optional session duration override
+	ReusablePolicyID string                  // Optional: Reference to a reusable policy (instead of inline rules)
 }
 
 // AccessPolicyResult contains the result of an Access Policy operation.
 type AccessPolicyResult struct {
-	ID         string
-	Name       string
-	Decision   string
-	Precedence int
+	ID               string
+	Name             string
+	Decision         string
+	Precedence       int
+	ReusablePolicyID *string // Set if this policy references a reusable policy
 }
 
 // CreateAccessPolicy creates a new Access Policy for an application.
-func (c *API) CreateAccessPolicy(params AccessPolicyParams) (*AccessPolicyResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) CreateAccessPolicy(ctx context.Context, params AccessPolicyParams) (*AccessPolicyResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	createParams := cloudflare.CreateAccessPolicyParams{
@@ -552,13 +413,12 @@ func (c *API) CreateAccessPolicy(params AccessPolicyParams) (*AccessPolicyResult
 }
 
 // GetAccessPolicy retrieves an Access Policy by ID.
-func (c *API) GetAccessPolicy(applicationID, policyID string) (*AccessPolicyResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) GetAccessPolicy(ctx context.Context, applicationID, policyID string) (*AccessPolicyResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	policy, err := c.CloudflareClient.GetAccessPolicy(ctx, rc, cloudflare.GetAccessPolicyParams{
@@ -580,13 +440,12 @@ func (c *API) GetAccessPolicy(applicationID, policyID string) (*AccessPolicyResu
 }
 
 // UpdateAccessPolicy updates an existing Access Policy.
-func (c *API) UpdateAccessPolicy(policyID string, params AccessPolicyParams) (*AccessPolicyResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) UpdateAccessPolicy(ctx context.Context, policyID string, params AccessPolicyParams) (*AccessPolicyResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	updateParams := cloudflare.UpdateAccessPolicyParams{
@@ -624,13 +483,12 @@ func (c *API) UpdateAccessPolicy(policyID string, params AccessPolicyParams) (*A
 
 // DeleteAccessPolicy deletes an Access Policy.
 // This method is idempotent - returns nil if the policy is already deleted.
-func (c *API) DeleteAccessPolicy(applicationID, policyID string) error {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) DeleteAccessPolicy(ctx context.Context, applicationID, policyID string) error {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	err := c.CloudflareClient.DeleteAccessPolicy(ctx, rc, cloudflare.DeleteAccessPolicyParams{
@@ -654,13 +512,12 @@ func (c *API) DeleteAccessPolicy(applicationID, policyID string) error {
 }
 
 // ListAccessPolicies lists all Access Policies for an application.
-func (c *API) ListAccessPolicies(applicationID string) ([]AccessPolicyResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) ListAccessPolicies(ctx context.Context, applicationID string) ([]AccessPolicyResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	policies, _, err := c.CloudflareClient.ListAccessPolicies(ctx, rc, cloudflare.ListAccessPoliciesParams{
@@ -674,6 +531,295 @@ func (c *API) ListAccessPolicies(applicationID string) ([]AccessPolicyResult, er
 	results := make([]AccessPolicyResult, 0, len(policies))
 	for _, p := range policies {
 		results = append(results, AccessPolicyResult{
+			ID:         p.ID,
+			Name:       p.Name,
+			Decision:   p.Decision,
+			Precedence: p.Precedence,
+		})
+	}
+
+	return results, nil
+}
+
+// ============================================================================
+// Reusable Access Policy Methods
+// ============================================================================
+
+// ReusableAccessPolicyParams contains parameters for creating/updating a reusable Access Policy.
+type ReusableAccessPolicyParams struct {
+	Name                         string
+	Decision                     string // allow, deny, bypass, non_identity
+	Precedence                   int
+	Include                      []AccessGroupRuleParams
+	Exclude                      []AccessGroupRuleParams
+	Require                      []AccessGroupRuleParams
+	SessionDuration              *string
+	IsolationRequired            *bool
+	PurposeJustificationRequired *bool
+	PurposeJustificationPrompt   string
+	ApprovalRequired             *bool
+	ApprovalGroups               []AccessApprovalGroupParams
+}
+
+// AccessApprovalGroupParams contains approval group configuration.
+type AccessApprovalGroupParams struct {
+	EmailAddresses  []string
+	EmailListUUID   string
+	ApprovalsNeeded int
+}
+
+// ReusableAccessPolicyResult contains the result of a reusable Access Policy operation.
+type ReusableAccessPolicyResult struct {
+	ID         string
+	Name       string
+	Decision   string
+	Precedence int
+}
+
+// CreateReusableAccessPolicy creates a new reusable Access Policy (not attached to any application).
+func (c *API) CreateReusableAccessPolicy(ctx context.Context, params ReusableAccessPolicyParams) (*ReusableAccessPolicyResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
+		c.Log.Error(err, "error getting account ID")
+		return nil, err
+	}
+
+	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
+
+	// Create policy with empty ApplicationID to make it reusable
+	createParams := cloudflare.CreateAccessPolicyParams{
+		ApplicationID: "", // Empty = reusable policy
+		Name:          params.Name,
+		Decision:      params.Decision,
+		Precedence:    params.Precedence,
+		Include:       ConvertRulesToSDK(params.Include),
+		Exclude:       ConvertRulesToSDK(params.Exclude),
+		Require:       ConvertRulesToSDK(params.Require),
+	}
+
+	if params.SessionDuration != nil {
+		createParams.SessionDuration = params.SessionDuration
+	}
+
+	if params.IsolationRequired != nil {
+		createParams.IsolationRequired = params.IsolationRequired
+	}
+
+	if params.PurposeJustificationRequired != nil {
+		createParams.PurposeJustificationRequired = params.PurposeJustificationRequired
+	}
+
+	if params.PurposeJustificationPrompt != "" {
+		createParams.PurposeJustificationPrompt = &params.PurposeJustificationPrompt
+	}
+
+	if params.ApprovalRequired != nil {
+		createParams.ApprovalRequired = params.ApprovalRequired
+	}
+
+	if len(params.ApprovalGroups) > 0 {
+		approvalGroups := make([]cloudflare.AccessApprovalGroup, 0, len(params.ApprovalGroups))
+		for _, ag := range params.ApprovalGroups {
+			approvalGroups = append(approvalGroups, cloudflare.AccessApprovalGroup{
+				EmailAddresses:  ag.EmailAddresses,
+				EmailListUuid:   ag.EmailListUUID,
+				ApprovalsNeeded: ag.ApprovalsNeeded,
+			})
+		}
+		createParams.ApprovalGroups = approvalGroups
+	}
+
+	policy, err := c.CloudflareClient.CreateAccessPolicy(ctx, rc, createParams)
+	if err != nil {
+		c.Log.Error(err, "error creating reusable access policy", "name", params.Name)
+		return nil, err
+	}
+
+	c.Log.Info("Reusable Access Policy created", "id", policy.ID, "name", policy.Name)
+
+	return &ReusableAccessPolicyResult{
+		ID:         policy.ID,
+		Name:       policy.Name,
+		Decision:   policy.Decision,
+		Precedence: policy.Precedence,
+	}, nil
+}
+
+// GetReusableAccessPolicy retrieves a reusable Access Policy by ID.
+func (c *API) GetReusableAccessPolicy(ctx context.Context, policyID string) (*ReusableAccessPolicyResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
+		c.Log.Error(err, "error getting account ID")
+		return nil, err
+	}
+
+	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
+
+	// Get policy using empty ApplicationID (reusable policy)
+	policy, err := c.CloudflareClient.GetAccessPolicy(ctx, rc, cloudflare.GetAccessPolicyParams{
+		ApplicationID: "", // Empty = reusable policy
+		PolicyID:      policyID,
+	})
+	if err != nil {
+		c.Log.Error(err, "error getting reusable access policy", "policyId", policyID)
+		return nil, err
+	}
+
+	return &ReusableAccessPolicyResult{
+		ID:         policy.ID,
+		Name:       policy.Name,
+		Decision:   policy.Decision,
+		Precedence: policy.Precedence,
+	}, nil
+}
+
+// GetReusableAccessPolicyByName finds a reusable Access Policy by name.
+// Returns nil if no policy with the given name is found.
+func (c *API) GetReusableAccessPolicyByName(ctx context.Context, name string) (*ReusableAccessPolicyResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
+		c.Log.Error(err, "error getting account ID")
+		return nil, err
+	}
+
+	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
+
+	// List reusable policies (empty ApplicationID)
+	policies, _, err := c.CloudflareClient.ListAccessPolicies(ctx, rc, cloudflare.ListAccessPoliciesParams{
+		ApplicationID: "", // Empty = list only reusable policies
+	})
+	if err != nil {
+		c.Log.Error(err, "error listing reusable access policies")
+		return nil, err
+	}
+
+	for _, policy := range policies {
+		if policy.Name == name {
+			return &ReusableAccessPolicyResult{
+				ID:         policy.ID,
+				Name:       policy.Name,
+				Decision:   policy.Decision,
+				Precedence: policy.Precedence,
+			}, nil
+		}
+	}
+
+	return nil, nil // Not found, return nil without error
+}
+
+// UpdateReusableAccessPolicy updates an existing reusable Access Policy.
+func (c *API) UpdateReusableAccessPolicy(ctx context.Context, policyID string, params ReusableAccessPolicyParams) (*ReusableAccessPolicyResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
+		c.Log.Error(err, "error getting account ID")
+		return nil, err
+	}
+
+	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
+
+	updateParams := cloudflare.UpdateAccessPolicyParams{
+		ApplicationID: "", // Empty = reusable policy
+		PolicyID:      policyID,
+		Name:          params.Name,
+		Decision:      params.Decision,
+		Precedence:    params.Precedence,
+		Include:       ConvertRulesToSDK(params.Include),
+		Exclude:       ConvertRulesToSDK(params.Exclude),
+		Require:       ConvertRulesToSDK(params.Require),
+	}
+
+	if params.SessionDuration != nil {
+		updateParams.SessionDuration = params.SessionDuration
+	}
+
+	if params.IsolationRequired != nil {
+		updateParams.IsolationRequired = params.IsolationRequired
+	}
+
+	if params.PurposeJustificationRequired != nil {
+		updateParams.PurposeJustificationRequired = params.PurposeJustificationRequired
+	}
+
+	if params.PurposeJustificationPrompt != "" {
+		updateParams.PurposeJustificationPrompt = &params.PurposeJustificationPrompt
+	}
+
+	if params.ApprovalRequired != nil {
+		updateParams.ApprovalRequired = params.ApprovalRequired
+	}
+
+	if len(params.ApprovalGroups) > 0 {
+		approvalGroups := make([]cloudflare.AccessApprovalGroup, 0, len(params.ApprovalGroups))
+		for _, ag := range params.ApprovalGroups {
+			approvalGroups = append(approvalGroups, cloudflare.AccessApprovalGroup{
+				EmailAddresses:  ag.EmailAddresses,
+				EmailListUuid:   ag.EmailListUUID,
+				ApprovalsNeeded: ag.ApprovalsNeeded,
+			})
+		}
+		updateParams.ApprovalGroups = approvalGroups
+	}
+
+	policy, err := c.CloudflareClient.UpdateAccessPolicy(ctx, rc, updateParams)
+	if err != nil {
+		c.Log.Error(err, "error updating reusable access policy", "policyId", policyID)
+		return nil, err
+	}
+
+	c.Log.Info("Reusable Access Policy updated", "id", policy.ID, "name", policy.Name)
+
+	return &ReusableAccessPolicyResult{
+		ID:         policy.ID,
+		Name:       policy.Name,
+		Decision:   policy.Decision,
+		Precedence: policy.Precedence,
+	}, nil
+}
+
+// DeleteReusableAccessPolicy deletes a reusable Access Policy.
+// This method is idempotent - returns nil if the policy is already deleted.
+func (c *API) DeleteReusableAccessPolicy(ctx context.Context, policyID string) error {
+	if _, err := c.GetAccountId(ctx); err != nil {
+		c.Log.Error(err, "error getting account ID")
+		return err
+	}
+
+	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
+
+	err := c.CloudflareClient.DeleteAccessPolicy(ctx, rc, cloudflare.DeleteAccessPolicyParams{
+		ApplicationID: "", // Empty = reusable policy
+		PolicyID:      policyID,
+	})
+	if err != nil {
+		if IsNotFoundError(err) {
+			c.Log.Info("Reusable Access Policy already deleted (not found)", "policyId", policyID)
+			return nil
+		}
+		c.Log.Error(err, "error deleting reusable access policy", "policyId", policyID)
+		return err
+	}
+
+	c.Log.Info("Reusable Access Policy deleted", "policyId", policyID)
+	return nil
+}
+
+// ListReusableAccessPolicies lists all reusable Access Policies.
+func (c *API) ListReusableAccessPolicies(ctx context.Context) ([]ReusableAccessPolicyResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
+		c.Log.Error(err, "error getting account ID")
+		return nil, err
+	}
+
+	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
+
+	// List reusable policies (empty ApplicationID)
+	policies, _, err := c.CloudflareClient.ListAccessPolicies(ctx, rc, cloudflare.ListAccessPoliciesParams{
+		ApplicationID: "", // Empty = list only reusable policies
+	})
+	if err != nil {
+		c.Log.Error(err, "error listing reusable access policies")
+		return nil, err
+	}
+
+	results := make([]ReusableAccessPolicyResult, 0, len(policies))
+	for _, p := range policies {
+		results = append(results, ReusableAccessPolicyResult{
 			ID:         p.ID,
 			Name:       p.Name,
 			Decision:   p.Decision,
@@ -911,13 +1057,12 @@ type AccessGroupResult struct {
 }
 
 // CreateAccessGroup creates a new Access Group.
-func (c *API) CreateAccessGroup(params AccessGroupParams) (*AccessGroupResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) CreateAccessGroup(ctx context.Context, params AccessGroupParams) (*AccessGroupResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	createParams := cloudflare.CreateAccessGroupParams{
@@ -942,13 +1087,12 @@ func (c *API) CreateAccessGroup(params AccessGroupParams) (*AccessGroupResult, e
 }
 
 // GetAccessGroup retrieves an Access Group by ID.
-func (c *API) GetAccessGroup(groupID string) (*AccessGroupResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) GetAccessGroup(ctx context.Context, groupID string) (*AccessGroupResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	group, err := c.CloudflareClient.GetAccessGroup(ctx, rc, groupID)
@@ -964,13 +1108,12 @@ func (c *API) GetAccessGroup(groupID string) (*AccessGroupResult, error) {
 }
 
 // UpdateAccessGroup updates an existing Access Group.
-func (c *API) UpdateAccessGroup(groupID string, params AccessGroupParams) (*AccessGroupResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) UpdateAccessGroup(ctx context.Context, groupID string, params AccessGroupParams) (*AccessGroupResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	updateParams := cloudflare.UpdateAccessGroupParams{
@@ -997,13 +1140,12 @@ func (c *API) UpdateAccessGroup(groupID string, params AccessGroupParams) (*Acce
 
 // DeleteAccessGroup deletes an Access Group.
 // This method is idempotent - returns nil if the group is already deleted.
-func (c *API) DeleteAccessGroup(groupID string) error {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) DeleteAccessGroup(ctx context.Context, groupID string) error {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	err := c.CloudflareClient.DeleteAccessGroup(ctx, rc, groupID)
@@ -1036,13 +1178,12 @@ type AccessIdentityProviderResult struct {
 }
 
 // CreateAccessIdentityProvider creates a new Access Identity Provider.
-func (c *API) CreateAccessIdentityProvider(params AccessIdentityProviderParams) (*AccessIdentityProviderResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) CreateAccessIdentityProvider(ctx context.Context, params AccessIdentityProviderParams) (*AccessIdentityProviderResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	createParams := cloudflare.CreateAccessIdentityProviderParams{
@@ -1068,13 +1209,12 @@ func (c *API) CreateAccessIdentityProvider(params AccessIdentityProviderParams) 
 }
 
 // GetAccessIdentityProvider retrieves an Access Identity Provider by ID.
-func (c *API) GetAccessIdentityProvider(idpID string) (*AccessIdentityProviderResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) GetAccessIdentityProvider(ctx context.Context, idpID string) (*AccessIdentityProviderResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	idp, err := c.CloudflareClient.GetAccessIdentityProvider(ctx, rc, idpID)
@@ -1091,13 +1231,16 @@ func (c *API) GetAccessIdentityProvider(idpID string) (*AccessIdentityProviderRe
 }
 
 // UpdateAccessIdentityProvider updates an existing Access Identity Provider.
-func (c *API) UpdateAccessIdentityProvider(idpID string, params AccessIdentityProviderParams) (*AccessIdentityProviderResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) UpdateAccessIdentityProvider(
+	ctx context.Context,
+	idpID string,
+	params AccessIdentityProviderParams,
+) (*AccessIdentityProviderResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	updateParams := cloudflare.UpdateAccessIdentityProviderParams{
@@ -1125,13 +1268,12 @@ func (c *API) UpdateAccessIdentityProvider(idpID string, params AccessIdentityPr
 
 // DeleteAccessIdentityProvider deletes an Access Identity Provider.
 // This method is idempotent - returns nil if the identity provider is already deleted.
-func (c *API) DeleteAccessIdentityProvider(idpID string) error {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) DeleteAccessIdentityProvider(ctx context.Context, idpID string) error {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	_, err := c.CloudflareClient.DeleteAccessIdentityProvider(ctx, rc, idpID)
@@ -1197,13 +1339,12 @@ func (c *API) convertServiceToken(token cloudflare.AccessServiceToken) *AccessSe
 
 // GetAccessServiceTokenByName retrieves an Access Service Token by name.
 // Returns nil if no token with the given name is found.
-func (c *API) GetAccessServiceTokenByName(name string) (*AccessServiceTokenResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) GetAccessServiceTokenByName(ctx context.Context, name string) (*AccessServiceTokenResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	tokens, _, err := c.CloudflareClient.ListAccessServiceTokens(ctx, rc, cloudflare.ListAccessServiceTokensParams{})
@@ -1222,13 +1363,12 @@ func (c *API) GetAccessServiceTokenByName(name string) (*AccessServiceTokenResul
 }
 
 // CreateAccessServiceToken creates a new Access Service Token.
-func (c *API) CreateAccessServiceToken(name string, duration string) (*AccessServiceTokenResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) CreateAccessServiceToken(ctx context.Context, name string, duration string) (*AccessServiceTokenResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	createParams := cloudflare.CreateAccessServiceTokenParams{
@@ -1262,13 +1402,12 @@ func (c *API) CreateAccessServiceToken(name string, duration string) (*AccessSer
 }
 
 // UpdateAccessServiceToken updates an existing Access Service Token.
-func (c *API) UpdateAccessServiceToken(tokenID string, name string, duration string) (*AccessServiceTokenResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) UpdateAccessServiceToken(ctx context.Context, tokenID string, name string, duration string) (*AccessServiceTokenResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	updateParams := cloudflare.UpdateAccessServiceTokenParams{
@@ -1302,13 +1441,12 @@ func (c *API) UpdateAccessServiceToken(tokenID string, name string, duration str
 }
 
 // RefreshAccessServiceToken refreshes an Access Service Token, generating a new client secret.
-func (c *API) RefreshAccessServiceToken(tokenID string) (*AccessServiceTokenResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) RefreshAccessServiceToken(ctx context.Context, tokenID string) (*AccessServiceTokenResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	token, err := c.CloudflareClient.RefreshAccessServiceToken(ctx, rc, tokenID)
@@ -1337,13 +1475,12 @@ func (c *API) RefreshAccessServiceToken(tokenID string) (*AccessServiceTokenResu
 
 // DeleteAccessServiceToken deletes an Access Service Token.
 // This method is idempotent - returns nil if the service token is already deleted.
-func (c *API) DeleteAccessServiceToken(tokenID string) error {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) DeleteAccessServiceToken(ctx context.Context, tokenID string) error {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	_, err := c.CloudflareClient.DeleteAccessServiceToken(ctx, rc, tokenID)
@@ -1407,7 +1544,14 @@ type DevicePostureInputParams struct {
 	Cn               string
 	CheckPrivateKey  *bool
 	ExtendedKeyUsage []string
+	Locations        []DevicePostureLocationParams
 	CheckDisks       []string
+}
+
+// DevicePostureLocationParams contains location parameters for Device Posture Rule.
+type DevicePostureLocationParams struct {
+	Paths       []string
+	TrustStores []string
 }
 
 // DevicePostureRuleParams contains parameters for a Device Posture Rule.
@@ -1463,7 +1607,12 @@ func convertToDevicePostureRuleInput(input *DevicePostureInputParams) cloudflare
 	result.OsDistroRevision = input.OSDistroRevision
 	result.OSVersionExtra = input.OSVersionExtra
 	result.CertificateID = input.CertificateID
-	result.CommonName = input.CommonName
+	// CommonName maps to "cn" in JSON, covering both CommonName and Cn inputs
+	if input.CommonName != "" {
+		result.CommonName = input.CommonName
+	} else if input.Cn != "" {
+		result.CommonName = input.Cn
+	}
 
 	// String pointer field
 	if input.OperationalState != "" {
@@ -1497,17 +1646,25 @@ func convertToDevicePostureRuleInput(input *DevicePostureInputParams) cloudflare
 	result.CheckDisks = input.CheckDisks
 	result.ExtendedKeyUsage = input.ExtendedKeyUsage
 
+	// Convert locations - SDK uses CertificateLocations type
+	if len(input.Locations) > 0 {
+		// CertificateLocations is not a slice but a single struct
+		// Take the first location entry for now (SDK limitation)
+		result.Locations = cloudflare.CertificateLocations{
+			Paths:       input.Locations[0].Paths,
+			TrustStores: input.Locations[0].TrustStores,
+		}
+	}
+
 	return result
 }
 
 // CreateDevicePostureRule creates a new Device Posture Rule.
-func (c *API) CreateDevicePostureRule(params DevicePostureRuleParams) (*DevicePostureRuleResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) CreateDevicePostureRule(ctx context.Context, params DevicePostureRuleParams) (*DevicePostureRuleResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
-
-	ctx := context.Background()
 
 	// Convert match to DevicePostureRuleMatch
 	var match []cloudflare.DevicePostureRuleMatch
@@ -1548,13 +1705,11 @@ func (c *API) CreateDevicePostureRule(params DevicePostureRuleParams) (*DevicePo
 }
 
 // GetDevicePostureRule retrieves a Device Posture Rule by ID.
-func (c *API) GetDevicePostureRule(ruleID string) (*DevicePostureRuleResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) GetDevicePostureRule(ctx context.Context, ruleID string) (*DevicePostureRuleResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
-
-	ctx := context.Background()
 
 	rule, err := c.CloudflareClient.DevicePostureRule(ctx, c.ValidAccountId, ruleID)
 	if err != nil {
@@ -1572,13 +1727,11 @@ func (c *API) GetDevicePostureRule(ruleID string) (*DevicePostureRuleResult, err
 }
 
 // UpdateDevicePostureRule updates an existing Device Posture Rule.
-func (c *API) UpdateDevicePostureRule(ruleID string, params DevicePostureRuleParams) (*DevicePostureRuleResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) UpdateDevicePostureRule(ctx context.Context, ruleID string, params DevicePostureRuleParams) (*DevicePostureRuleResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
-
-	ctx := context.Background()
 
 	// Convert match to DevicePostureRuleMatch
 	var match []cloudflare.DevicePostureRuleMatch
@@ -1621,13 +1774,11 @@ func (c *API) UpdateDevicePostureRule(ruleID string, params DevicePostureRulePar
 
 // DeleteDevicePostureRule deletes a Device Posture Rule.
 // This method is idempotent - returns nil if the rule is already deleted.
-func (c *API) DeleteDevicePostureRule(ruleID string) error {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) DeleteDevicePostureRule(ctx context.Context, ruleID string) error {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return err
 	}
-
-	ctx := context.Background()
 
 	err := c.CloudflareClient.DeleteDevicePostureRule(ctx, c.ValidAccountId, ruleID)
 	if err != nil {
@@ -1645,13 +1796,12 @@ func (c *API) DeleteDevicePostureRule(ruleID string) error {
 
 // ListAccessGroupsByName finds an Access Group by name.
 // Returns nil if no group with the given name is found.
-func (c *API) ListAccessGroupsByName(name string) (*AccessGroupResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) ListAccessGroupsByName(ctx context.Context, name string) (*AccessGroupResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	groups, _, err := c.CloudflareClient.ListAccessGroups(ctx, rc, cloudflare.ListAccessGroupsParams{})
@@ -1674,13 +1824,12 @@ func (c *API) ListAccessGroupsByName(name string) (*AccessGroupResult, error) {
 
 // ListAccessIdentityProvidersByName finds an Access Identity Provider by name.
 // Returns nil if no provider with the given name is found.
-func (c *API) ListAccessIdentityProvidersByName(name string) (*AccessIdentityProviderResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) ListAccessIdentityProvidersByName(ctx context.Context, name string) (*AccessIdentityProviderResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	providers, _, err := c.CloudflareClient.ListAccessIdentityProviders(ctx, rc, cloudflare.ListAccessIdentityProvidersParams{})
@@ -1704,13 +1853,11 @@ func (c *API) ListAccessIdentityProvidersByName(name string) (*AccessIdentityPro
 
 // ListDevicePostureRulesByName finds a Device Posture Rule by name.
 // Returns nil if no rule with the given name is found.
-func (c *API) ListDevicePostureRulesByName(name string) (*DevicePostureRuleResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) ListDevicePostureRulesByName(ctx context.Context, name string) (*DevicePostureRuleResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
-
-	ctx := context.Background()
 
 	rules, _, err := c.CloudflareClient.DevicePostureRules(ctx, c.ValidAccountId)
 	if err != nil {
@@ -1734,13 +1881,12 @@ func (c *API) ListDevicePostureRulesByName(name string) (*DevicePostureRuleResul
 }
 
 // ListAccessApplicationsByName finds an Access Application by name.
-func (c *API) ListAccessApplicationsByName(name string) (*AccessApplicationResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) ListAccessApplicationsByName(ctx context.Context, name string) (*AccessApplicationResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	apps, _, err := c.CloudflareClient.ListAccessApplications(ctx, rc, cloudflare.ListAccessApplicationsParams{})
@@ -1810,6 +1956,96 @@ func convertDestinationsToCloudflare(destinations []AccessDestinationParams) []c
 			L4Protocol: dest.L4Protocol,
 			VnetID:     dest.VnetID,
 		})
+	}
+	return result
+}
+
+// applyCreateAccessAppOptionalParams applies optional parameters to create params.
+//
+//nolint:revive // function extracts optional param logic to reduce main function complexity
+func applyCreateAccessAppOptionalParams(
+	createParams *cloudflare.CreateAccessApplicationParams,
+	params AccessApplicationParams,
+) {
+	if params.DomainType != "" {
+		createParams.DomainType = cloudflare.AccessDestinationType(params.DomainType)
+	}
+	if destinations := buildAccessAppDestinations(params); len(destinations) > 0 {
+		createParams.Destinations = destinations
+	}
+	createParams.CorsHeaders = convertCorsHeadersToCloudflare(params.CorsHeaders)
+	createParams.SaasApplication = convertSaasAppToCloudflare(params.SaasApp)
+	createParams.SCIMConfig = convertSCIMConfigToCloudflare(params.SCIMConfig)
+	if params.AppLauncherCustomization != nil {
+		createParams.AccessAppLauncherCustomization = convertAppLauncherCustomizationToCloudflare(params.AppLauncherCustomization)
+	}
+	if len(params.TargetContexts) > 0 {
+		contexts := convertTargetContextsToCloudflare(params.TargetContexts)
+		createParams.TargetContexts = &contexts
+	}
+	createParams.GatewayRules = buildGatewayRules(params.GatewayRules)
+	createParams.AllowAuthenticateViaWarp = params.AllowAuthenticateViaWarp
+	createParams.Tags = params.Tags
+	createParams.CustomPages = params.CustomPages
+}
+
+// applyUpdateAccessAppOptionalParams applies optional parameters to update params.
+//
+//nolint:revive // function extracts optional param logic to reduce main function complexity
+func applyUpdateAccessAppOptionalParams(
+	updateParams *cloudflare.UpdateAccessApplicationParams,
+	params AccessApplicationParams,
+) {
+	if params.DomainType != "" {
+		updateParams.DomainType = cloudflare.AccessDestinationType(params.DomainType)
+	}
+	if destinations := buildAccessAppDestinations(params); len(destinations) > 0 {
+		updateParams.Destinations = destinations
+	}
+	updateParams.CorsHeaders = convertCorsHeadersToCloudflare(params.CorsHeaders)
+	updateParams.SaasApplication = convertSaasAppToCloudflare(params.SaasApp)
+	updateParams.SCIMConfig = convertSCIMConfigToCloudflare(params.SCIMConfig)
+	if params.AppLauncherCustomization != nil {
+		updateParams.AccessAppLauncherCustomization = convertAppLauncherCustomizationToCloudflare(params.AppLauncherCustomization)
+	}
+	if len(params.TargetContexts) > 0 {
+		contexts := convertTargetContextsToCloudflare(params.TargetContexts)
+		updateParams.TargetContexts = &contexts
+	}
+	updateParams.GatewayRules = buildGatewayRules(params.GatewayRules)
+	updateParams.AllowAuthenticateViaWarp = params.AllowAuthenticateViaWarp
+	updateParams.Tags = params.Tags
+	updateParams.CustomPages = params.CustomPages
+}
+
+// buildAccessAppDestinations builds the full destinations list including Domain and SelfHostedDomains.
+func buildAccessAppDestinations(params AccessApplicationParams) []cloudflare.AccessDestination {
+	destinations := convertDestinationsToCloudflare(params.Destinations)
+	// Add main domain as public destination if not already included
+	if params.Domain != "" {
+		destinations = append(destinations, cloudflare.AccessDestination{
+			Type: cloudflare.AccessDestinationType("public"),
+			URI:  params.Domain,
+		})
+	}
+	// Convert SelfHostedDomains to public destinations
+	for _, domain := range params.SelfHostedDomains {
+		destinations = append(destinations, cloudflare.AccessDestination{
+			Type: cloudflare.AccessDestinationType("public"),
+			URI:  domain,
+		})
+	}
+	return destinations
+}
+
+// buildGatewayRules converts gateway rule IDs to Cloudflare format.
+func buildGatewayRules(gatewayRules []string) []cloudflare.AccessApplicationGatewayRule {
+	if len(gatewayRules) == 0 {
+		return nil
+	}
+	result := make([]cloudflare.AccessApplicationGatewayRule, 0, len(gatewayRules))
+	for _, ruleID := range gatewayRules {
+		result = append(result, cloudflare.AccessApplicationGatewayRule{ID: ruleID})
 	}
 	return result
 }
@@ -1925,9 +2161,10 @@ func convertSCIMConfigToCloudflare(scim *AccessApplicationSCIMConfigParams) *clo
 		DeactivateOnDelete: scim.DeactivateOnDelete,
 	}
 
-	// Convert authentication - this is complex due to polymorphic types
-	// For now, we skip authentication conversion as it requires special handling
-	// TODO: Implement proper SCIM authentication conversion
+	// Convert authentication based on scheme type (polymorphic)
+	if scim.Authentication != nil {
+		result.Authentication = convertSCIMAuthenticationToCloudflare(scim.Authentication)
+	}
 
 	// Convert mappings
 	if len(scim.Mappings) > 0 {
@@ -2001,4 +2238,46 @@ func convertTargetContextsToCloudflare(contexts []AccessInfrastructureTargetCont
 		})
 	}
 	return result
+}
+
+// convertSCIMAuthenticationToCloudflare converts SCIM authentication params to Cloudflare format.
+// This handles the polymorphic nature of SCIM authentication types.
+func convertSCIMAuthenticationToCloudflare(auth *SCIMAuthenticationParams) *cloudflare.AccessApplicationScimAuthenticationJson {
+	if auth == nil || auth.Scheme == "" {
+		return nil
+	}
+
+	var authValue cloudflare.AccessApplicationScimAuthentication
+
+	switch cloudflare.AccessApplicationScimAuthenticationScheme(auth.Scheme) {
+	case cloudflare.AccessApplicationScimAuthenticationSchemeHttpBasic:
+		authValue = &cloudflare.AccessApplicationScimAuthenticationHttpBasic{
+			User:     auth.User,
+			Password: auth.Password,
+		}
+	case cloudflare.AccessApplicationScimAuthenticationSchemeOauthBearerToken:
+		authValue = &cloudflare.AccessApplicationScimAuthenticationOauthBearerToken{
+			Token: auth.Token,
+		}
+	case cloudflare.AccessApplicationScimAuthenticationSchemeOauth2:
+		authValue = &cloudflare.AccessApplicationScimAuthenticationOauth2{
+			ClientID:         auth.ClientID,
+			ClientSecret:     auth.ClientSecret,
+			AuthorizationURL: auth.AuthorizationURL,
+			TokenURL:         auth.TokenURL,
+			Scopes:           auth.Scopes,
+		}
+	case cloudflare.AccessApplicationScimAuthenticationAccessServiceToken:
+		authValue = &cloudflare.AccessApplicationScimAuthenticationServiceToken{
+			ClientID:     auth.ClientID,
+			ClientSecret: auth.ClientSecret,
+		}
+	default:
+		// Unknown scheme, return nil
+		return nil
+	}
+
+	return &cloudflare.AccessApplicationScimAuthenticationJson{
+		Value: authValue,
+	}
 }

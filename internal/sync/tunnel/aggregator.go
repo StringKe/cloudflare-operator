@@ -77,6 +77,10 @@ func Aggregate(syncState *v1alpha2.CloudflareSyncState) (*AggregatedConfig, erro
 		result.Ingress = append(result.Ingress, config.Rules...)
 	}
 
+	// Deduplicate rules based on (hostname, path) key
+	// Keep first occurrence (higher priority source wins)
+	result.Ingress = deduplicateRules(result.Ingress)
+
 	// Sort rules by specificity:
 	// 1. Rules with longer paths come first
 	// 2. Rules with paths come before rules without paths
@@ -92,6 +96,24 @@ func Aggregate(syncState *v1alpha2.CloudflareSyncState) (*AggregatedConfig, erro
 	})
 
 	return result, nil
+}
+
+// deduplicateRules removes duplicate rules based on (hostname, path) key.
+// The first occurrence (from higher priority source) is kept.
+func deduplicateRules(rules []tunnelsvc.IngressRule) []tunnelsvc.IngressRule {
+	seen := make(map[string]bool)
+	result := make([]tunnelsvc.IngressRule, 0, len(rules))
+
+	for _, rule := range rules {
+		// Create composite key from hostname + path
+		key := rule.Hostname + "\x00" + rule.Path
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, rule)
+		}
+	}
+
+	return result
 }
 
 // sortRulesBySpecificity sorts rules so more specific ones come first.

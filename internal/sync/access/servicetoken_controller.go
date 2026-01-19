@@ -77,10 +77,9 @@ func (r *ServiceTokenController) Reconcile(ctx context.Context, req ctrl.Request
 		return r.handleDeletion(ctx, syncState)
 	}
 
-	// Add finalizer if not present
+	// Add finalizer if not present (with conflict retry)
 	if !controllerutil.ContainsFinalizer(syncState, ServiceTokenFinalizerName) {
-		controllerutil.AddFinalizer(syncState, ServiceTokenFinalizerName)
-		if err := r.Client.Update(ctx, syncState); err != nil {
+		if err := common.AddFinalizerWithRetry(ctx, r.Client, syncState, ServiceTokenFinalizerName); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{Requeue: true}, nil
@@ -193,14 +192,14 @@ func (r *ServiceTokenController) syncToCloudflare(
 
 	if common.IsPendingID(cloudflareID) {
 		// Try to find existing token by name first (adoption)
-		existingToken, findErr := apiClient.GetAccessServiceTokenByName(config.Name)
+		existingToken, findErr := apiClient.GetAccessServiceTokenByName(ctx, config.Name)
 		if findErr == nil && existingToken != nil {
 			// Found existing token - adopt it
 			logger.Info("Found existing AccessServiceToken, adopting",
 				"tokenId", existingToken.TokenID,
 				"name", config.Name)
 
-			result, err = apiClient.UpdateAccessServiceToken(existingToken.TokenID, config.Name, duration)
+			result, err = apiClient.UpdateAccessServiceToken(ctx, existingToken.TokenID, config.Name, duration)
 			if err != nil {
 				return nil, fmt.Errorf("adopt AccessServiceToken: %w", err)
 			}
@@ -209,7 +208,7 @@ func (r *ServiceTokenController) syncToCloudflare(
 			logger.Info("Creating new AccessServiceToken",
 				"name", config.Name)
 
-			result, err = apiClient.CreateAccessServiceToken(config.Name, duration)
+			result, err = apiClient.CreateAccessServiceToken(ctx, config.Name, duration)
 			if err != nil {
 				return nil, fmt.Errorf("create AccessServiceToken: %w", err)
 			}
@@ -227,13 +226,13 @@ func (r *ServiceTokenController) syncToCloudflare(
 			"tokenId", cloudflareID,
 			"name", config.Name)
 
-		result, err = apiClient.UpdateAccessServiceToken(cloudflareID, config.Name, duration)
+		result, err = apiClient.UpdateAccessServiceToken(ctx, cloudflareID, config.Name, duration)
 		if err != nil {
 			// Check if token was deleted externally
 			if common.HandleNotFoundOnUpdate(err) {
 				logger.Info("AccessServiceToken not found, recreating",
 					"tokenId", cloudflareID)
-				result, err = apiClient.CreateAccessServiceToken(config.Name, duration)
+				result, err = apiClient.CreateAccessServiceToken(ctx, config.Name, duration)
 				if err != nil {
 					return nil, fmt.Errorf("recreate AccessServiceToken: %w", err)
 				}
@@ -365,7 +364,7 @@ func (r *ServiceTokenController) handleDeletion(
 		logger.Info("Deleting AccessServiceToken from Cloudflare",
 			"tokenId", cloudflareID)
 
-		if err := apiClient.DeleteAccessServiceToken(cloudflareID); err != nil {
+		if err := apiClient.DeleteAccessServiceToken(ctx, cloudflareID); err != nil {
 			if !cf.IsNotFoundError(err) {
 				logger.Error(err, "Failed to delete AccessServiceToken from Cloudflare")
 				if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
@@ -380,9 +379,8 @@ func (r *ServiceTokenController) handleDeletion(
 		}
 	}
 
-	// Remove finalizer
-	controllerutil.RemoveFinalizer(syncState, ServiceTokenFinalizerName)
-	if err := r.Client.Update(ctx, syncState); err != nil {
+	// Remove finalizer (with conflict retry)
+	if err := common.RemoveFinalizerWithRetry(ctx, r.Client, syncState, ServiceTokenFinalizerName); err != nil {
 		logger.Error(err, "Failed to remove finalizer")
 		return ctrl.Result{}, err
 	}

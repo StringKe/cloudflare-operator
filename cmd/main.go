@@ -13,6 +13,7 @@ import (
 	"github.com/StringKe/cloudflare-operator/internal/controller/accessapplication"
 	"github.com/StringKe/cloudflare-operator/internal/controller/accessgroup"
 	"github.com/StringKe/cloudflare-operator/internal/controller/accessidentityprovider"
+	"github.com/StringKe/cloudflare-operator/internal/controller/accesspolicy"
 	"github.com/StringKe/cloudflare-operator/internal/controller/accessservicetoken"
 	"github.com/StringKe/cloudflare-operator/internal/controller/accesstunnel"
 	"github.com/StringKe/cloudflare-operator/internal/controller/cloudflarecredentials"
@@ -334,6 +335,13 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "AccessGroup")
 		os.Exit(1)
 	}
+	if err = (&accesspolicy.Reconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "AccessPolicy")
+		os.Exit(1)
+	}
 	if err = (&accessidentityprovider.Reconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
@@ -573,6 +581,12 @@ func main() {
 	// AccessGroupSyncController syncs AccessGroup configuration to Cloudflare API
 	if err = accesssync.NewGroupController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AccessGroupSync")
+		os.Exit(1)
+	}
+
+	// AccessPolicySyncController syncs reusable AccessPolicy configuration to Cloudflare API
+	if err = accesssync.NewPolicyController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "AccessPolicySync")
 		os.Exit(1)
 	}
 

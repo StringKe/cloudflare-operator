@@ -89,7 +89,7 @@ func TestMockClientFactory(t *testing.T) {
 
 	// Setup expectations
 	mockClient.EXPECT().
-		GetAccountId().
+		GetAccountId(gomock.Any()).
 		Return("mock-account-id", nil).
 		AnyTimes()
 
@@ -109,7 +109,8 @@ func TestMockClientFactory(t *testing.T) {
 	}
 
 	// Verify the mock client works
-	accountID, err := client.GetAccountId()
+	ctx := t.Context()
+	accountID, err := client.GetAccountId(ctx)
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
 	}

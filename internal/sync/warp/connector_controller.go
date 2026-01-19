@@ -78,10 +78,9 @@ func (r *ConnectorController) Reconcile(ctx context.Context, req ctrl.Request) (
 		return r.handleDeletion(ctx, syncState)
 	}
 
-	// Add finalizer if not present
+	// Add finalizer if not present (with conflict retry)
 	if !controllerutil.ContainsFinalizer(syncState, WARPConnectorFinalizerName) {
-		controllerutil.AddFinalizer(syncState, WARPConnectorFinalizerName)
-		if err := r.Client.Update(ctx, syncState); err != nil {
+		if err := common.AddFinalizerWithRetry(ctx, r.Client, syncState, WARPConnectorFinalizerName); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{Requeue: true}, nil
@@ -194,7 +193,7 @@ func (*ConnectorController) createConnector(
 	logger.Info("Creating WARP connector", "name", config.ConnectorName)
 
 	// Create WARP connector
-	connectorResult, err := cfAPI.CreateWARPConnector(config.ConnectorName)
+	connectorResult, err := cfAPI.CreateWARPConnector(ctx, config.ConnectorName)
 	if err != nil {
 		// Check if connector already exists (conflict error)
 		if cf.IsConflictError(err) {
@@ -222,7 +221,7 @@ func (*ConnectorController) createConnector(
 			VirtualNetworkID: config.VirtualNetworkID,
 			Comment:          route.Comment,
 		}
-		if _, err := cfAPI.CreateTunnelRoute(routeParams); err != nil {
+		if _, err := cfAPI.CreateTunnelRoute(ctx, routeParams); err != nil {
 			// Log error but continue with other routes
 			logger.Error(err, "Failed to create route", "network", route.Network)
 		} else {
@@ -253,7 +252,7 @@ func (*ConnectorController) deleteConnector(
 	var routeErrors []error
 	for _, route := range config.Routes {
 		logger.Info("Deleting route", "network", route.Network, "virtualNetworkId", config.VirtualNetworkID)
-		if err := cfAPI.DeleteTunnelRoute(route.Network, config.VirtualNetworkID); err != nil {
+		if err := cfAPI.DeleteTunnelRoute(ctx, route.Network, config.VirtualNetworkID); err != nil {
 			if cf.IsNotFoundError(err) {
 				logger.Info("Route already deleted", "network", route.Network)
 			} else {
@@ -271,7 +270,7 @@ func (*ConnectorController) deleteConnector(
 	// Delete WARP connector
 	if config.ConnectorID != "" {
 		logger.Info("Deleting WARP connector", "connectorId", config.ConnectorID)
-		if err := cfAPI.DeleteWARPConnector(config.ConnectorID); err != nil {
+		if err := cfAPI.DeleteWARPConnector(ctx, config.ConnectorID); err != nil {
 			if cf.IsNotFoundError(err) {
 				logger.Info("WARP connector already deleted", "connectorId", config.ConnectorID)
 			} else {
@@ -289,7 +288,7 @@ func getConnectorToken(ctx context.Context, cfAPI *cf.API, connectorID string) s
 	if connectorID == "" {
 		return ""
 	}
-	tokenResult, err := cfAPI.GetWARPConnectorToken(connectorID)
+	tokenResult, err := cfAPI.GetWARPConnectorToken(ctx, connectorID)
 	if err != nil {
 		log.FromContext(ctx).Error(err, "Failed to get WARP connector token, continuing without it")
 		return ""
@@ -306,7 +305,7 @@ func configureRoute(ctx context.Context, cfAPI *cf.API, config *warpsvc.Connecto
 		VirtualNetworkID: config.VirtualNetworkID,
 		Comment:          route.Comment,
 	}
-	_, err := cfAPI.CreateTunnelRoute(routeParams)
+	_, err := cfAPI.CreateTunnelRoute(ctx, routeParams)
 	if err == nil {
 		return true
 	}
@@ -452,7 +451,7 @@ func (r *ConnectorController) handleDeletion(
 			// Delete routes first (best effort)
 			for _, route := range routesToDelete {
 				logger.V(1).Info("Deleting route", "network", route.Network)
-				if err := cfAPI.DeleteTunnelRoute(route.Network, virtualNetworkID); err != nil {
+				if err := cfAPI.DeleteTunnelRoute(ctx, route.Network, virtualNetworkID); err != nil {
 					if !cf.IsNotFoundError(err) {
 						logger.Error(err, "Failed to delete route", "network", route.Network)
 					}
@@ -460,7 +459,7 @@ func (r *ConnectorController) handleDeletion(
 			}
 
 			// Delete the WARP connector
-			if err := cfAPI.DeleteWARPConnector(connectorID); err != nil {
+			if err := cfAPI.DeleteWARPConnector(ctx, connectorID); err != nil {
 				if cf.IsNotFoundError(err) {
 					logger.Info("WARP connector already deleted", "connectorId", connectorID)
 				} else {
@@ -476,9 +475,8 @@ func (r *ConnectorController) handleDeletion(
 		logger.Info("No valid connector ID to delete, cleaning up SyncState only")
 	}
 
-	// Remove finalizer
-	controllerutil.RemoveFinalizer(syncState, WARPConnectorFinalizerName)
-	if err := r.Client.Update(ctx, syncState); err != nil {
+	// Remove finalizer (with conflict retry)
+	if err := common.RemoveFinalizerWithRetry(ctx, r.Client, syncState, WARPConnectorFinalizerName); err != nil {
 		logger.Error(err, "Failed to remove finalizer")
 		return ctrl.Result{}, err
 	}

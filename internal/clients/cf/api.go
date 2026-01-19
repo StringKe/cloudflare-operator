@@ -47,8 +47,8 @@ type DnsManagedRecordTxt struct {
 }
 
 // CreateTunnel creates a Cloudflare Tunnel and returns the tunnel Id and credentials file
-func (c *API) CreateTunnel() (string, string, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) CreateTunnel(ctx context.Context) (string, string, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error code in getting account ID")
 		return "", "", err
 	}
@@ -69,7 +69,6 @@ func (c *API) CreateTunnel() (string, string, error) {
 		ConfigSrc: "cloudflare",
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 	tunnel, err := c.CloudflareClient.CreateTunnel(ctx, rc, params)
 
@@ -95,13 +94,13 @@ func (c *API) CreateTunnel() (string, string, error) {
 
 // DeleteTunnel deletes a Cloudflare Tunnel.
 // This method is idempotent - returns nil if the tunnel is already deleted.
-func (c *API) DeleteTunnel() error {
+func (c *API) DeleteTunnel(ctx context.Context) error {
 	// Only validate Account and Tunnel - Zone/Domain is NOT required for deletion
-	if _, err := c.GetAccountId(); err != nil {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "Error validating account ID for deletion")
 		return err
 	}
-	if _, err := c.GetTunnelId(); err != nil {
+	if _, err := c.GetTunnelId(ctx); err != nil {
 		// If tunnel ID cannot be resolved, it might already be deleted
 		if IsNotFoundError(err) {
 			c.Log.Info("Tunnel already deleted (not found during ID resolution)", "tunnelId", c.TunnelId, "tunnelName", c.TunnelName)
@@ -111,7 +110,6 @@ func (c *API) DeleteTunnel() error {
 		return err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	// Deletes any inactive connections on a tunnel
@@ -126,7 +124,6 @@ func (c *API) DeleteTunnel() error {
 		return nil
 	}
 
-	ctx = context.Background()
 	err = c.CloudflareClient.DeleteTunnel(ctx, rc, c.ValidTunnelId)
 	if err != nil {
 		if IsNotFoundError(err) {
@@ -142,17 +139,17 @@ func (c *API) DeleteTunnel() error {
 }
 
 // ValidateAll validates the contents of the API struct
-func (c *API) ValidateAll() error {
+func (c *API) ValidateAll(ctx context.Context) error {
 	c.Log.Info("In validation")
-	if _, err := c.GetAccountId(); err != nil {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		return err
 	}
 
-	if _, err := c.GetTunnelId(); err != nil {
+	if _, err := c.GetTunnelId(ctx); err != nil {
 		return err
 	}
 
-	if _, err := c.GetZoneId(); err != nil {
+	if _, err := c.GetZoneId(ctx); err != nil {
 		return err
 	}
 
@@ -161,7 +158,7 @@ func (c *API) ValidateAll() error {
 }
 
 // GetAccountId gets AccountId from Account Name
-func (c *API) GetAccountId() (string, error) {
+func (c *API) GetAccountId(ctx context.Context) (string, error) {
 	if c.ValidAccountId != "" {
 		return c.ValidAccountId, nil
 	}
@@ -172,11 +169,11 @@ func (c *API) GetAccountId() (string, error) {
 		return "", err
 	}
 
-	if c.validateAccountId() {
+	if c.validateAccountId(ctx) {
 		c.ValidAccountId = c.AccountId
 	} else {
 		c.Log.Info("Account ID failed, falling back to Account Name")
-		accountIdFromName, err := c.getAccountIdByName()
+		accountIdFromName, err := c.getAccountIdByName(ctx)
 		if err != nil {
 			return "", fmt.Errorf("error fetching Account ID by Account Name")
 		}
@@ -185,13 +182,12 @@ func (c *API) GetAccountId() (string, error) {
 	return c.ValidAccountId, nil
 }
 
-func (c *API) validateAccountId() bool {
+func (c *API) validateAccountId(ctx context.Context) bool {
 	if c.AccountId == "" {
 		c.Log.Info("Account ID not provided")
 		return false
 	}
 
-	ctx := context.Background()
 	account, _, err := c.CloudflareClient.Account(ctx, c.AccountId)
 
 	if err != nil {
@@ -202,8 +198,7 @@ func (c *API) validateAccountId() bool {
 	return account.ID == c.AccountId
 }
 
-func (c *API) getAccountIdByName() (string, error) {
-	ctx := context.Background()
+func (c *API) getAccountIdByName(ctx context.Context) (string, error) {
 	params := cloudflare.AccountsListParams{
 		Name: c.AccountName,
 	}
@@ -228,7 +223,7 @@ func (c *API) getAccountIdByName() (string, error) {
 }
 
 // GetTunnelId gets Tunnel Id from available information
-func (c *API) GetTunnelId() (string, error) {
+func (c *API) GetTunnelId(ctx context.Context) (string, error) {
 	if c.ValidTunnelId != "" {
 		return c.ValidTunnelId, nil
 	}
@@ -239,13 +234,13 @@ func (c *API) GetTunnelId() (string, error) {
 		return "", err
 	}
 
-	if c.validateTunnelId() {
+	if c.validateTunnelId(ctx) {
 		c.ValidTunnelId = c.TunnelId
 		return c.TunnelId, nil
 	}
 
 	c.Log.Info("Tunnel ID failed, falling back to Tunnel Name")
-	tunnelIdFromName, err := c.getTunnelIdByName()
+	tunnelIdFromName, err := c.getTunnelIdByName(ctx)
 	if err != nil {
 		return "", fmt.Errorf("error fetching Tunnel ID by Tunnel Name")
 	}
@@ -255,18 +250,17 @@ func (c *API) GetTunnelId() (string, error) {
 	return c.ValidTunnelId, nil
 }
 
-func (c *API) validateTunnelId() bool {
+func (c *API) validateTunnelId(ctx context.Context) bool {
 	if c.TunnelId == "" {
 		c.Log.Info("Tunnel ID not provided")
 		return false
 	}
 
-	if _, err := c.GetAccountId(); err != nil {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error in getting account ID")
 		return false
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 	tunnel, err := c.CloudflareClient.GetTunnel(ctx, rc, c.TunnelId)
 	if err != nil {
@@ -278,13 +272,12 @@ func (c *API) validateTunnelId() bool {
 	return tunnel.ID == c.TunnelId
 }
 
-func (c *API) getTunnelIdByName() (string, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) getTunnelIdByName(ctx context.Context) (string, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error in getting account ID")
 		return "", err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 	params := cloudflare.TunnelListParams{
 		Name: c.TunnelName,
@@ -312,13 +305,13 @@ func (c *API) getTunnelIdByName() (string, error) {
 }
 
 // GetTunnelCreds gets Tunnel Credentials from Tunnel secret
-func (c *API) GetTunnelCreds(tunnelSecret string) (string, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) GetTunnelCreds(ctx context.Context, tunnelSecret string) (string, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error in getting account ID")
 		return "", err
 	}
 
-	if _, err := c.GetTunnelId(); err != nil {
+	if _, err := c.GetTunnelId(ctx); err != nil {
 		c.Log.Error(err, "error in getting tunnel ID")
 		return "", err
 	}
@@ -334,7 +327,7 @@ func (c *API) GetTunnelCreds(tunnelSecret string) (string, error) {
 }
 
 // GetZoneId gets Zone Id from DNS domain
-func (c *API) GetZoneId() (string, error) {
+func (c *API) GetZoneId(ctx context.Context) (string, error) {
 	if c.ValidZoneId != "" {
 		return c.ValidZoneId, nil
 	}
@@ -345,7 +338,7 @@ func (c *API) GetZoneId() (string, error) {
 		return "", err
 	}
 
-	zoneIdFromName, err := c.getZoneIdByName()
+	zoneIdFromName, err := c.getZoneIdByName(ctx)
 	if err != nil {
 		return "", fmt.Errorf("error fetching Zone ID by Zone Name")
 	}
@@ -353,8 +346,7 @@ func (c *API) GetZoneId() (string, error) {
 	return c.ValidZoneId, nil
 }
 
-func (c *API) getZoneIdByName() (string, error) {
-	ctx := context.Background()
+func (c *API) getZoneIdByName(ctx context.Context) (string, error) {
 	zones, err := c.CloudflareClient.ListZones(ctx, c.Domain)
 
 	if err != nil {
@@ -377,8 +369,7 @@ func (c *API) getZoneIdByName() (string, error) {
 }
 
 // InsertOrUpdateCName upsert DNS CNAME record for the given FQDN to point to the tunnel
-func (c *API) InsertOrUpdateCName(fqdn, dnsId string) (string, error) {
-	ctx := context.Background()
+func (c *API) InsertOrUpdateCName(ctx context.Context, fqdn, dnsId string) (string, error) {
 	rc := cloudflare.ZoneIdentifier(c.ValidZoneId)
 	if dnsId != "" {
 		c.Log.Info("Updating existing record", "fqdn", fqdn, "dnsId", dnsId)
@@ -420,13 +411,12 @@ func (c *API) InsertOrUpdateCName(fqdn, dnsId string) (string, error) {
 
 // DeleteDNSId deletes DNS entry for the given dnsId.
 // This method is idempotent - returns nil if the record is already deleted.
-func (c *API) DeleteDNSId(fqdn, dnsId string, created bool) error {
+func (c *API) DeleteDNSId(ctx context.Context, fqdn, dnsId string, created bool) error {
 	// Do not delete if we did not create the DNS in this cycle
 	if !created {
 		return nil
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.ZoneIdentifier(c.ValidZoneId)
 	err := c.CloudflareClient.DeleteDNSRecord(ctx, rc, dnsId)
 
@@ -446,13 +436,12 @@ func (c *API) DeleteDNSId(fqdn, dnsId string, created bool) error {
 // GetDNSCNameId returns the ID of the CNAME record requested.
 // Returns empty string and nil error if the record does not exist (this is not an error condition).
 // Returns empty string and error if there was an actual API error or multiple records found.
-func (c *API) GetDNSCNameId(fqdn string) (string, error) {
-	if _, err := c.GetZoneId(); err != nil {
+func (c *API) GetDNSCNameId(ctx context.Context, fqdn string) (string, error) {
+	if _, err := c.GetZoneId(ctx); err != nil {
 		c.Log.Error(err, "error in getting Zone ID")
 		return "", err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.ZoneIdentifier(c.ValidZoneId)
 	params := cloudflare.ListDNSRecordsParams{
 		Type: "CNAME",
@@ -480,13 +469,12 @@ func (c *API) GetDNSCNameId(fqdn string) (string, error) {
 }
 
 // GetManagedDnsTxt gets the TXT record corresponding to the fqdn
-func (c *API) GetManagedDnsTxt(fqdn string) (string, DnsManagedRecordTxt, bool, error) {
-	if _, err := c.GetZoneId(); err != nil {
+func (c *API) GetManagedDnsTxt(ctx context.Context, fqdn string) (string, DnsManagedRecordTxt, bool, error) {
+	if _, err := c.GetZoneId(ctx); err != nil {
 		c.Log.Error(err, "error in getting Zone ID")
 		return "", DnsManagedRecordTxt{}, false, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.ZoneIdentifier(c.ValidZoneId)
 	params := cloudflare.ListDNSRecordsParams{
 		Type: "TXT",
@@ -523,13 +511,12 @@ func (c *API) GetManagedDnsTxt(fqdn string) (string, DnsManagedRecordTxt, bool, 
 // GetTunnelToken retrieves the token for a tunnel from Cloudflare API.
 // The token is used to start cloudflared in remotely-managed mode with --token flag.
 // This allows cloudflared to automatically pull configuration from Cloudflare cloud.
-func (c *API) GetTunnelToken(tunnelID string) (string, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) GetTunnelToken(ctx context.Context, tunnelID string) (string, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error in getting account ID")
 		return "", err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	token, err := c.CloudflareClient.GetTunnelToken(ctx, rc, tunnelID)
@@ -543,7 +530,7 @@ func (c *API) GetTunnelToken(tunnelID string) (string, error) {
 }
 
 // InsertOrUpdateTXT upsert DNS TXT record for the given FQDN to point to the tunnel
-func (c *API) InsertOrUpdateTXT(fqdn, txtId, dnsId string) error {
+func (c *API) InsertOrUpdateTXT(ctx context.Context, fqdn, txtId, dnsId string) error {
 	content, err := json.Marshal(DnsManagedRecordTxt{
 		DnsId:      dnsId,
 		TunnelId:   c.ValidTunnelId,
@@ -553,7 +540,6 @@ func (c *API) InsertOrUpdateTXT(fqdn, txtId, dnsId string) error {
 		c.Log.Error(err, "error marshalling txt record json", "fqdn", fqdn)
 		return err
 	}
-	ctx := context.Background()
 	rc := cloudflare.ZoneIdentifier(c.ValidZoneId)
 
 	if txtId != "" {
@@ -605,8 +591,8 @@ type TunnelCreateResult struct {
 // CreateTunnelWithParams creates a Cloudflare Tunnel with explicit parameters.
 // This method is used by the TunnelLifecycle Sync Controller.
 // Returns tunnel ID, credentials, and error.
-func (c *API) CreateTunnelWithParams(tunnelName, configSrc string) (*TunnelCreateResult, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) CreateTunnelWithParams(ctx context.Context, tunnelName, configSrc string) (*TunnelCreateResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID for tunnel creation")
 		return nil, err
 	}
@@ -629,7 +615,6 @@ func (c *API) CreateTunnelWithParams(tunnelName, configSrc string) (*TunnelCreat
 		ConfigSrc: configSrc,
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 	tunnel, err := c.CloudflareClient.CreateTunnel(ctx, rc, params)
 	if err != nil {
@@ -654,13 +639,12 @@ func (c *API) CreateTunnelWithParams(tunnelName, configSrc string) (*TunnelCreat
 // DeleteTunnelByID deletes a Cloudflare Tunnel by its ID.
 // This method is used by the TunnelLifecycle Sync Controller.
 // It is idempotent - returns nil if the tunnel is already deleted.
-func (c *API) DeleteTunnelByID(tunnelID string) error {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) DeleteTunnelByID(ctx context.Context, tunnelID string) error {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error validating account ID for tunnel deletion")
 		return err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	// Clean up tunnel connections first
@@ -691,13 +675,12 @@ func (c *API) DeleteTunnelByID(tunnelID string) error {
 
 // GetTunnelIDByName looks up a tunnel ID by its name.
 // This method is used by the TunnelLifecycle Sync Controller.
-func (c *API) GetTunnelIDByName(tunnelName string) (string, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) GetTunnelIDByName(ctx context.Context, tunnelName string) (string, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID for tunnel lookup")
 		return "", err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	params := cloudflare.TunnelListParams{
@@ -724,13 +707,12 @@ func (c *API) GetTunnelIDByName(tunnelName string) (string, error) {
 // This method is used by the TunnelLifecycle Sync Controller.
 // Note: This method cannot retrieve the original secret, only a new token.
 // For existing tunnels, use GetTunnelToken instead.
-func (c *API) GetTunnelCredsByID(tunnelID string) (*TunnelCredentialsFile, error) {
-	if _, err := c.GetAccountId(); err != nil {
+func (c *API) GetTunnelCredsByID(ctx context.Context, tunnelID string) (*TunnelCredentialsFile, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID for tunnel credentials")
 		return nil, err
 	}
 
-	ctx := context.Background()
 	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
 
 	// Get tunnel details to retrieve name

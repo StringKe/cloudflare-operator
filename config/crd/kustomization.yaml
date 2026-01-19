@@ -20,6 +20,7 @@ resources:
 - bases/networking.cloudflare-operator.io_accessapplications.yaml
 - bases/networking.cloudflare-operator.io_accessgroups.yaml
 - bases/networking.cloudflare-operator.io_accessidentityproviders.yaml
+- bases/networking.cloudflare-operator.io_accesspolicies.yaml
 - bases/networking.cloudflare-operator.io_accessservicetokens.yaml
 # Gateway CRDs
 - bases/networking.cloudflare-operator.io_gatewayrules.yaml

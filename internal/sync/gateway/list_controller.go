@@ -73,10 +73,9 @@ func (r *ListController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return r.handleDeletion(ctx, syncState)
 	}
 
-	// Add finalizer if not present
+	// Add finalizer if not present (with conflict retry)
 	if !controllerutil.ContainsFinalizer(syncState, ListFinalizerName) {
-		controllerutil.AddFinalizer(syncState, ListFinalizerName)
-		if err := r.Client.Update(ctx, syncState); err != nil {
+		if err := common.AddFinalizerWithRetry(ctx, r.Client, syncState, ListFinalizerName); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{Requeue: true}, nil
@@ -168,12 +167,35 @@ func (r *ListController) syncToCloudflare(
 		return nil, err
 	}
 
-	// Build Gateway list params
+	// Build Gateway list params with item descriptions and deduplication
+	// Deduplication is based on Value - first occurrence wins (preserves priority order)
+	seen := make(map[string]bool)
+	cfItems := make([]cf.GatewayListItem, 0, len(config.Items))
+	duplicateCount := 0
+	for _, item := range config.Items {
+		if seen[item.Value] {
+			duplicateCount++
+			continue // Skip duplicate values
+		}
+		seen[item.Value] = true
+		cfItems = append(cfItems, cf.GatewayListItem{
+			Value:       item.Value,
+			Description: item.Description,
+		})
+	}
+	if duplicateCount > 0 {
+		logger.Info("Deduplicated Gateway list items",
+			"name", config.Name,
+			"originalCount", len(config.Items),
+			"deduplicatedCount", len(cfItems),
+			"duplicatesRemoved", duplicateCount)
+	}
+
 	params := cf.GatewayListParams{
 		Name:        config.Name,
 		Description: config.Description,
 		Type:        config.Type,
-		Items:       config.Items,
+		Items:       cfItems,
 	}
 
 	// Check if this is a new list (pending) or existing (has real Cloudflare ID)
@@ -186,7 +208,7 @@ func (r *ListController) syncToCloudflare(
 			"name", config.Name,
 			"type", config.Type)
 
-		result, err = apiClient.CreateGatewayList(params)
+		result, err = apiClient.CreateGatewayList(ctx, params)
 		if err != nil {
 			return nil, fmt.Errorf("create Gateway list: %w", err)
 		}
@@ -201,14 +223,14 @@ func (r *ListController) syncToCloudflare(
 			"listId", cloudflareID,
 			"name", config.Name)
 
-		result, err = apiClient.UpdateGatewayList(cloudflareID, params)
+		result, err = apiClient.UpdateGatewayList(ctx, cloudflareID, params)
 		if err != nil {
 			if !common.HandleNotFoundOnUpdate(err) {
 				return nil, fmt.Errorf("update Gateway list: %w", err)
 			}
 			// List deleted externally, recreate it
 			logger.Info("Gateway list not found, recreating", "listId", cloudflareID)
-			result, err = apiClient.CreateGatewayList(params)
+			result, err = apiClient.CreateGatewayList(ctx, params)
 			if err != nil {
 				return nil, fmt.Errorf("recreate Gateway list: %w", err)
 			}
@@ -260,7 +282,7 @@ func (r *ListController) handleDeletion(
 		logger.Info("Deleting Gateway List from Cloudflare",
 			"listId", cloudflareID)
 
-		if err := apiClient.DeleteGatewayList(cloudflareID); err != nil {
+		if err := apiClient.DeleteGatewayList(ctx, cloudflareID); err != nil {
 			if !cf.IsNotFoundError(err) {
 				logger.Error(err, "Failed to delete Gateway List from Cloudflare")
 				if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
@@ -275,9 +297,8 @@ func (r *ListController) handleDeletion(
 		}
 	}
 
-	// Remove finalizer
-	controllerutil.RemoveFinalizer(syncState, ListFinalizerName)
-	if err := r.Client.Update(ctx, syncState); err != nil {
+	// Remove finalizer (with conflict retry)
+	if err := common.RemoveFinalizerWithRetry(ctx, r.Client, syncState, ListFinalizerName); err != nil {
 		logger.Error(err, "Failed to remove finalizer")
 		return ctrl.Result{}, err
 	}

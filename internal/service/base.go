@@ -97,6 +97,8 @@ func (s *BaseService) GetOrCreateSyncState(
 
 // UpdateSource adds or updates a source's configuration in the SyncState.
 // This uses optimistic locking via resourceVersion to handle concurrent updates.
+// On conflict, it re-fetches the resource and re-applies only this source's change,
+// preserving changes made by other controllers.
 func (s *BaseService) UpdateSource(
 	ctx context.Context,
 	syncState *v1alpha2.CloudflareSyncState,
@@ -113,42 +115,45 @@ func (s *BaseService) UpdateSource(
 
 	sourceRef := source.ToReference()
 	sourceStr := sourceRef.String()
-	now := metav1.Now()
 
-	// Find and update existing source, or add new source
-	found := false
-	for i := range syncState.Spec.Sources {
-		if syncState.Spec.Sources[i].Ref.String() == sourceStr {
-			syncState.Spec.Sources[i].Config = runtime.RawExtension{Raw: configJSON}
-			syncState.Spec.Sources[i].Priority = priority
-			syncState.Spec.Sources[i].LastUpdated = now
-			found = true
-			logger.V(1).Info("Updating existing source in SyncState",
-				"syncState", syncState.Name,
-				"source", sourceStr)
-			break
+	// Define the operation to apply/re-apply on conflict
+	applySourceUpdate := func(state *v1alpha2.CloudflareSyncState) {
+		now := metav1.Now()
+		found := false
+		for i := range state.Spec.Sources {
+			if state.Spec.Sources[i].Ref.String() == sourceStr {
+				state.Spec.Sources[i].Config = runtime.RawExtension{Raw: configJSON}
+				state.Spec.Sources[i].Priority = priority
+				state.Spec.Sources[i].LastUpdated = now
+				found = true
+				break
+			}
+		}
+		if !found {
+			state.Spec.Sources = append(state.Spec.Sources, v1alpha2.ConfigSource{
+				Ref:         sourceRef,
+				Config:      runtime.RawExtension{Raw: configJSON},
+				Priority:    priority,
+				LastUpdated: now,
+			})
 		}
 	}
 
-	if !found {
-		syncState.Spec.Sources = append(syncState.Spec.Sources, v1alpha2.ConfigSource{
-			Ref:         sourceRef,
-			Config:      runtime.RawExtension{Raw: configJSON},
-			Priority:    priority,
-			LastUpdated: now,
-		})
-		logger.V(1).Info("Adding new source to SyncState",
-			"syncState", syncState.Name,
-			"source", sourceStr,
-			"totalSources", len(syncState.Spec.Sources))
-	}
+	// Apply the update to current state
+	applySourceUpdate(syncState)
+	logger.V(1).Info("Updating source in SyncState",
+		"syncState", syncState.Name,
+		"source", sourceStr,
+		"totalSources", len(syncState.Spec.Sources))
 
-	// Update with conflict retry
-	return s.updateWithRetry(ctx, syncState)
+	// Update with conflict retry, re-applying operation on conflict
+	return s.updateWithRetryFunc(ctx, syncState, applySourceUpdate)
 }
 
 // RemoveSource removes a source from the SyncState.
 // If no sources remain after removal, the SyncState is deleted.
+// On conflict, it re-fetches the resource and re-applies only this source's removal,
+// preserving changes made by other controllers.
 //
 //nolint:revive // cognitive complexity is acceptable for this cleanup function
 func (s *BaseService) RemoveSource(
@@ -159,15 +164,22 @@ func (s *BaseService) RemoveSource(
 	logger := log.FromContext(ctx)
 	sourceStr := source.String()
 
-	newSources := make([]v1alpha2.ConfigSource, 0, len(syncState.Spec.Sources))
-	for _, src := range syncState.Spec.Sources {
-		if src.Ref.String() != sourceStr {
-			newSources = append(newSources, src)
+	// Define the operation to apply/re-apply on conflict
+	applySourceRemoval := func(state *v1alpha2.CloudflareSyncState) {
+		newSources := make([]v1alpha2.ConfigSource, 0, len(state.Spec.Sources))
+		for _, src := range state.Spec.Sources {
+			if src.Ref.String() != sourceStr {
+				newSources = append(newSources, src)
+			}
 		}
+		state.Spec.Sources = newSources
 	}
 
+	// Apply the removal to current state
+	applySourceRemoval(syncState)
+
 	// If no sources remain, delete the SyncState
-	if len(newSources) == 0 {
+	if len(syncState.Spec.Sources) == 0 {
 		logger.Info("No sources remaining, deleting CloudflareSyncState",
 			"name", syncState.Name)
 		if err := s.Client.Delete(ctx, syncState); err != nil {
@@ -179,13 +191,13 @@ func (s *BaseService) RemoveSource(
 		return nil
 	}
 
-	syncState.Spec.Sources = newSources
 	logger.V(1).Info("Removed source from SyncState",
 		"syncState", syncState.Name,
 		"source", sourceStr,
-		"remainingSources", len(newSources))
+		"remainingSources", len(syncState.Spec.Sources))
 
-	return s.updateWithRetry(ctx, syncState)
+	// Update with conflict retry, re-applying operation on conflict
+	return s.updateWithRetryFunc(ctx, syncState, applySourceRemoval)
 }
 
 // GetSyncState retrieves a CloudflareSyncState by resourceType and cloudflareID.
@@ -208,23 +220,29 @@ func (s *BaseService) GetSyncState(
 	return syncState, nil
 }
 
-// updateWithRetry performs an update with automatic conflict retry.
-// On conflict, it re-fetches the resource and reapplies the changes.
+// updateWithRetryFunc performs an update with automatic conflict retry.
+// On conflict, it re-fetches the resource and re-applies the operation function,
+// ensuring that changes from other controllers are preserved.
 //
 //nolint:revive // cognitive complexity is acceptable for retry logic
-func (s *BaseService) updateWithRetry(ctx context.Context, syncState *v1alpha2.CloudflareSyncState) error {
-	const maxRetries = 3
+func (s *BaseService) updateWithRetryFunc(
+	ctx context.Context,
+	syncState *v1alpha2.CloudflareSyncState,
+	applyOp func(*v1alpha2.CloudflareSyncState),
+) error {
+	const maxRetries = 5
 
 	for i := 0; i < maxRetries; i++ {
 		if err := s.Client.Update(ctx, syncState); err != nil {
 			if apierrors.IsConflict(err) && i < maxRetries-1 {
-				// Re-fetch and retry
+				// Re-fetch the latest version
 				fresh := &v1alpha2.CloudflareSyncState{}
 				if err := s.Client.Get(ctx, types.NamespacedName{Name: syncState.Name}, fresh); err != nil {
 					return fmt.Errorf("refetch syncstate on conflict: %w", err)
 				}
-				// Copy spec changes to fresh resource
-				fresh.Spec.Sources = syncState.Spec.Sources
+				// Re-apply the operation to the fresh resource
+				// This preserves changes made by other controllers
+				applyOp(fresh)
 				syncState = fresh
 				continue
 			}

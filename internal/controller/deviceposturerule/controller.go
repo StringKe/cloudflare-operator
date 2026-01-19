@@ -247,8 +247,23 @@ func (*DevicePostureRuleReconciler) buildInput(input *networkingv1alpha2.DeviceP
 		Cn:               input.Cn,
 		CheckPrivateKey:  input.CheckPrivateKey,
 		ExtendedKeyUsage: input.ExtendedKeyUsage,
+		Locations:        buildLocations(input.Locations),
 		CheckDisks:       input.CheckDisks,
 	}
+}
+
+func buildLocations(locations []networkingv1alpha2.DevicePostureLocation) []devicesvc.DevicePostureLocation {
+	if locations == nil {
+		return nil
+	}
+	result := make([]devicesvc.DevicePostureLocation, len(locations))
+	for i, loc := range locations {
+		result[i] = devicesvc.DevicePostureLocation{
+			Paths:       loc.Paths,
+			TrustStores: loc.TrustStores,
+		}
+	}
+	return result
 }
 
 func (r *DevicePostureRuleReconciler) updateStatusError(err error) (ctrl.Result, error) {

@@ -96,7 +96,7 @@ func (api *API) GetRegistrarDomain(ctx context.Context, domainName string) (*Reg
 		return nil, errClientNotInitialized
 	}
 
-	accountID, err := api.GetAccountId()
+	accountID, err := api.GetAccountId(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get account ID: %w", err)
 	}
@@ -148,7 +148,7 @@ func (api *API) ListRegistrarDomains(ctx context.Context) ([]RegistrarDomainInfo
 		return nil, errClientNotInitialized
 	}
 
-	accountID, err := api.GetAccountId()
+	accountID, err := api.GetAccountId(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get account ID: %w", err)
 	}
@@ -187,7 +187,7 @@ func (api *API) UpdateRegistrarDomain(
 		return nil, errClientNotInitialized
 	}
 
-	accountID, err := api.GetAccountId()
+	accountID, err := api.GetAccountId(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get account ID: %w", err)
 	}
@@ -228,7 +228,7 @@ func (api *API) InitiateRegistrarTransfer(ctx context.Context, domainName string
 		return errClientNotInitialized
 	}
 
-	accountID, err := api.GetAccountId()
+	accountID, err := api.GetAccountId(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get account ID: %w", err)
 	}
@@ -247,7 +247,7 @@ func (api *API) CancelRegistrarTransfer(ctx context.Context, domainName string) 
 		return errClientNotInitialized
 	}
 
-	accountID, err := api.GetAccountId()
+	accountID, err := api.GetAccountId(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get account ID: %w", err)
 	}

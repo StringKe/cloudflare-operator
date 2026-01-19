@@ -89,6 +89,7 @@ rules:
   - accessapplications
   - accessgroups
   - accessidentityproviders
+  - accesspolicies
   - accessservicetokens
   - accesstunnels
   - cloudflarecredentials
@@ -129,6 +130,7 @@ rules:
   - accessapplications/finalizers
   - accessgroups/finalizers
   - accessidentityproviders/finalizers
+  - accesspolicies/finalizers
   - accessservicetokens/finalizers
   - cloudflarecredentials/finalizers
   - cloudflaredomains/finalizers
@@ -162,6 +164,7 @@ rules:
   - accessapplications/status
   - accessgroups/status
   - accessidentityproviders/status
+  - accesspolicies/status
   - accessservicetokens/status
   - accesstunnels/status
   - cloudflarecredentials/status

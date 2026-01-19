@@ -32,7 +32,7 @@ func (api *API) CreateR2Bucket(ctx context.Context, params R2BucketParams) (*R2B
 		return nil, errClientNotInitialized
 	}
 
-	accountID, err := api.GetAccountId()
+	accountID, err := api.GetAccountId(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get account ID: %w", err)
 	}
@@ -63,7 +63,7 @@ func (api *API) GetR2Bucket(ctx context.Context, bucketName string) (*R2BucketRe
 		return nil, errClientNotInitialized
 	}
 
-	accountID, err := api.GetAccountId()
+	accountID, err := api.GetAccountId(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get account ID: %w", err)
 	}
@@ -91,7 +91,7 @@ func (api *API) ListR2Buckets(ctx context.Context) ([]R2BucketResult, error) {
 		return nil, errClientNotInitialized
 	}
 
-	accountID, err := api.GetAccountId()
+	accountID, err := api.GetAccountId(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get account ID: %w", err)
 	}
@@ -123,7 +123,7 @@ func (api *API) DeleteR2Bucket(ctx context.Context, bucketName string) error {
 		return errClientNotInitialized
 	}
 
-	accountID, err := api.GetAccountId()
+	accountID, err := api.GetAccountId(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get account ID: %w", err)
 	}
@@ -191,7 +191,7 @@ func (api *API) GetR2CORS(ctx context.Context, bucketName string) ([]R2CORSRule,
 		return nil, errClientNotInitialized
 	}
 
-	accountID, err := api.GetAccountId()
+	accountID, err := api.GetAccountId(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get account ID: %w", err)
 	}
@@ -218,7 +218,7 @@ func (api *API) SetR2CORS(ctx context.Context, bucketName string, rules []R2CORS
 		return errClientNotInitialized
 	}
 
-	accountID, err := api.GetAccountId()
+	accountID, err := api.GetAccountId(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get account ID: %w", err)
 	}
@@ -239,7 +239,7 @@ func (api *API) DeleteR2CORS(ctx context.Context, bucketName string) error {
 		return errClientNotInitialized
 	}
 
-	accountID, err := api.GetAccountId()
+	accountID, err := api.GetAccountId(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get account ID: %w", err)
 	}
@@ -263,7 +263,7 @@ func (api *API) GetR2Lifecycle(ctx context.Context, bucketName string) ([]R2Life
 		return nil, errClientNotInitialized
 	}
 
-	accountID, err := api.GetAccountId()
+	accountID, err := api.GetAccountId(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get account ID: %w", err)
 	}
@@ -290,7 +290,7 @@ func (api *API) SetR2Lifecycle(ctx context.Context, bucketName string, rules []R
 		return errClientNotInitialized
 	}
 
-	accountID, err := api.GetAccountId()
+	accountID, err := api.GetAccountId(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get account ID: %w", err)
 	}
@@ -311,7 +311,7 @@ func (api *API) DeleteR2Lifecycle(ctx context.Context, bucketName string) error 
 		return errClientNotInitialized
 	}
 
-	accountID, err := api.GetAccountId()
+	accountID, err := api.GetAccountId(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get account ID: %w", err)
 	}
@@ -337,7 +337,7 @@ func (api *API) GetR2Notifications(
 		return nil, errClientNotInitialized
 	}
 
-	accountID, err := api.GetAccountId()
+	accountID, err := api.GetAccountId(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get account ID: %w", err)
 	}
@@ -372,7 +372,7 @@ func (api *API) SetR2Notification(
 		return errClientNotInitialized
 	}
 
-	accountID, err := api.GetAccountId()
+	accountID, err := api.GetAccountId(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get account ID: %w", err)
 	}
@@ -396,7 +396,7 @@ func (api *API) DeleteR2Notification(ctx context.Context, bucketName, queueID st
 		return errClientNotInitialized
 	}
 
-	accountID, err := api.GetAccountId()
+	accountID, err := api.GetAccountId(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get account ID: %w", err)
 	}

@@ -429,6 +429,7 @@ func (r *Reconciler) registerZoneSettings(creds *networkingv1alpha2.CloudflareCr
 		config.SSL = &domainsvc.SSLConfig{
 			Mode:       string(ssl.Mode),
 			MinVersion: string(ssl.MinTLSVersion),
+			TLS13:      string(ssl.TLS13),
 		}
 		if ssl.AlwaysUseHTTPS != nil {
 			config.SSL.AlwaysUseHTTPS = ssl.AlwaysUseHTTPS
@@ -439,13 +440,20 @@ func (r *Reconciler) registerZoneSettings(creds *networkingv1alpha2.CloudflareCr
 		if ssl.OpportunisticEncryption != nil {
 			config.SSL.OpportunisticEncryption = ssl.OpportunisticEncryption
 		}
+		if ssl.AuthenticatedOriginPull != nil {
+			config.SSL.AuthenticatedOriginPull = &domainsvc.AuthenticatedOriginPullConfig{
+				Enabled: ssl.AuthenticatedOriginPull.Enabled,
+			}
+		}
 	}
 
 	// Convert Cache settings
 	if r.domain.Spec.Cache != nil {
 		cache := r.domain.Spec.Cache
 		config.Cache = &domainsvc.CacheConfig{
-			Level: string(cache.CacheLevel),
+			Level:                   string(cache.CacheLevel),
+			CacheByDeviceType:       &cache.CacheByDeviceType,
+			SortQueryStringForCache: &cache.SortQueryStringForCache,
 		}
 		if cache.BrowserTTL != nil {
 			config.Cache.BrowserTTL = *cache.BrowserTTL
@@ -454,13 +462,25 @@ func (r *Reconciler) registerZoneSettings(creds *networkingv1alpha2.CloudflareCr
 		if cache.AlwaysOnline != nil {
 			config.Cache.AlwaysOnline = cache.AlwaysOnline
 		}
+		if cache.TieredCache != nil {
+			config.Cache.TieredCache = &domainsvc.TieredCacheConfig{
+				Enabled:  cache.TieredCache.Enabled,
+				Topology: string(cache.TieredCache.Topology),
+			}
+		}
+		if cache.CacheReserve != nil {
+			config.Cache.CacheReserve = &domainsvc.CacheReserveConfig{
+				Enabled: cache.CacheReserve.Enabled,
+			}
+		}
 	}
 
 	// Convert Security settings
 	if r.domain.Spec.Security != nil {
 		security := r.domain.Spec.Security
 		config.Security = &domainsvc.SecurityConfig{
-			Level: string(security.Level),
+			Level:             string(security.Level),
+			HotlinkProtection: &security.HotlinkProtection,
 		}
 		if security.BrowserCheck != nil {
 			config.Security.BrowserIntegrityCheck = security.BrowserCheck
@@ -468,7 +488,12 @@ func (r *Reconciler) registerZoneSettings(creds *networkingv1alpha2.CloudflareCr
 		if security.EmailObfuscation != nil {
 			config.Security.EmailObfuscation = security.EmailObfuscation
 		}
-		config.Security.HotlinkProtection = &security.HotlinkProtection
+		if security.ServerSideExclude != nil {
+			config.Security.ServerSideExclude = security.ServerSideExclude
+		}
+		if security.ChallengePassage != nil {
+			config.Security.ChallengePassage = security.ChallengePassage
+		}
 		if security.WAF != nil {
 			config.Security.WAF = &domainsvc.WAFConfig{
 				Enabled: &security.WAF.Enabled,
@@ -480,8 +505,10 @@ func (r *Reconciler) registerZoneSettings(creds *networkingv1alpha2.CloudflareCr
 	if r.domain.Spec.Performance != nil {
 		perf := r.domain.Spec.Performance
 		config.Performance = &domainsvc.PerformanceConfig{
-			Polish: string(perf.Polish),
-			Mirage: &perf.Mirage,
+			Polish:       string(perf.Polish),
+			WebP:         &perf.WebP,
+			Mirage:       &perf.Mirage,
+			RocketLoader: &perf.RocketLoader,
 		}
 		if perf.Brotli != nil {
 			config.Performance.Brotli = perf.Brotli
@@ -498,7 +525,15 @@ func (r *Reconciler) registerZoneSettings(creds *networkingv1alpha2.CloudflareCr
 		if perf.EarlyHints != nil {
 			config.Performance.EarlyHints = perf.EarlyHints
 		}
-		config.Performance.RocketLoader = &perf.RocketLoader
+		if perf.PrefetchPreload != nil {
+			config.Performance.PrefetchPreload = perf.PrefetchPreload
+		}
+		if perf.IPGeolocation != nil {
+			config.Performance.IPGeolocation = perf.IPGeolocation
+		}
+		if perf.Websockets != nil {
+			config.Performance.Websockets = perf.Websockets
+		}
 		if perf.Minify != nil {
 			config.Performance.Minify = &domainsvc.MinifyConfig{
 				HTML: &perf.Minify.HTML,

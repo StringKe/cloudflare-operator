@@ -44,6 +44,42 @@ type GatewayRuleConfig struct {
 	Priority int `json:"priority,omitempty"`
 	// Enabled indicates if the rule is enabled
 	Enabled bool `json:"enabled"`
+	// Identity is the wirefilter expression for identity matching
+	Identity string `json:"identity,omitempty"`
+	// DevicePosture is the wirefilter expression for device posture matching
+	DevicePosture string `json:"devicePosture,omitempty"`
+	// Schedule defines when the rule is active
+	Schedule *GatewayRuleSchedule `json:"schedule,omitempty"`
+	// Expiration defines when the rule expires
+	Expiration *GatewayRuleExpiration `json:"expiration,omitempty"`
+}
+
+// GatewayRuleSchedule defines when a rule is active.
+type GatewayRuleSchedule struct {
+	// TimeZone is the time zone for the schedule (e.g., "America/New_York")
+	TimeZone string `json:"timeZone,omitempty"`
+	// Mon is the schedule for Monday (e.g., "09:00-17:00")
+	Mon string `json:"mon,omitempty"`
+	// Tue is the schedule for Tuesday
+	Tue string `json:"tue,omitempty"`
+	// Wed is the schedule for Wednesday
+	Wed string `json:"wed,omitempty"`
+	// Thu is the schedule for Thursday
+	Thu string `json:"thu,omitempty"`
+	// Fri is the schedule for Friday
+	Fri string `json:"fri,omitempty"`
+	// Sat is the schedule for Saturday
+	Sat string `json:"sat,omitempty"`
+	// Sun is the schedule for Sunday
+	Sun string `json:"sun,omitempty"`
+}
+
+// GatewayRuleExpiration defines when a rule expires.
+type GatewayRuleExpiration struct {
+	// ExpiresAt is when the rule expires (RFC3339 format)
+	ExpiresAt string `json:"expiresAt,omitempty"`
+	// Duration is the default expiration duration (e.g., "1h", "24h")
+	Duration string `json:"duration,omitempty"`
 }
 
 // GatewayRuleFilter contains filter configuration.
@@ -80,12 +116,28 @@ type GatewayRuleSettings struct {
 	PayloadLog *PayloadLogSettings `json:"payloadLog,omitempty"`
 	// AuditSSH contains SSH audit settings
 	AuditSSH *AuditSSHSettings `json:"auditSsh,omitempty"`
-	// Untrusted certificate settings
-	UntrustedCert *UntrustedCertSettings `json:"untrustedCert,omitempty"`
+	// UntrustedCertificateAction for TLS inspection (pass_through, block, error)
+	UntrustedCertificateAction string `json:"untrustedCertificateAction,omitempty"`
 	// Egress settings
 	Egress *EgressSettings `json:"egress,omitempty"`
 	// DNS resolvers
 	DNSResolvers *DNSResolverSettings `json:"dnsResolvers,omitempty"`
+	// ResolveDNSInternally enables internal DNS resolution with view_id
+	ResolveDNSInternally *ResolveDNSInternallySettings `json:"resolveDnsInternally,omitempty"`
+	// ResolveDNSThroughCloudflare sends DNS to 1.1.1.1
+	ResolveDNSThroughCloudflare *bool `json:"resolveDnsThroughCloudflare,omitempty"`
+	// AllowChildBypass allows child MSP accounts to bypass
+	AllowChildBypass *bool `json:"allowChildBypass,omitempty"`
+	// BypassParentRule allows bypassing parent MSP rules
+	BypassParentRule *bool `json:"bypassParentRule,omitempty"`
+	// IgnoreCNAMECategoryMatches ignores category at CNAME domains
+	IgnoreCNAMECategoryMatches *bool `json:"ignoreCnameCategoryMatches,omitempty"`
+	// IPCategories enables IPs in DNS resolver category blocks
+	IPCategories *bool `json:"ipCategories,omitempty"`
+	// IPIndicatorFeeds includes IPs in indicator feed blocks
+	IPIndicatorFeeds *bool `json:"ipIndicatorFeeds,omitempty"`
+	// Quarantine settings for quarantine action
+	Quarantine *QuarantineSettings `json:"quarantine,omitempty"`
 }
 
 // BISOAdminControls contains browser isolation admin controls.
@@ -147,8 +199,32 @@ type DNSResolverSettings struct {
 
 // DNSResolverAddress contains a DNS resolver address.
 type DNSResolverAddress struct {
-	IP   string `json:"ip,omitempty"`
-	Port int    `json:"port,omitempty"`
+	IP                         string `json:"ip,omitempty"`
+	Port                       int    `json:"port,omitempty"`
+	VNetID                     string `json:"vnetId,omitempty"`
+	RouteThroughPrivateNetwork *bool  `json:"routeThroughPrivateNetwork,omitempty"`
+}
+
+// ResolveDNSInternallySettings for internal DNS resolution.
+type ResolveDNSInternallySettings struct {
+	// ViewID is the DNS view ID for internal resolution
+	ViewID string `json:"viewId,omitempty"`
+	// Fallback determines behavior when internal resolution fails
+	Fallback string `json:"fallback,omitempty"`
+}
+
+// QuarantineSettings for quarantine action.
+type QuarantineSettings struct {
+	// FileTypes to quarantine
+	FileTypes []string `json:"fileTypes,omitempty"`
+}
+
+// GatewayListItem represents a single item in a Gateway list.
+type GatewayListItem struct {
+	// Value is the item value
+	Value string `json:"value"`
+	// Description is an optional description for this item
+	Description string `json:"description,omitempty"`
 }
 
 // GatewayListConfig contains the configuration for a Gateway list.
@@ -159,8 +235,8 @@ type GatewayListConfig struct {
 	Description string `json:"description,omitempty"`
 	// Type is the list type (SERIAL, URL, DOMAIN, EMAIL, IP)
 	Type string `json:"type"`
-	// Items is the list of items
-	Items []string `json:"items,omitempty"`
+	// Items is the list of items with optional descriptions
+	Items []GatewayListItem `json:"items,omitempty"`
 }
 
 // GatewayConfigurationConfig contains the configuration for Gateway settings.
@@ -206,10 +282,14 @@ type AntiVirusSettings struct {
 // BlockPageSettings contains block page settings.
 type BlockPageSettings struct {
 	Enabled         bool   `json:"enabled,omitempty"`
+	Name            string `json:"name,omitempty"`
 	FooterText      string `json:"footerText,omitempty"`
 	HeaderText      string `json:"headerText,omitempty"`
 	LogoPath        string `json:"logoPath,omitempty"`
 	BackgroundColor string `json:"backgroundColor,omitempty"`
+	MailtoAddress   string `json:"mailtoAddress,omitempty"`
+	MailtoSubject   string `json:"mailtoSubject,omitempty"`
+	SuppressFooter  *bool  `json:"suppressFooter,omitempty"`
 }
 
 // BodyScanningSettings contains body scanning settings.
