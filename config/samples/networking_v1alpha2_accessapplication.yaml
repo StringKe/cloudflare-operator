@@ -1,9 +1,26 @@
+# AccessApplication - Cloudflare Zero Trust Application
+# AccessApplication - Cloudflare Zero Trust 应用
+#
+# Two modes for defining access policies:
+# 定义访问策略的两种模式：
+#
+# Mode 1: Group Reference Mode (简单模式 - 引用 AccessGroup)
+#   - Reference existing AccessGroup resources or Cloudflare Access Groups
+#   - 引用现有的 AccessGroup 资源或 Cloudflare Access Groups
+#
+# Mode 2: Inline Rules Mode (高级模式 - 直接定义规则)
+#   - Define include/exclude/require rules directly in the policy
+#   - 直接在策略中定义 include/exclude/require 规则
+
+---
+# Example 1: Group Reference Mode - Reference K8s AccessGroup
+# 示例 1：组引用模式 - 引用 K8s AccessGroup
 apiVersion: networking.cloudflare-operator.io/v1alpha2
 kind: AccessApplication
 metadata:
-  name: accessapplication-sample
+  name: accessapplication-group-ref
 spec:
-  name: My Protected App
+  name: My Protected App (Group Reference)
   domain: app.example.com
   type: self_hosted
   sessionDuration: "24h"
@@ -11,22 +28,227 @@ spec:
   appLauncherVisible: true
   policies:
     # Option 1: Reference a Kubernetes AccessGroup resource by name
+    # 选项 1：通过名称引用 Kubernetes AccessGroup 资源
     - name: accessgroup-sample
       decision: allow
       precedence: 1
 
     # Option 2: Reference an existing Cloudflare Access Group by UUID
+    # 选项 2：通过 UUID 引用现有的 Cloudflare Access Group
     # Useful when Access Groups are managed externally (e.g., Terraform)
+    # 当 Access Groups 由外部管理时很有用（如 Terraform）
     # - groupId: "12345678-1234-1234-1234-123456789abc"
     #   decision: allow
     #   precedence: 2
 
     # Option 3: Reference an existing Cloudflare Access Group by display name
+    # 选项 3：通过显示名称引用现有的 Cloudflare Access Group
     # The controller will look up the group by name via the Cloudflare API
+    # 控制器将通过 Cloudflare API 按名称查找组
     # - cloudflareGroupName: "Infrastructure Users"
     #   decision: allow
     #   precedence: 3
     #   sessionDuration: "1h"  # Optional: override session duration for this policy
+  cloudflare:
+    accountId: "<Cloudflare account ID>"
+    domain: example.com
+    secret: cloudflare-secrets
+
+---
+# Example 2: Inline Rules Mode - Email-based Access
+# 示例 2：内联规则模式 - 基于邮箱的访问
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessApplication
+metadata:
+  name: accessapplication-inline-email
+spec:
+  name: My Protected App (Inline Email Rules)
+  domain: app-email.example.com
+  type: self_hosted
+  sessionDuration: "24h"
+  appLauncherVisible: true
+  policies:
+    # Option 4: Inline Rules Mode - Define include/exclude/require rules directly
+    # 选项 4：内联规则模式 - 直接定义 include/exclude/require 规则
+    - policyName: "Allow Company Employees"
+      decision: allow
+      precedence: 1
+      # Include: Users matching ANY rule will be granted access (OR logic)
+      # Include: 匹配任意规则的用户将被授予访问权限（或逻辑）
+      include:
+        # Allow specific emails
+        # 允许特定邮箱
+        - email:
+            email: "admin@example.com"
+        - email:
+            email: "developer@example.com"
+        # Allow entire email domain
+        # 允许整个邮箱域
+        - emailDomain:
+            domain: "example.com"
+      # Exclude: Users matching ANY rule will be denied (even if they match include)
+      # Exclude: 匹配任意规则的用户将被拒绝（即使匹配 include）
+      exclude:
+        - email:
+            email: "contractor@example.com"
+  cloudflare:
+    accountId: "<Cloudflare account ID>"
+    domain: example.com
+    secret: cloudflare-secrets
+
+---
+# Example 3: Inline Rules Mode - Everyone Policy (Public/Bypass)
+# 示例 3：内联规则模式 - Everyone 策略（公开/绕过）
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessApplication
+metadata:
+  name: accessapplication-inline-everyone
+spec:
+  name: Public API (Everyone Access)
+  domain: api.example.com
+  type: self_hosted
+  policies:
+    - policyName: "Allow Everyone"
+      decision: bypass  # Or 'allow' depending on your needs
+      precedence: 1
+      include:
+        # The 'everyone' rule matches all users
+        # 'everyone' 规则匹配所有用户
+        - everyone: {}
+  cloudflare:
+    accountId: "<Cloudflare account ID>"
+    domain: example.com
+    secret: cloudflare-secrets
+
+---
+# Example 4: Inline Rules Mode - Multiple Conditions with Require
+# 示例 4：内联规则模式 - 使用 Require 的多条件
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessApplication
+metadata:
+  name: accessapplication-inline-require
+spec:
+  name: Secure Admin Panel
+  domain: admin.example.com
+  type: self_hosted
+  sessionDuration: "1h"
+  policies:
+    - policyName: "Admin Access - Company Email + US Only"
+      decision: allow
+      precedence: 1
+      # Include: Must match at least one include rule
+      # Include: 必须至少匹配一个 include 规则
+      include:
+        - emailDomain:
+            domain: "example.com"
+      # Require: Must match ALL require rules (AND logic)
+      # Require: 必须匹配所有 require 规则（与逻辑）
+      require:
+        # Must be from allowed countries
+        # 必须来自允许的国家
+        - geo:
+            country: ["US", "CA"]
+      # Exclude: Will be denied even if matching include + require
+      # Exclude: 即使匹配 include + require 也会被拒绝
+      exclude:
+        - email:
+            email: "former-employee@example.com"
+  cloudflare:
+    accountId: "<Cloudflare account ID>"
+    domain: example.com
+    secret: cloudflare-secrets
+
+---
+# Example 5: Inline Rules Mode - IP Range Access
+# 示例 5：内联规则模式 - IP 范围访问
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessApplication
+metadata:
+  name: accessapplication-inline-ip
+spec:
+  name: Internal Service (IP Restricted)
+  domain: internal.example.com
+  type: self_hosted
+  sessionDuration: "24h"
+  policies:
+    - policyName: "Allow Office IPs"
+      decision: allow
+      precedence: 1
+      include:
+        # Allow specific IP ranges (CIDR notation)
+        # 允许特定的 IP 范围（CIDR 格式）
+        - ipRanges:
+            ranges:
+              - "192.168.1.0/24"
+              - "10.0.0.0/8"
+              - "203.0.113.50/32"
+  cloudflare:
+    accountId: "<Cloudflare account ID>"
+    domain: example.com
+    secret: cloudflare-secrets
+
+---
+# Example 6: Inline Rules Mode - Service Token Access (M2M)
+# 示例 6：内联规则模式 - 服务令牌访问（M2M）
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessApplication
+metadata:
+  name: accessapplication-inline-service-token
+spec:
+  name: API Service (M2M Access)
+  domain: api-internal.example.com
+  type: self_hosted
+  sessionDuration: "24h"
+  policies:
+    # Policy 1: Allow service tokens (for automated systems)
+    # 策略 1：允许服务令牌（用于自动化系统）
+    - policyName: "Service Token Access"
+      decision: non_identity  # non_identity for service tokens
+      precedence: 1
+      include:
+        - anyValidServiceToken: {}
+    # Policy 2: Allow human users with company email
+    # 策略 2：允许公司邮箱的人类用户
+    - policyName: "Human Access"
+      decision: allow
+      precedence: 2
+      include:
+        - emailDomain:
+            domain: "example.com"
+  cloudflare:
+    accountId: "<Cloudflare account ID>"
+    domain: example.com
+    secret: cloudflare-secrets
+
+---
+# Example 7: Mixed Mode - Inline Rules + Group Reference (NOT recommended)
+# 示例 7：混合模式 - 内联规则 + 组引用（不推荐）
+# Note: Each policy can only use one mode. Different policies in the same
+# application can use different modes.
+# 注意：每个策略只能使用一种模式。同一应用中的不同策略可以使用不同模式。
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessApplication
+metadata:
+  name: accessapplication-mixed-mode
+spec:
+  name: Mixed Mode App
+  domain: mixed.example.com
+  type: self_hosted
+  sessionDuration: "24h"
+  policies:
+    # Policy 1: Inline rules mode
+    # 策略 1：内联规则模式
+    - policyName: "Inline Email Policy"
+      decision: allow
+      precedence: 1
+      include:
+        - email:
+            email: "admin@example.com"
+    # Policy 2: Group reference mode (separate policy)
+    # 策略 2：组引用模式（独立策略）
+    - name: accessgroup-employees
+      decision: allow
+      precedence: 2
   cloudflare:
     accountId: "<Cloudflare account ID>"
     domain: example.com

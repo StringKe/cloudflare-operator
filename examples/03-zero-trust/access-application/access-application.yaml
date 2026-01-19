@@ -1,14 +1,35 @@
-# AccessApplication - Zero Trust Application (Namespaced)
-# AccessApplication - 零信任应用（命名空间级）
+# AccessApplication - Zero Trust Application (Cluster-scoped)
+# AccessApplication - 零信任应用（集群级）
 #
 # Protect web applications with Cloudflare Access authentication.
 # 使用 Cloudflare Access 认证保护 Web 应用。
+#
+# ============================================================================
+# POLICY MODES - Two ways to define access policies:
+# 策略模式 - 定义访问策略的两种方式：
+#
+# Mode 1: Group Reference Mode (Simple) - Reference existing AccessGroup resources
+# 模式 1：组引用模式（简单）- 引用现有的 AccessGroup 资源
+#   - Use `name` to reference K8s AccessGroup by name
+#   - Use `groupId` to reference Cloudflare Access Group by UUID
+#   - Use `cloudflareGroupName` to reference by display name
+#
+# Mode 2: Inline Rules Mode (Advanced) - Define rules directly in the policy
+# 模式 2：内联规则模式（高级）- 直接在策略中定义规则
+#   - Use `include`, `exclude`, `require` arrays to define access rules
+#   - Supports 23 rule types: email, emailDomain, everyone, group, ipRanges, etc.
+#   - No need to create separate AccessGroup resources
+# ============================================================================
 
+---
+# =============================================================================
+# EXAMPLE 1: Group Reference Mode - Basic Web Application
+# 示例 1：组引用模式 - 基本 Web 应用
+# =============================================================================
 apiVersion: networking.cloudflare-operator.io/v1alpha2
 kind: AccessApplication
 metadata:
   name: internal-dashboard
-  namespace: default
 spec:
   # Application name in Cloudflare
   # Cloudflare 中的应用名称
@@ -30,9 +51,9 @@ spec:
   # Access policies - reference AccessGroup resources
   # 访问策略 - 引用 AccessGroup 资源
   policies:
-    - name: employees      # AccessGroup name
+    - name: employees      # AccessGroup name / AccessGroup 名称
       decision: allow      # allow, deny, non_identity, bypass
-      precedence: 1        # Lower = higher priority
+      precedence: 1        # Lower = higher priority / 数字越小优先级越高
 
     - name: service-accounts
       decision: allow
@@ -56,32 +77,41 @@ spec:
     secret: cloudflare-api-credentials
 
 ---
-# SSH Application
-# SSH 应用
-
+# =============================================================================
+# EXAMPLE 2: Inline Rules Mode - Email-based Access (No AccessGroup needed)
+# 示例 2：内联规则模式 - 基于邮箱的访问（无需 AccessGroup）
+# =============================================================================
 apiVersion: networking.cloudflare-operator.io/v1alpha2
 kind: AccessApplication
 metadata:
-  name: ssh-access
-  namespace: default
+  name: team-wiki
 spec:
-  name: SSH Bastion
-  domain: ssh.example.com
-  type: ssh
-
-  sessionDuration: 8h
+  name: Team Wiki
+  domain: wiki.example.com
+  type: self_hosted
+  sessionDuration: 24h
+  appLauncherVisible: true
 
   policies:
-    - name: engineering-team
+    - policyName: "Allow Company Employees"
       decision: allow
       precedence: 1
-
-  # Require secure devices for SSH
-  # SSH 需要安全设备
-  # policies:
-  #   - name: secure-devices
-  #     decision: allow
-  #     precedence: 1
+      # Include: Users matching ANY rule will be granted access (OR logic)
+      # Include: 匹配任意规则的用户将被授予访问权限（或逻辑）
+      include:
+        # Allow specific emails / 允许特定邮箱
+        - email:
+            email: "admin@example.com"
+        - email:
+            email: "developer@example.com"
+        # Allow entire email domain / 允许整个邮箱域
+        - emailDomain:
+            domain: "example.com"
+      # Exclude: Users matching ANY rule will be denied (even if they match include)
+      # Exclude: 匹配任意规则的用户将被拒绝（即使匹配 include）
+      exclude:
+        - email:
+            email: "former-employee@example.com"
 
   cloudflare:
     accountId: "<your-account-id>"
@@ -89,24 +119,172 @@ spec:
     secret: cloudflare-api-credentials
 
 ---
-# Public Application (bypass authentication)
-# 公开应用（绕过认证）
+# =============================================================================
+# EXAMPLE 3: Inline Rules Mode - Multiple Conditions with Require
+# 示例 3：内联规则模式 - 使用 Require 的多条件
+# =============================================================================
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessApplication
+metadata:
+  name: admin-panel
+spec:
+  name: Admin Panel
+  domain: admin.example.com
+  type: self_hosted
+  sessionDuration: 1h
 
+  policies:
+    - policyName: "Admin Access - Strict Security"
+      decision: allow
+      precedence: 1
+      # Include: Must match at least one include rule
+      # Include: 必须至少匹配一个 include 规则
+      include:
+        - emailDomain:
+            domain: "example.com"
+      # Require: Must match ALL require rules (AND logic)
+      # Require: 必须匹配所有 require 规则（与逻辑）
+      require:
+        # Must be from allowed countries / 必须来自允许的国家
+        - geo:
+            country: ["US", "CA", "GB"]
+      # Exclude: Will be denied even if matching include + require
+      # Exclude: 即使匹配 include + require 也会被拒绝
+      exclude:
+        - email:
+            email: "contractor@example.com"
+
+  # Custom deny message / 自定义拒绝消息
+  customDenyMessage: "Access denied. Please contact IT support."
+  customDenyUrl: https://support.example.com/access-denied
+
+  # Security settings / 安全设置
+  httpOnlyCookieAttribute: true
+  sameSiteCookieAttribute: strict
+  enableBindingCookie: true
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# =============================================================================
+# EXAMPLE 4: Inline Rules Mode - Everyone Policy (Public/Bypass)
+# 示例 4：内联规则模式 - Everyone 策略（公开/绕过）
+# =============================================================================
 apiVersion: networking.cloudflare-operator.io/v1alpha2
 kind: AccessApplication
 metadata:
   name: public-api
-  namespace: default
 spec:
   name: Public API
   domain: api.example.com
   type: self_hosted
 
-  # Allow everyone (no authentication)
-  # 允许所有人（无认证）
+  # Allow everyone (no authentication) / 允许所有人（无认证）
   policies:
-    - name: everyone
-      decision: bypass
+    - policyName: "Allow Everyone"
+      decision: bypass  # Or 'allow' depending on your needs
+      precedence: 1
+      include:
+        # The 'everyone' rule matches all users
+        # 'everyone' 规则匹配所有用户
+        - everyone: {}
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# =============================================================================
+# EXAMPLE 5: Inline Rules Mode - IP Range Access
+# 示例 5：内联规则模式 - IP 范围访问
+# =============================================================================
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessApplication
+metadata:
+  name: internal-service
+spec:
+  name: Internal Service (IP Restricted)
+  domain: internal.example.com
+  type: self_hosted
+  sessionDuration: 24h
+
+  policies:
+    - policyName: "Allow Office IPs Only"
+      decision: allow
+      precedence: 1
+      include:
+        # Allow specific IP ranges (CIDR notation)
+        # 允许特定的 IP 范围（CIDR 格式）
+        - ipRanges:
+            ranges:
+              - "192.168.1.0/24"
+              - "10.0.0.0/8"
+              - "203.0.113.50/32"
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# =============================================================================
+# EXAMPLE 6: Inline Rules Mode - Service Token Access (M2M)
+# 示例 6：内联规则模式 - 服务令牌访问（M2M）
+# =============================================================================
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessApplication
+metadata:
+  name: api-service
+spec:
+  name: API Service (M2M Access)
+  domain: api-internal.example.com
+  type: self_hosted
+  sessionDuration: 24h
+
+  policies:
+    # Policy 1: Allow service tokens (for automated systems)
+    # 策略 1：允许服务令牌（用于自动化系统）
+    - policyName: "Service Token Access"
+      decision: non_identity  # non_identity for service tokens
+      precedence: 1
+      include:
+        - anyValidServiceToken: {}
+    # Policy 2: Allow human users with company email
+    # 策略 2：允许公司邮箱的人类用户
+    - policyName: "Human Access"
+      decision: allow
+      precedence: 2
+      include:
+        - emailDomain:
+            domain: "example.com"
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    domain: "<your-domain.com>"
+    secret: cloudflare-api-credentials
+
+---
+# =============================================================================
+# EXAMPLE 7: SSH Application with Group Reference
+# 示例 7：使用组引用的 SSH 应用
+# =============================================================================
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessApplication
+metadata:
+  name: ssh-access
+spec:
+  name: SSH Bastion
+  domain: ssh.example.com
+  type: ssh
+  sessionDuration: 8h
+
+  policies:
+    - name: engineering-team  # Reference an AccessGroup
+      decision: allow
       precedence: 1
 
   cloudflare:
@@ -115,36 +293,33 @@ spec:
     secret: cloudflare-api-credentials
 
 ---
-# Application with Custom Deny Page
-# 带自定义拒绝页面的应用
-
+# =============================================================================
+# EXAMPLE 8: Group Reference by Cloudflare UUID/Name
+# 示例 8：通过 Cloudflare UUID/名称引用组
+# =============================================================================
 apiVersion: networking.cloudflare-operator.io/v1alpha2
 kind: AccessApplication
 metadata:
-  name: admin-panel
-  namespace: default
+  name: terraform-managed-app
 spec:
-  name: Admin Panel
-  domain: admin.example.com
+  name: Terraform Managed App
+  domain: tf-app.example.com
   type: self_hosted
-
-  sessionDuration: 1h
+  sessionDuration: 24h
 
   policies:
-    - name: engineering-team
+    # Reference existing Cloudflare Access Group by UUID
+    # 通过 UUID 引用现有的 Cloudflare Access Group
+    - groupId: "12345678-1234-1234-1234-123456789abc"
       decision: allow
       precedence: 1
 
-  # Custom deny message
-  # 自定义拒绝消息
-  customDenyMessage: "Access denied. Please contact IT support."
-  customDenyUrl: https://support.example.com/access-denied
-
-  # Security settings
-  # 安全设置
-  httpOnlyCookieAttribute: true
-  sameSiteCookieAttribute: strict
-  enableBindingCookie: true
+    # Reference existing Cloudflare Access Group by display name
+    # 通过显示名称引用现有的 Cloudflare Access Group
+    - cloudflareGroupName: "Infrastructure Users"
+      decision: allow
+      precedence: 2
+      sessionDuration: "1h"  # Override session duration for this policy
 
   cloudflare:
     accountId: "<your-account-id>"

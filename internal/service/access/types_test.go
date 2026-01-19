@@ -353,3 +353,422 @@ func TestAccessIdentityProviderSyncResult(t *testing.T) {
 	assert.Equal(t, "idp-123", result.ID)
 	assert.Equal(t, "account-456", result.AccountID)
 }
+
+// TestAccessPolicyConfigHasInlineRules tests the HasInlineRules method
+func TestAccessPolicyConfigHasInlineRules(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   AccessPolicyConfig
+		expected bool
+	}{
+		{
+			name: "no rules - empty config",
+			config: AccessPolicyConfig{
+				Decision:   "allow",
+				Precedence: 1,
+			},
+			expected: false,
+		},
+		{
+			name: "group reference mode only",
+			config: AccessPolicyConfig{
+				GroupID:    "group-123",
+				Decision:   "allow",
+				Precedence: 1,
+			},
+			expected: false,
+		},
+		{
+			name: "include rules only",
+			config: AccessPolicyConfig{
+				Decision:   "allow",
+				Precedence: 1,
+				Include: []v1alpha2.AccessGroupRule{
+					{Email: &v1alpha2.AccessGroupEmailRule{Email: "user@example.com"}},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "exclude rules only",
+			config: AccessPolicyConfig{
+				Decision:   "allow",
+				Precedence: 1,
+				Exclude: []v1alpha2.AccessGroupRule{
+					{EmailDomain: &v1alpha2.AccessGroupEmailDomainRule{Domain: "external.com"}},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "require rules only",
+			config: AccessPolicyConfig{
+				Decision:   "allow",
+				Precedence: 1,
+				Require: []v1alpha2.AccessGroupRule{
+					{AuthMethod: &v1alpha2.AccessGroupAuthMethodRule{AuthMethod: "mfa"}},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "all inline rules",
+			config: AccessPolicyConfig{
+				Decision:   "allow",
+				Precedence: 1,
+				Include: []v1alpha2.AccessGroupRule{
+					{Email: &v1alpha2.AccessGroupEmailRule{Email: "user@example.com"}},
+				},
+				Exclude: []v1alpha2.AccessGroupRule{
+					{IPRanges: &v1alpha2.AccessGroupIPRangesRule{IP: []string{"10.0.0.0/8"}}},
+				},
+				Require: []v1alpha2.AccessGroupRule{
+					{Certificate: true},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "inline rules with group reference (inline takes precedence)",
+			config: AccessPolicyConfig{
+				GroupID:    "group-123",
+				Decision:   "allow",
+				Precedence: 1,
+				Include: []v1alpha2.AccessGroupRule{
+					{Email: &v1alpha2.AccessGroupEmailRule{Email: "user@example.com"}},
+				},
+			},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.config.HasInlineRules()
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestAccessPolicyConfigHasGroupReference tests the HasGroupReference method
+func TestAccessPolicyConfigHasGroupReference(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   AccessPolicyConfig
+		expected bool
+	}{
+		{
+			name: "no reference - empty config",
+			config: AccessPolicyConfig{
+				Decision:   "allow",
+				Precedence: 1,
+			},
+			expected: false,
+		},
+		{
+			name: "GroupID reference",
+			config: AccessPolicyConfig{
+				GroupID:    "group-123",
+				Decision:   "allow",
+				Precedence: 1,
+			},
+			expected: true,
+		},
+		{
+			name: "CloudflareGroupID reference",
+			config: AccessPolicyConfig{
+				CloudflareGroupID: "cf-group-456",
+				Decision:          "allow",
+				Precedence:        1,
+			},
+			expected: true,
+		},
+		{
+			name: "CloudflareGroupName reference",
+			config: AccessPolicyConfig{
+				CloudflareGroupName: "My Cloudflare Group",
+				Decision:            "allow",
+				Precedence:          1,
+			},
+			expected: true,
+		},
+		{
+			name: "K8sAccessGroupName reference",
+			config: AccessPolicyConfig{
+				K8sAccessGroupName: "my-k8s-group",
+				Decision:           "allow",
+				Precedence:         1,
+			},
+			expected: true,
+		},
+		{
+			name: "inline rules only (no group reference)",
+			config: AccessPolicyConfig{
+				Decision:   "allow",
+				Precedence: 1,
+				Include: []v1alpha2.AccessGroupRule{
+					{Email: &v1alpha2.AccessGroupEmailRule{Email: "user@example.com"}},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "both inline rules and group reference",
+			config: AccessPolicyConfig{
+				GroupID:    "group-123",
+				Decision:   "allow",
+				Precedence: 1,
+				Include: []v1alpha2.AccessGroupRule{
+					{Email: &v1alpha2.AccessGroupEmailRule{Email: "user@example.com"}},
+				},
+			},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.config.HasGroupReference()
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestAccessPolicyConfigWithInlineRules tests AccessPolicyConfig with inline rules
+func TestAccessPolicyConfigWithInlineRules(t *testing.T) {
+	config := AccessPolicyConfig{
+		Decision:        "allow",
+		Precedence:      1,
+		PolicyName:      "Allow Engineers",
+		SessionDuration: "8h",
+		Include: []v1alpha2.AccessGroupRule{
+			{Email: &v1alpha2.AccessGroupEmailRule{Email: "admin@example.com"}},
+			{EmailDomain: &v1alpha2.AccessGroupEmailDomainRule{Domain: "example.com"}},
+			{Group: &v1alpha2.AccessGroupGroupRule{ID: "idp-group-123"}},
+		},
+		Exclude: []v1alpha2.AccessGroupRule{
+			{IPRanges: &v1alpha2.AccessGroupIPRangesRule{IP: []string{"10.0.0.0/8"}}},
+			{Country: &v1alpha2.AccessGroupCountryRule{Country: []string{"CN"}}},
+		},
+		Require: []v1alpha2.AccessGroupRule{
+			{AuthMethod: &v1alpha2.AccessGroupAuthMethodRule{AuthMethod: "mfa"}},
+			{Certificate: true},
+		},
+	}
+
+	assert.Equal(t, "allow", config.Decision)
+	assert.Equal(t, 1, config.Precedence)
+	assert.Equal(t, "Allow Engineers", config.PolicyName)
+	assert.Equal(t, "8h", config.SessionDuration)
+
+	// Verify include rules
+	assert.Len(t, config.Include, 3)
+	assert.NotNil(t, config.Include[0].Email)
+	assert.Equal(t, "admin@example.com", config.Include[0].Email.Email)
+	assert.NotNil(t, config.Include[1].EmailDomain)
+	assert.Equal(t, "example.com", config.Include[1].EmailDomain.Domain)
+	assert.NotNil(t, config.Include[2].Group)
+	assert.Equal(t, "idp-group-123", config.Include[2].Group.ID)
+
+	// Verify exclude rules
+	assert.Len(t, config.Exclude, 2)
+	assert.NotNil(t, config.Exclude[0].IPRanges)
+	assert.Equal(t, []string{"10.0.0.0/8"}, config.Exclude[0].IPRanges.IP)
+	assert.NotNil(t, config.Exclude[1].Country)
+	assert.Equal(t, []string{"CN"}, config.Exclude[1].Country.Country)
+
+	// Verify require rules
+	assert.Len(t, config.Require, 2)
+	assert.NotNil(t, config.Require[0].AuthMethod)
+	assert.Equal(t, "mfa", config.Require[0].AuthMethod.AuthMethod)
+	assert.True(t, config.Require[1].Certificate)
+
+	// Verify mode detection
+	assert.True(t, config.HasInlineRules())
+	assert.False(t, config.HasGroupReference())
+}
+
+// TestAccessPolicyConfigAllRuleTypes tests all supported rule types in inline mode
+//
+//nolint:revive // Test verifying all 23 rule types naturally has high cognitive complexity
+func TestAccessPolicyConfigAllRuleTypes(t *testing.T) {
+	config := AccessPolicyConfig{
+		Decision:   "allow",
+		Precedence: 1,
+		Include: []v1alpha2.AccessGroupRule{
+			// Basic rules
+			{Email: &v1alpha2.AccessGroupEmailRule{Email: "user@example.com"}},
+			{EmailDomain: &v1alpha2.AccessGroupEmailDomainRule{Domain: "example.com"}},
+			{EmailList: &v1alpha2.AccessGroupEmailListRule{ID: "list-123"}},
+			{Everyone: true},
+			{IPRanges: &v1alpha2.AccessGroupIPRangesRule{IP: []string{"192.168.1.0/24"}}},
+			{IPList: &v1alpha2.AccessGroupIPListRule{ID: "iplist-456"}},
+			{Country: &v1alpha2.AccessGroupCountryRule{Country: []string{"US"}}},
+			{Group: &v1alpha2.AccessGroupGroupRule{ID: "group-789"}},
+			// Service tokens
+			{ServiceToken: &v1alpha2.AccessGroupServiceTokenRule{TokenID: "token-abc"}},
+			{AnyValidServiceToken: true},
+			// Certificates
+			{Certificate: true},
+			{CommonName: &v1alpha2.AccessGroupCommonNameRule{CommonName: "*.example.com"}},
+			// Device posture
+			{DevicePosture: &v1alpha2.AccessGroupDevicePostureRule{IntegrationUID: "posture-123"}},
+			// Identity providers
+			{GSuite: &v1alpha2.AccessGroupGSuiteRule{Email: "user@gsuite.com", IdentityProviderID: "gsuite-idp"}},
+			{GitHub: &v1alpha2.AccessGroupGitHubRule{Name: "org-name", IdentityProviderID: "github-idp"}},
+			{Azure: &v1alpha2.AccessGroupAzureRule{ID: "azure-group-id", IdentityProviderID: "azure-idp"}},
+			{Okta: &v1alpha2.AccessGroupOktaRule{Name: "okta-group", IdentityProviderID: "okta-idp"}},
+			{OIDC: &v1alpha2.AccessGroupOIDCRule{ClaimName: "groups", ClaimValue: "engineers", IdentityProviderID: "oidc-idp"}},
+			{SAML: &v1alpha2.AccessGroupSAMLRule{AttributeName: "role", AttributeValue: "admin", IdentityProviderID: "saml-idp"}},
+			// Auth methods
+			{AuthMethod: &v1alpha2.AccessGroupAuthMethodRule{AuthMethod: "mfa"}},
+			{AuthContext: &v1alpha2.AccessGroupAuthContextRule{ID: "context-123", AcID: "acid-456", IdentityProviderID: "azure-idp"}},
+			{LoginMethod: &v1alpha2.AccessGroupLoginMethodRule{ID: "login-method-789"}},
+			// External evaluation
+			{ExternalEvaluation: &v1alpha2.AccessGroupExternalEvaluationRule{
+				EvaluateURL: "https://eval.example.com/check",
+				KeysURL:     "https://eval.example.com/keys",
+			}},
+		},
+	}
+
+	assert.True(t, config.HasInlineRules())
+	assert.Len(t, config.Include, 23)
+
+	// Verify each rule type is present
+	ruleTypes := make(map[string]bool)
+	for _, rule := range config.Include {
+		if rule.Email != nil {
+			ruleTypes["email"] = true
+		}
+		if rule.EmailDomain != nil {
+			ruleTypes["emailDomain"] = true
+		}
+		if rule.EmailList != nil {
+			ruleTypes["emailList"] = true
+		}
+		if rule.Everyone {
+			ruleTypes["everyone"] = true
+		}
+		if rule.IPRanges != nil {
+			ruleTypes["ipRanges"] = true
+		}
+		if rule.IPList != nil {
+			ruleTypes["ipList"] = true
+		}
+		if rule.Country != nil {
+			ruleTypes["country"] = true
+		}
+		if rule.Group != nil {
+			ruleTypes["group"] = true
+		}
+		if rule.ServiceToken != nil {
+			ruleTypes["serviceToken"] = true
+		}
+		if rule.AnyValidServiceToken {
+			ruleTypes["anyValidServiceToken"] = true
+		}
+		if rule.Certificate {
+			ruleTypes["certificate"] = true
+		}
+		if rule.CommonName != nil {
+			ruleTypes["commonName"] = true
+		}
+		if rule.DevicePosture != nil {
+			ruleTypes["devicePosture"] = true
+		}
+		if rule.GSuite != nil {
+			ruleTypes["gsuite"] = true
+		}
+		if rule.GitHub != nil {
+			ruleTypes["github"] = true
+		}
+		if rule.Azure != nil {
+			ruleTypes["azure"] = true
+		}
+		if rule.Okta != nil {
+			ruleTypes["okta"] = true
+		}
+		if rule.OIDC != nil {
+			ruleTypes["oidc"] = true
+		}
+		if rule.SAML != nil {
+			ruleTypes["saml"] = true
+		}
+		if rule.AuthMethod != nil {
+			ruleTypes["authMethod"] = true
+		}
+		if rule.AuthContext != nil {
+			ruleTypes["authContext"] = true
+		}
+		if rule.LoginMethod != nil {
+			ruleTypes["loginMethod"] = true
+		}
+		if rule.ExternalEvaluation != nil {
+			ruleTypes["externalEvaluation"] = true
+		}
+	}
+
+	// Verify all 23 rule types are present
+	assert.Len(t, ruleTypes, 23)
+}
+
+// TestAccessApplicationConfigWithInlinePolicies tests the full AccessApplicationConfig with inline policies
+func TestAccessApplicationConfigWithInlinePolicies(t *testing.T) {
+	config := AccessApplicationConfig{
+		Name:   "secure-app",
+		Domain: "secure.example.com",
+		Type:   "self_hosted",
+		Policies: []AccessPolicyConfig{
+			{
+				Decision:   "allow",
+				Precedence: 1,
+				PolicyName: "Allow Admins",
+				Include: []v1alpha2.AccessGroupRule{
+					{Email: &v1alpha2.AccessGroupEmailRule{Email: "admin@example.com"}},
+				},
+				Require: []v1alpha2.AccessGroupRule{
+					{AuthMethod: &v1alpha2.AccessGroupAuthMethodRule{AuthMethod: "mfa"}},
+				},
+			},
+			{
+				Decision:   "allow",
+				Precedence: 2,
+				PolicyName: "Allow Employees",
+				Include: []v1alpha2.AccessGroupRule{
+					{EmailDomain: &v1alpha2.AccessGroupEmailDomainRule{Domain: "example.com"}},
+				},
+				Exclude: []v1alpha2.AccessGroupRule{
+					{IPRanges: &v1alpha2.AccessGroupIPRangesRule{IP: []string{"10.0.0.0/8"}}},
+				},
+			},
+			{
+				// Legacy group reference mode
+				GroupID:    "external-group-123",
+				Decision:   "allow",
+				Precedence: 3,
+			},
+		},
+	}
+
+	assert.Equal(t, "secure-app", config.Name)
+	assert.Len(t, config.Policies, 3)
+
+	// First policy - inline with require
+	assert.True(t, config.Policies[0].HasInlineRules())
+	assert.False(t, config.Policies[0].HasGroupReference())
+	assert.Equal(t, "Allow Admins", config.Policies[0].PolicyName)
+	assert.Len(t, config.Policies[0].Include, 1)
+	assert.Len(t, config.Policies[0].Require, 1)
+
+	// Second policy - inline with exclude
+	assert.True(t, config.Policies[1].HasInlineRules())
+	assert.Equal(t, "Allow Employees", config.Policies[1].PolicyName)
+	assert.Len(t, config.Policies[1].Include, 1)
+	assert.Len(t, config.Policies[1].Exclude, 1)
+
+	// Third policy - group reference mode
+	assert.False(t, config.Policies[2].HasInlineRules())
+	assert.True(t, config.Policies[2].HasGroupReference())
+	assert.Equal(t, "external-group-123", config.Policies[2].GroupID)
+}

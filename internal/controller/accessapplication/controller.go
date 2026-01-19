@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2025-2026 The Cloudflare Operator Authors
 
+// Package accessapplication provides the L2 controller for AccessApplication CRD.
+// This controller handles the reconciliation of AccessApplication resources,
+// resolving policy references and registering configurations with the Core Service.
 package accessapplication
 
 import (
@@ -294,6 +297,8 @@ func (r *Reconciler) reconcileApplication() (ctrl.Result, error) {
 // Supports two modes:
 // 1. Inline Rules Mode: When include/exclude/require rules are specified directly
 // 2. Group Reference Mode: When referencing an AccessGroup via name/groupId/cloudflareGroupName
+//
+//nolint:revive,unparam // cognitive-complexity: Policy resolution inherently handles multiple modes and error paths; error kept for future use
 func (r *Reconciler) resolvePolicies() ([]accesssvc.AccessPolicyConfig, error) {
 	if len(r.app.Spec.Policies) == 0 {
 		return nil, nil
