@@ -356,6 +356,9 @@ func (r *ApplicationController) resolveGroupReferences(
 
 // syncPolicies synchronizes Access Policies for an application.
 // It compares existing policies with desired policies and creates/updates/deletes as needed.
+// Supports two modes:
+// 1. Inline Rules Mode: When Include/Exclude/Require rules are specified directly in the policy
+// 2. Group Reference Mode: When referencing an AccessGroup (legacy mode)
 //
 //nolint:revive // cognitive complexity is acceptable for policy sync logic
 func (r *ApplicationController) syncPolicies(
@@ -366,11 +369,28 @@ func (r *ApplicationController) syncPolicies(
 ) error {
 	logger := log.FromContext(ctx)
 
-	// Resolve group references first
-	resolvedPolicies, err := r.resolveGroupReferences(ctx, apiClient, desiredPolicies)
+	// Separate policies by mode
+	var inlinePolicies []accesssvc.AccessPolicyConfig
+	var groupRefPolicies []accesssvc.AccessPolicyConfig
+
+	for _, policy := range desiredPolicies {
+		if policy.HasInlineRules() {
+			inlinePolicies = append(inlinePolicies, policy)
+		} else {
+			groupRefPolicies = append(groupRefPolicies, policy)
+		}
+	}
+
+	// Resolve group references for group reference mode policies
+	resolvedGroupPolicies, err := r.resolveGroupReferences(ctx, apiClient, groupRefPolicies)
 	if err != nil {
 		return fmt.Errorf("resolve group references: %w", err)
 	}
+
+	// Merge all resolved policies
+	resolvedPolicies := make([]accesssvc.AccessPolicyConfig, 0, len(inlinePolicies)+len(resolvedGroupPolicies))
+	resolvedPolicies = append(resolvedPolicies, inlinePolicies...)
+	resolvedPolicies = append(resolvedPolicies, resolvedGroupPolicies...)
 
 	// List existing policies
 	existingPolicies, err := apiClient.ListAccessPolicies(ctx, appID)
@@ -398,8 +418,24 @@ func (r *ApplicationController) syncPolicies(
 			Name:            policyName,
 			Decision:        desired.Decision,
 			Precedence:      desired.Precedence,
-			Include:         []cf.AccessGroupRuleParams{cf.BuildGroupIncludeRule(desired.GroupID)},
 			SessionDuration: nilIfEmpty(desired.SessionDuration),
+		}
+
+		// Build rules based on mode
+		if desired.HasInlineRules() {
+			// Inline Rules Mode - use include/exclude/require directly
+			params.Include = convertGroupRules(desired.Include)
+			params.Exclude = convertGroupRules(desired.Exclude)
+			params.Require = convertGroupRules(desired.Require)
+
+			logger.V(1).Info("Building policy with inline rules",
+				"precedence", desired.Precedence,
+				"includeCount", len(desired.Include),
+				"excludeCount", len(desired.Exclude),
+				"requireCount", len(desired.Require))
+		} else {
+			// Group Reference Mode - use group ID as include rule
+			params.Include = []cf.AccessGroupRuleParams{cf.BuildGroupIncludeRule(desired.GroupID)}
 		}
 
 		if existing, ok := existingByPrecedence[desired.Precedence]; ok {
@@ -407,6 +443,7 @@ func (r *ApplicationController) syncPolicies(
 			logger.V(1).Info("Updating Access Policy",
 				"policyId", existing.ID,
 				"precedence", desired.Precedence,
+				"inlineMode", desired.HasInlineRules(),
 				"groupId", desired.GroupID)
 
 			if _, err := apiClient.UpdateAccessPolicy(ctx, existing.ID, params); err != nil {
@@ -417,6 +454,7 @@ func (r *ApplicationController) syncPolicies(
 			logger.V(1).Info("Creating Access Policy",
 				"precedence", desired.Precedence,
 				"decision", desired.Decision,
+				"inlineMode", desired.HasInlineRules(),
 				"groupId", desired.GroupID)
 
 			if _, err := apiClient.CreateAccessPolicy(ctx, params); err != nil {
@@ -448,6 +486,9 @@ func (*ApplicationController) getPolicyName(policy accesssvc.AccessPolicyConfig)
 	}
 	if policy.GroupName != "" {
 		return fmt.Sprintf("%s - %s", policy.GroupName, policy.Decision)
+	}
+	if policy.HasInlineRules() {
+		return fmt.Sprintf("Inline Policy %d - %s", policy.Precedence, policy.Decision)
 	}
 	return fmt.Sprintf("Policy %d - %s", policy.Precedence, policy.Decision)
 }

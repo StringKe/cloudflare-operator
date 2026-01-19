@@ -102,12 +102,32 @@ type AccessApplicationConfig struct {
 	ReusablePolicyRefs []ReusablePolicyRefConfig `json:"reusablePolicyRefs,omitempty"`
 }
 
-// AccessPolicyConfig contains policy configuration for AccessApplication
+// AccessPolicyConfig contains policy configuration for AccessApplication.
+// Supports two modes:
+// 1. Group Reference Mode: Use GroupID/CloudflareGroupID/CloudflareGroupName/K8sAccessGroupName
+// 2. Inline Rules Mode: Use Include/Exclude/Require directly
 type AccessPolicyConfig struct {
+	// --- Group Reference Mode ---
 	// GroupID is the resolved Cloudflare Access Group ID (set by L2 if resolving K8s AccessGroup)
 	GroupID string `json:"groupId,omitempty"`
 	// GroupName for display purposes
 	GroupName string `json:"groupName,omitempty"`
+	// CloudflareGroupID is a direct Cloudflare group ID reference (validated in L5)
+	CloudflareGroupID string `json:"cloudflareGroupId,omitempty"`
+	// CloudflareGroupName is a Cloudflare group name to look up (resolved in L5)
+	CloudflareGroupName string `json:"cloudflareGroupName,omitempty"`
+	// K8sAccessGroupName is a Kubernetes AccessGroup resource name (resolved in L5)
+	K8sAccessGroupName string `json:"k8sAccessGroupName,omitempty"`
+
+	// --- Inline Rules Mode ---
+	// Include rules (OR logic) - at least one required when using inline mode
+	Include []v1alpha2.AccessGroupRule `json:"include,omitempty"`
+	// Exclude rules (NOT logic)
+	Exclude []v1alpha2.AccessGroupRule `json:"exclude,omitempty"`
+	// Require rules (AND logic)
+	Require []v1alpha2.AccessGroupRule `json:"require,omitempty"`
+
+	// --- Common Fields ---
 	// Decision is the policy decision (allow, deny, bypass, non_identity)
 	Decision string `json:"decision"`
 	// Precedence is the order of evaluation
@@ -116,14 +136,16 @@ type AccessPolicyConfig struct {
 	PolicyName string `json:"policyName,omitempty"`
 	// SessionDuration overrides application session duration
 	SessionDuration string `json:"sessionDuration,omitempty"`
+}
 
-	// Group Reference fields (one of these will be set, resolved by L5 Sync Controller)
-	// CloudflareGroupID is a direct Cloudflare group ID reference (validated in L5)
-	CloudflareGroupID string `json:"cloudflareGroupId,omitempty"`
-	// CloudflareGroupName is a Cloudflare group name to look up (resolved in L5)
-	CloudflareGroupName string `json:"cloudflareGroupName,omitempty"`
-	// K8sAccessGroupName is a Kubernetes AccessGroup resource name (resolved in L5)
-	K8sAccessGroupName string `json:"k8sAccessGroupName,omitempty"`
+// HasInlineRules returns true if the policy uses inline rules mode
+func (c *AccessPolicyConfig) HasInlineRules() bool {
+	return len(c.Include) > 0 || len(c.Exclude) > 0 || len(c.Require) > 0
+}
+
+// HasGroupReference returns true if the policy uses group reference mode
+func (c *AccessPolicyConfig) HasGroupReference() bool {
+	return c.GroupID != "" || c.CloudflareGroupID != "" || c.CloudflareGroupName != "" || c.K8sAccessGroupName != ""
 }
 
 // AccessGroupConfig contains the configuration for an AccessGroup.

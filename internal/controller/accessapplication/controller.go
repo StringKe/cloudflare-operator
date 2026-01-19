@@ -290,6 +290,10 @@ func (r *Reconciler) reconcileApplication() (ctrl.Result, error) {
 // resolvePolicies converts policy references to AccessPolicyConfig.
 // Following Unified Sync Architecture: L2 Controller passes reference info to L3 Service,
 // and L5 Sync Controller resolves actual Group IDs via Cloudflare API.
+//
+// Supports two modes:
+// 1. Inline Rules Mode: When include/exclude/require rules are specified directly
+// 2. Group Reference Mode: When referencing an AccessGroup via name/groupId/cloudflareGroupName
 func (r *Reconciler) resolvePolicies() ([]accesssvc.AccessPolicyConfig, error) {
 	if len(r.app.Spec.Policies) == 0 {
 		return nil, nil
@@ -315,43 +319,59 @@ func (r *Reconciler) resolvePolicies() ([]accesssvc.AccessPolicyConfig, error) {
 			SessionDuration: policyRef.SessionDuration,
 		}
 
-		// Set reference fields - L5 Sync Controller will resolve these to actual GroupID
-		switch {
-		case policyRef.GroupID != "":
-			// Direct Cloudflare group ID reference - will be validated in L5
-			policyConfig.CloudflareGroupID = policyRef.GroupID
-		case policyRef.CloudflareGroupName != "":
-			// Cloudflare group name reference - will be looked up in L5
-			policyConfig.CloudflareGroupName = policyRef.CloudflareGroupName
-		case policyRef.Name != "":
-			// K8s AccessGroup reference - resolve now to get K8s resource status
-			accessGroup := &networkingv1alpha2.AccessGroup{}
-			if err := r.Get(r.ctx, apitypes.NamespacedName{Name: policyRef.Name}, accessGroup); err != nil {
-				if apierrors.IsNotFound(err) {
-					r.log.Error(err, "Kubernetes AccessGroup resource not found",
+		// Check if using inline rules mode (include/exclude/require specified directly)
+		hasInlineRules := len(policyRef.Include) > 0 || len(policyRef.Exclude) > 0 || len(policyRef.Require) > 0
+
+		if hasInlineRules {
+			// Inline Rules Mode - pass rules directly to L5 Sync Controller
+			policyConfig.Include = policyRef.Include
+			policyConfig.Exclude = policyRef.Exclude
+			policyConfig.Require = policyRef.Require
+
+			r.log.V(1).Info("Using inline rules mode for policy",
+				"policyIndex", i, "precedence", precedence,
+				"includeCount", len(policyRef.Include),
+				"excludeCount", len(policyRef.Exclude),
+				"requireCount", len(policyRef.Require))
+		} else {
+			// Group Reference Mode - set reference fields for L5 to resolve
+			switch {
+			case policyRef.GroupID != "":
+				// Direct Cloudflare group ID reference - will be validated in L5
+				policyConfig.CloudflareGroupID = policyRef.GroupID
+			case policyRef.CloudflareGroupName != "":
+				// Cloudflare group name reference - will be looked up in L5
+				policyConfig.CloudflareGroupName = policyRef.CloudflareGroupName
+			case policyRef.Name != "":
+				// K8s AccessGroup reference - resolve now to get K8s resource status
+				accessGroup := &networkingv1alpha2.AccessGroup{}
+				if err := r.Get(r.ctx, apitypes.NamespacedName{Name: policyRef.Name}, accessGroup); err != nil {
+					if apierrors.IsNotFound(err) {
+						r.log.Error(err, "Kubernetes AccessGroup resource not found",
+							"policyIndex", i, "accessGroupName", policyRef.Name)
+						r.Recorder.Event(r.app, corev1.EventTypeWarning, "PolicyResolutionFailed",
+							fmt.Sprintf("AccessGroup %s not found for policy at precedence %d", policyRef.Name, precedence))
+						continue
+					}
+					r.log.Error(err, "Failed to get AccessGroup resource",
 						"policyIndex", i, "accessGroupName", policyRef.Name)
-					r.Recorder.Event(r.app, corev1.EventTypeWarning, "PolicyResolutionFailed",
-						fmt.Sprintf("AccessGroup %s not found for policy at precedence %d", policyRef.Name, precedence))
 					continue
 				}
-				r.log.Error(err, "Failed to get AccessGroup resource",
-					"policyIndex", i, "accessGroupName", policyRef.Name)
+				if accessGroup.Status.GroupID != "" {
+					// AccessGroup already synced - use its GroupID directly
+					policyConfig.GroupID = accessGroup.Status.GroupID
+					policyConfig.GroupName = accessGroup.GetAccessGroupName()
+				} else {
+					// AccessGroup not yet synced - pass reference name for L5 to resolve
+					policyConfig.K8sAccessGroupName = policyRef.Name
+				}
+			default:
+				r.log.Info("No group reference or inline rules specified in policy, skipping",
+					"policyIndex", i, "precedence", precedence)
+				r.Recorder.Event(r.app, corev1.EventTypeWarning, "PolicyResolutionFailed",
+					fmt.Sprintf("No group reference or inline rules specified for policy at precedence %d", precedence))
 				continue
 			}
-			if accessGroup.Status.GroupID != "" {
-				// AccessGroup already synced - use its GroupID directly
-				policyConfig.GroupID = accessGroup.Status.GroupID
-				policyConfig.GroupName = accessGroup.GetAccessGroupName()
-			} else {
-				// AccessGroup not yet synced - pass reference name for L5 to resolve
-				policyConfig.K8sAccessGroupName = policyRef.Name
-			}
-		default:
-			r.log.Info("No group reference specified in policy, skipping",
-				"policyIndex", i, "precedence", precedence)
-			r.Recorder.Event(r.app, corev1.EventTypeWarning, "PolicyResolutionFailed",
-				fmt.Sprintf("No group reference specified for policy at precedence %d", precedence))
-			continue
 		}
 
 		policies = append(policies, policyConfig)

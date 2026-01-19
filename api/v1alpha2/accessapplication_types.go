@@ -645,11 +645,17 @@ type AccessIdentityProviderRef struct {
 }
 
 // AccessPolicyRef references an access policy or defines an inline policy.
-// Exactly one of name, groupId, or cloudflareGroupName must be specified.
+// You can either:
+// 1. Reference an AccessGroup using name, groupId, or cloudflareGroupName (simple mode)
+// 2. Define inline include/exclude/require rules directly (advanced mode)
+// When using inline rules, group references are ignored.
 type AccessPolicyRef struct {
+	// --- Group Reference Mode (Simple) ---
+	// Use one of these to reference an existing AccessGroup.
+
 	// Name is the name of an AccessGroup resource (Kubernetes) to use as a policy.
 	// If specified, the controller will look up the AccessGroup CR and use its GroupID.
-	// Mutually exclusive with groupId and cloudflareGroupName.
+	// Mutually exclusive with groupId, cloudflareGroupName, and inline rules.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name,omitempty"`
@@ -657,7 +663,7 @@ type AccessPolicyRef struct {
 	// GroupID is the UUID of an existing Cloudflare Access Group.
 	// Use this to directly reference a Cloudflare-managed Access Group
 	// without creating a corresponding Kubernetes AccessGroup resource.
-	// Mutually exclusive with name and cloudflareGroupName.
+	// Mutually exclusive with name, cloudflareGroupName, and inline rules.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Pattern=`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`
 	GroupID string `json:"groupId,omitempty"`
@@ -666,10 +672,33 @@ type AccessPolicyRef struct {
 	// The controller will resolve this name to a GroupID via the Cloudflare API.
 	// Use this when you want to reference a Cloudflare Access Group by name
 	// (e.g., groups created via Terraform or the Cloudflare dashboard).
-	// Mutually exclusive with name and groupId.
+	// Mutually exclusive with name, groupId, and inline rules.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxLength=255
 	CloudflareGroupName string `json:"cloudflareGroupName,omitempty"`
+
+	// --- Inline Rules Mode (Advanced) ---
+	// Define include/exclude/require rules directly in the policy.
+	// When any of these are specified, group references are ignored.
+
+	// Include defines the rules that grant access. Users matching ANY rule in the include
+	// list will be granted access (OR logic). At least one include rule is required
+	// when using inline rules mode.
+	// Uses the same rule types as AccessGroup (email, emailDomain, group, ipRanges, etc.).
+	// +kubebuilder:validation:Optional
+	Include []AccessGroupRule `json:"include,omitempty"`
+
+	// Exclude defines the rules that deny access. Users matching ANY rule in the exclude
+	// list will be denied access, even if they match an include rule (NOT logic).
+	// +kubebuilder:validation:Optional
+	Exclude []AccessGroupRule `json:"exclude,omitempty"`
+
+	// Require defines the rules that must ALL be satisfied (AND logic).
+	// Users must match ALL require rules in addition to at least one include rule.
+	// +kubebuilder:validation:Optional
+	Require []AccessGroupRule `json:"require,omitempty"`
+
+	// --- Common Fields ---
 
 	// Decision is the policy decision (allow, deny, bypass, non_identity).
 	// +kubebuilder:validation:Optional
