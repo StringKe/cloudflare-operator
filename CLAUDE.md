@@ -636,8 +636,13 @@ make install            # 安装 CRD
 make deploy             # 部署 Operator
 make undeploy           # 移除 Operator
 
-# E2E 测试
-make test-e2e           # Kind 集群 E2E 测试
+# E2E 测试 ⚠️
+# 重要: 运行 E2E 测试前必须确认当前 kubectl context 指向正确的测试集群！
+# E2E 测试会与真实 Cloudflare API 交互，错误的集群可能影响生产环境！
+
+kubectl config current-context    # 检查当前集群上下文
+kubectl config use-context <test-cluster>  # 切换到测试集群
+make test-e2e                     # 运行 E2E 测试
 ```
 
 ---
