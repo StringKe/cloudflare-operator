@@ -159,13 +159,14 @@ func (r *Reconciler) reconcileDNSAutomatic(
 
 		// Register DNS record via Service (will be synced by Sync Controller)
 		// Include namespace in Source.Name to prevent collisions across namespaces
+		// Use dash instead of slash to avoid invalid Kubernetes label values
 		if err := svc.Register(ctx, dnssvc.RegisterOptions{
 			ZoneID:    zoneID,
 			AccountID: accountID,
 			Source: service.Source{
 				Kind:      "IngressAutomatic",
 				Namespace: ingress.Namespace,
-				Name:      fmt.Sprintf("%s/%s-%s", ingress.Namespace, ingress.Name, sanitizeHostnameForSource(hostname)),
+				Name:      fmt.Sprintf("%s-%s-%s", ingress.Namespace, ingress.Name, sanitizeHostnameForSource(hostname)),
 			},
 			Config:         dnsConfig,
 			CredentialsRef: credRef,
@@ -347,10 +348,11 @@ func (r *Reconciler) cleanupDNSAutomatic(
 
 	for _, hostname := range hostnames {
 		// Use same Source.Name format as Register to ensure proper cleanup
+		// Use dash instead of slash to avoid invalid Kubernetes label values
 		source := service.Source{
 			Kind:      "IngressAutomatic",
 			Namespace: ingress.Namespace,
-			Name:      fmt.Sprintf("%s/%s-%s", ingress.Namespace, ingress.Name, sanitizeHostnameForSource(hostname)),
+			Name:      fmt.Sprintf("%s-%s-%s", ingress.Namespace, ingress.Name, sanitizeHostnameForSource(hostname)),
 		}
 
 		// Unregister DNS record via Service (Sync Controller will handle deletion)
