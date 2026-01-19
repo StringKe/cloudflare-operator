@@ -576,44 +576,24 @@ type ReusableAccessPolicyResult struct {
 	Precedence int
 }
 
-// CreateReusableAccessPolicy creates a new reusable Access Policy (not attached to any application).
-func (c *API) CreateReusableAccessPolicy(ctx context.Context, params ReusableAccessPolicyParams) (*ReusableAccessPolicyResult, error) {
-	if _, err := c.GetAccountId(ctx); err != nil {
-		c.Log.Error(err, "error getting account ID")
-		return nil, err
-	}
-
-	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
-
-	// Create policy with empty ApplicationID to make it reusable
+// buildReusablePolicyParams converts ReusableAccessPolicyParams to cloudflare.CreateAccessPolicyParams.
+func buildReusablePolicyParams(params ReusableAccessPolicyParams) cloudflare.CreateAccessPolicyParams {
 	createParams := cloudflare.CreateAccessPolicyParams{
-		ApplicationID: "", // Empty = reusable policy
-		Name:          params.Name,
-		Decision:      params.Decision,
-		Precedence:    params.Precedence,
-		Include:       ConvertRulesToSDK(params.Include),
-		Exclude:       ConvertRulesToSDK(params.Exclude),
-		Require:       ConvertRulesToSDK(params.Require),
-	}
-
-	if params.SessionDuration != nil {
-		createParams.SessionDuration = params.SessionDuration
-	}
-
-	if params.IsolationRequired != nil {
-		createParams.IsolationRequired = params.IsolationRequired
-	}
-
-	if params.PurposeJustificationRequired != nil {
-		createParams.PurposeJustificationRequired = params.PurposeJustificationRequired
+		ApplicationID:                "", // Empty = reusable policy
+		Name:                         params.Name,
+		Decision:                     params.Decision,
+		Precedence:                   params.Precedence,
+		Include:                      ConvertRulesToSDK(params.Include),
+		Exclude:                      ConvertRulesToSDK(params.Exclude),
+		Require:                      ConvertRulesToSDK(params.Require),
+		SessionDuration:              params.SessionDuration,
+		IsolationRequired:            params.IsolationRequired,
+		PurposeJustificationRequired: params.PurposeJustificationRequired,
+		ApprovalRequired:             params.ApprovalRequired,
 	}
 
 	if params.PurposeJustificationPrompt != "" {
 		createParams.PurposeJustificationPrompt = &params.PurposeJustificationPrompt
-	}
-
-	if params.ApprovalRequired != nil {
-		createParams.ApprovalRequired = params.ApprovalRequired
 	}
 
 	if len(params.ApprovalGroups) > 0 {
@@ -627,6 +607,19 @@ func (c *API) CreateReusableAccessPolicy(ctx context.Context, params ReusableAcc
 		}
 		createParams.ApprovalGroups = approvalGroups
 	}
+
+	return createParams
+}
+
+// CreateReusableAccessPolicy creates a new reusable Access Policy (not attached to any application).
+func (c *API) CreateReusableAccessPolicy(ctx context.Context, params ReusableAccessPolicyParams) (*ReusableAccessPolicyResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
+		c.Log.Error(err, "error getting account ID")
+		return nil, err
+	}
+
+	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
+	createParams := buildReusablePolicyParams(params)
 
 	policy, err := c.CloudflareClient.CreateAccessPolicy(ctx, rc, createParams)
 	if err != nil {

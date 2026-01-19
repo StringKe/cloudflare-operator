@@ -57,6 +57,7 @@ type GatewaySettings struct {
 	CustomCertificate *CustomCertificateSettings `json:"customCertificate,omitempty"`
 
 	// NonIdentityBrowserIsolation configures non-identity isolation.
+	//
 	// Deprecated: Use BrowserIsolation.NonIdentityEnabled instead.
 	// This field is kept for backward compatibility and will be merged into
 	// BrowserIsolation.NonIdentityEnabled during reconciliation.
@@ -124,6 +125,7 @@ type CustomCertificateSettings struct {
 }
 
 // NonIdentityBrowserIsolationSettings for non-identity isolation.
+//
 // Deprecated: Use BrowserIsolationSettings.NonIdentityEnabled instead.
 type NonIdentityBrowserIsolationSettings struct {
 	Enabled bool `json:"enabled"`
