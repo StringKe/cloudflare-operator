@@ -32,14 +32,19 @@ func NewDeploymentService(c client.Client) *DeploymentService {
 // Register registers a Pages deployment configuration to SyncState.
 // Each PagesDeployment K8s resource has its own SyncState.
 //
-// SyncState naming strategy:
-// - Always use fixed format: pages-deployment-{namespace}-{name}
-// - This avoids the need to "migrate" SyncState after deployment creation
-// - The actual CloudflareID (deployment ID) is stored in spec.cloudflareID
+// SyncState lookup strategy:
+// 1. Always try pending ID first (pages-deployment-pending-{namespace}-{name})
+// 2. Then try actual deployment ID if provided (for compatibility)
+// 3. Only create new SyncState if neither exists
+//
+// This ensures configuration updates always find the correct SyncState,
+// regardless of whether the deployment has been created yet.
 //
 // Rollback scenario:
 // - If action is "rollback" and TargetDeploymentID is set, no file upload needed
 // - The Sync Controller will call the rollback API directly
+//
+//nolint:revive // cognitive complexity is acceptable for this registration logic
 func (s *DeploymentService) Register(ctx context.Context, opts DeploymentRegisterOptions) error {
 	logger := log.FromContext(ctx).WithValues(
 		"projectName", opts.ProjectName,
@@ -58,46 +63,57 @@ func (s *DeploymentService) Register(ctx context.Context, opts DeploymentRegiste
 		return errors.New("account ID is required")
 	}
 
-	// Use fixed SyncState ID format based on K8s resource identity
-	// This ensures stable naming across deployment lifecycles
-	syncStateID := fmt.Sprintf("pages-deployment-%s-%s", opts.Source.Namespace, opts.Source.Name)
+	// Use fixed pending ID format for SyncState lookup
+	// This ensures we always find the same SyncState regardless of deployment status
+	pendingID := fmt.Sprintf("pending-%s-%s", opts.Source.Namespace, opts.Source.Name)
 
-	// Determine the CloudflareID to store in SyncState
-	// - For rollback: use the target deployment ID (existing deployment)
-	// - For new deployments: use pending placeholder, will be updated after creation
-	cloudflareID := opts.DeploymentID
-	if cloudflareID == "" {
-		// Check if this is a rollback to existing deployment
+	// Step 1: Try to find existing SyncState with pending ID first
+	// This is the primary lookup because SyncState names are based on the initial cloudflareID
+	syncState, err := s.GetSyncState(ctx, ResourceTypePagesDeployment, pendingID)
+	if err != nil {
+		return fmt.Errorf("get syncstate with pending id: %w", err)
+	}
+
+	// Step 2: If not found with pending ID, try with actual deployment ID (for compatibility)
+	if syncState == nil && opts.DeploymentID != "" && opts.DeploymentID != pendingID {
+		syncState, err = s.GetSyncState(ctx, ResourceTypePagesDeployment, opts.DeploymentID)
+		if err != nil {
+			return fmt.Errorf("get syncstate with deployment id: %w", err)
+		}
+		if syncState != nil {
+			logger.V(1).Info("Found SyncState with deployment ID",
+				"syncState", syncState.Name,
+				"deploymentId", opts.DeploymentID)
+		}
+	}
+
+	// Step 3: If still not found, create new SyncState
+	if syncState == nil {
+		// Determine the initial CloudflareID for new SyncState
+		cloudflareID := pendingID
+
+		// For rollback action, use the target deployment ID
 		switch {
 		case opts.Config.Action == "rollback" && opts.Config.TargetDeploymentID != "":
 			cloudflareID = opts.Config.TargetDeploymentID
 		case opts.Config.Action == "rollback" && opts.Config.Rollback != nil && opts.Config.Rollback.DeploymentID != "":
 			cloudflareID = opts.Config.Rollback.DeploymentID
-		default:
-			// New deployment, use pending placeholder
-			cloudflareID = fmt.Sprintf("pending-%s-%s", opts.Source.Namespace, opts.Source.Name)
 		}
-	}
 
-	// Get or create SyncState
-	syncState, err := s.GetOrCreateSyncState(
-		ctx,
-		ResourceTypePagesDeployment,
-		cloudflareID,
-		opts.AccountID,
-		"", // No zoneID for Pages deployments
-		opts.CredentialsRef,
-	)
-	if err != nil {
-		return fmt.Errorf("get/create syncstate for Pages deployment: %w", err)
-	}
+		logger.Info("Creating new SyncState for Pages deployment",
+			"cloudflareId", cloudflareID)
 
-	// Override the SyncState name if it doesn't match our expected format
-	// This handles migration from old naming scheme
-	if syncState.Name != syncStateID {
-		logger.V(1).Info("SyncState name mismatch, will use existing",
-			"expected", syncStateID,
-			"actual", syncState.Name)
+		syncState, err = s.GetOrCreateSyncState(
+			ctx,
+			ResourceTypePagesDeployment,
+			cloudflareID,
+			opts.AccountID,
+			"", // No zoneID for Pages deployments
+			opts.CredentialsRef,
+		)
+		if err != nil {
+			return fmt.Errorf("create syncstate for Pages deployment: %w", err)
+		}
 	}
 
 	// Update source configuration
@@ -109,7 +125,7 @@ func (s *DeploymentService) Register(ctx context.Context, opts DeploymentRegiste
 		"syncState", syncState.Name,
 		"projectName", opts.Config.ProjectName,
 		"action", opts.Config.Action,
-		"cloudflareId", cloudflareID)
+		"cloudflareId", syncState.Spec.CloudflareID)
 	return nil
 }
 
@@ -120,6 +136,8 @@ func (s *DeploymentService) Register(ctx context.Context, opts DeploymentRegiste
 // handle the SyncState cleanup, but will NOT delete the Cloudflare deployment
 // because active production deployments cannot be deleted.
 //
+// Lookup order: pending ID first (because SyncState names are based on initial cloudflareID)
+//
 //nolint:revive // cognitive complexity is acceptable for unregistration with fallback logic
 func (s *DeploymentService) Unregister(ctx context.Context, deploymentID string, source service.Source) error {
 	logger := log.FromContext(ctx).WithValues(
@@ -129,18 +147,19 @@ func (s *DeploymentService) Unregister(ctx context.Context, deploymentID string,
 	logger.V(1).Info("Unregistering Pages deployment from SyncState")
 
 	// Try multiple possible SyncState CloudflareIDs
-	// The SyncState uses CloudflareID as part of its identity
-	// We need to check both:
-	// 1. The actual deployment ID (if deployment was created)
-	// 2. The pending placeholder (if deployment was never created)
+	// Priority: pending ID first (because SyncState name is based on initial cloudflareID)
+	pendingID := fmt.Sprintf("pending-%s-%s", source.Namespace, source.Name)
 	syncStateCloudflareIDs := []string{
-		deploymentID,
-		fmt.Sprintf("pending-%s-%s", source.Namespace, source.Name),
+		pendingID,    // Try pending ID first - this is the most common case
+		deploymentID, // Then try actual deployment ID for compatibility
 	}
 
 	for _, cloudflareID := range syncStateCloudflareIDs {
-		if cloudflareID == "" {
-			continue
+		if cloudflareID == "" || cloudflareID == pendingID && deploymentID == pendingID {
+			// Skip duplicate lookup if deploymentID equals pendingID
+			if cloudflareID == "" {
+				continue
+			}
 		}
 
 		syncState, err := s.GetSyncState(ctx, ResourceTypePagesDeployment, cloudflareID)
@@ -183,6 +202,8 @@ type DeploymentSyncStatus struct {
 
 // GetSyncStatus returns the sync status for a Pages deployment.
 //
+// Lookup order: pending ID first (because SyncState names are based on initial cloudflareID)
+//
 //nolint:revive // cognitive complexity acceptable for status lookup logic
 func (s *DeploymentService) GetSyncStatus(ctx context.Context, source service.Source, knownDeploymentID string) (*DeploymentSyncStatus, error) {
 	logger := log.FromContext(ctx).WithValues(
@@ -191,13 +212,19 @@ func (s *DeploymentService) GetSyncStatus(ctx context.Context, source service.So
 	)
 
 	// Try both possible SyncState IDs
+	// Priority: pending ID first (because SyncState name is based on initial cloudflareID)
+	pendingID := fmt.Sprintf("pending-%s-%s", source.Namespace, source.Name)
 	syncStateIDs := []string{
-		knownDeploymentID,
-		fmt.Sprintf("pending-%s-%s", source.Namespace, source.Name),
+		pendingID,         // Try pending ID first - this is where the SyncState usually is
+		knownDeploymentID, // Then try known deployment ID for compatibility
 	}
 
 	for _, id := range syncStateIDs {
 		if id == "" {
+			continue
+		}
+		// Skip duplicate lookup
+		if id == knownDeploymentID && knownDeploymentID == pendingID {
 			continue
 		}
 
@@ -226,58 +253,4 @@ func (s *DeploymentService) GetSyncStatus(ctx context.Context, source service.So
 	}
 
 	return nil, nil
-}
-
-// UpdateDeploymentID updates the SyncState to use the actual Cloudflare deployment ID
-// after the deployment is created. This migrates from the pending placeholder.
-func (s *DeploymentService) UpdateDeploymentID(ctx context.Context, source service.Source, newDeploymentID string) error {
-	logger := log.FromContext(ctx).WithValues(
-		"source", source.String(),
-		"newDeploymentId", newDeploymentID,
-	)
-
-	pendingID := fmt.Sprintf("pending-%s-%s", source.Namespace, source.Name)
-
-	// Get the pending SyncState
-	pendingSyncState, err := s.GetSyncState(ctx, ResourceTypePagesDeployment, pendingID)
-	if err != nil {
-		return fmt.Errorf("get pending syncstate: %w", err)
-	}
-
-	if pendingSyncState == nil {
-		// No pending state, might already be using real ID
-		logger.V(1).Info("No pending SyncState found, deployment may already use actual ID")
-		return nil
-	}
-
-	// Update the SyncState CloudflareID to use the real deployment ID
-	// Create a new SyncState with the correct ID and delete the old one
-	newSyncState, err := s.GetOrCreateSyncState(
-		ctx,
-		ResourceTypePagesDeployment,
-		newDeploymentID,
-		pendingSyncState.Spec.AccountID,
-		pendingSyncState.Spec.ZoneID,
-		pendingSyncState.Spec.CredentialsRef,
-	)
-	if err != nil {
-		return fmt.Errorf("create new syncstate with deployment ID: %w", err)
-	}
-
-	// Copy sources from pending to new
-	newSyncState.Spec.Sources = pendingSyncState.Spec.Sources
-	if err := s.Client.Update(ctx, newSyncState); err != nil {
-		return fmt.Errorf("update new syncstate with sources: %w", err)
-	}
-
-	// Delete the pending SyncState
-	if err := s.Client.Delete(ctx, pendingSyncState); err != nil {
-		logger.Error(err, "Failed to delete pending SyncState", "pendingId", pendingID)
-		// Non-fatal - the pending state will be orphaned but won't cause issues
-	}
-
-	logger.Info("Updated SyncState to use actual deployment ID",
-		"oldId", pendingID,
-		"newId", newDeploymentID)
-	return nil
 }
