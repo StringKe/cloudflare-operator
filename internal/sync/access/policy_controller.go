@@ -193,8 +193,10 @@ func (r *PolicyController) syncToCloudflare(
 			return nil, fmt.Errorf("create reusable AccessPolicy: %w", err)
 		}
 
-		// Update SyncState CloudflareID with the actual policy ID
-		common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID)
+		// Update SyncState CloudflareID with the actual policy ID (must succeed)
+		if err := common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID); err != nil {
+			return nil, err
+		}
 
 		logger.Info("Created reusable AccessPolicy",
 			"policyId", result.ID)
@@ -217,7 +219,10 @@ func (r *PolicyController) syncToCloudflare(
 
 				// Update SyncState CloudflareID if ID changed
 				if result.ID != cloudflareID {
-					common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID)
+					if updateErr := common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID); updateErr != nil {
+						logger.Error(updateErr, "Failed to update CloudflareID after recreating")
+						// Continue - resource exists, next reconcile will retry
+					}
 				}
 			} else {
 				return nil, fmt.Errorf("update reusable AccessPolicy: %w", err)

@@ -198,8 +198,10 @@ func (r *DomainController) syncToCloudflare(
 			logger.Info("Created R2 custom domain", "domain", config.Domain)
 		}
 
-		// Update SyncState with actual domain ID
-		common.UpdateCloudflareID(ctx, r.Client, syncState, result.Domain)
+		// Update SyncState with actual domain ID (must succeed)
+		if err := common.UpdateCloudflareID(ctx, r.Client, syncState, result.Domain); err != nil {
+			return nil, err
+		}
 	} else {
 		// Update existing domain
 		logger.Info("Updating existing R2 custom domain",

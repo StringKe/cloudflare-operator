@@ -318,11 +318,9 @@ func (r *Controller) syncToCloudflare(
 		}
 
 		// Update SyncState CloudflareID with the network (since routes don't have a separate ID)
-		syncState.Spec.CloudflareID = config.Network
-		if updateErr := r.Client.Update(ctx, syncState); updateErr != nil {
-			logger.Error(updateErr, "Failed to update SyncState with route network",
-				"network", config.Network)
-			// Non-fatal - will be fixed on next reconcile
+		// This MUST succeed before we return success - otherwise L2 controller won't see the synced state
+		if err := common.UpdateCloudflareID(ctx, r.Client, syncState, config.Network); err != nil {
+			return nil, err
 		}
 	} else {
 		// Update existing NetworkRoute
@@ -344,9 +342,9 @@ func (r *Controller) syncToCloudflare(
 
 				// Update SyncState CloudflareID if network changed
 				if result.Network != cloudflareID {
-					syncState.Spec.CloudflareID = result.Network
-					if updateErr := r.Client.Update(ctx, syncState); updateErr != nil {
+					if updateErr := common.UpdateCloudflareID(ctx, r.Client, syncState, result.Network); updateErr != nil {
 						logger.Error(updateErr, "Failed to update SyncState with new route network")
+						// Continue - route exists, next reconcile will retry
 					}
 				}
 			} else {

@@ -93,14 +93,15 @@ func CreateAPIClient(
 
 // UpdateCloudflareID updates the CloudflareID in the SyncState spec.
 // This is called after successfully creating a resource in Cloudflare to record
-// the actual ID. Errors are logged but not returned since this is a non-fatal
-// operation that will be corrected on the next reconcile.
+// the actual ID. Returns an error if the update fails - callers should handle
+// this as a fatal error to ensure the CloudflareID is persisted before
+// updating the sync status.
 func UpdateCloudflareID(
 	ctx context.Context,
 	c client.Client,
 	syncState *v1alpha2.CloudflareSyncState,
 	newID string,
-) {
+) error {
 	logger := log.FromContext(ctx)
 
 	syncState.Spec.CloudflareID = newID
@@ -108,8 +109,13 @@ func UpdateCloudflareID(
 		logger.Error(err, "Failed to update SyncState with Cloudflare ID",
 			"name", syncState.Name,
 			"cloudflareId", newID)
-		// Non-fatal - will be fixed on next reconcile
+		return fmt.Errorf("update SyncState CloudflareID to %s: %w", newID, err)
 	}
+
+	logger.V(1).Info("Updated SyncState CloudflareID",
+		"name", syncState.Name,
+		"cloudflareId", newID)
+	return nil
 }
 
 // RequireAccountID validates that the SyncState has an AccountID specified.

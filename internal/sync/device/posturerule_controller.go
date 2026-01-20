@@ -202,8 +202,10 @@ func (r *PostureRuleController) syncToCloudflare(
 			return nil, fmt.Errorf("create Device Posture Rule: %w", err)
 		}
 
-		// Update SyncState with actual rule ID
-		common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID)
+		// Update SyncState with actual rule ID (must succeed)
+		if err := common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID); err != nil {
+			return nil, err
+		}
 
 		logger.Info("Created Device Posture Rule", "ruleId", result.ID)
 	} else {
@@ -222,7 +224,9 @@ func (r *PostureRuleController) syncToCloudflare(
 					return nil, fmt.Errorf("recreate Device Posture Rule: %w", err)
 				}
 
-				common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID)
+				if updateErr := common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID); updateErr != nil {
+					logger.Error(updateErr, "Failed to update CloudflareID after recreating")
+				}
 			} else {
 				return nil, fmt.Errorf("update Device Posture Rule: %w", err)
 			}

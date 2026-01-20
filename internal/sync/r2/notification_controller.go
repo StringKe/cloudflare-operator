@@ -228,9 +228,11 @@ func (r *NotificationController) resolveQueueID(
 		return "", fmt.Errorf("get queue ID for %s: %w", queueName, err)
 	}
 
-	// Update SyncState with actual queue ID if it was pending
+	// Update SyncState with actual queue ID if it was pending (must succeed)
 	if common.IsPendingID(cloudflareID) {
-		common.UpdateCloudflareID(ctx, r.Client, syncState, queueID)
+		if err := common.UpdateCloudflareID(ctx, r.Client, syncState, queueID); err != nil {
+			return "", err
+		}
 	}
 
 	return queueID, nil

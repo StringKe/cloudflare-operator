@@ -214,8 +214,10 @@ func (r *ServiceTokenController) syncToCloudflare(
 			}
 		}
 
-		// Update SyncState CloudflareID with the actual token ID
-		common.UpdateCloudflareID(ctx, r.Client, syncState, result.TokenID)
+		// Update SyncState CloudflareID with the actual token ID (must succeed)
+		if err := common.UpdateCloudflareID(ctx, r.Client, syncState, result.TokenID); err != nil {
+			return nil, err
+		}
 
 		logger.Info("Created/Adopted AccessServiceToken",
 			"tokenId", result.TokenID,
@@ -239,7 +241,10 @@ func (r *ServiceTokenController) syncToCloudflare(
 
 				// Update SyncState CloudflareID if ID changed
 				if result.TokenID != cloudflareID {
-					common.UpdateCloudflareID(ctx, r.Client, syncState, result.TokenID)
+					if updateErr := common.UpdateCloudflareID(ctx, r.Client, syncState, result.TokenID); updateErr != nil {
+						logger.Error(updateErr, "Failed to update CloudflareID after recreating")
+						// Continue - resource exists, next reconcile will retry
+					}
 				}
 			} else {
 				return nil, fmt.Errorf("update AccessServiceToken: %w", err)

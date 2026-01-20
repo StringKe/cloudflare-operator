@@ -199,7 +199,9 @@ func (r *ProjectSyncController) syncToCloudflare(
 			}
 
 			// Update SyncState with new project name
-			common.UpdateCloudflareID(ctx, r.Client, syncState, result.Name)
+			if updateErr := common.UpdateCloudflareID(ctx, r.Client, syncState, result.Name); updateErr != nil {
+				logger.Error(updateErr, "Failed to update CloudflareID after recreating")
+			}
 		} else {
 			return fmt.Errorf("update Pages project: %w", err)
 		}
@@ -271,8 +273,10 @@ func (r *ProjectSyncController) handleNewProject(
 			return fmt.Errorf("update adopted project: %w", err)
 		}
 
-		// Update SyncState with project name
-		common.UpdateCloudflareID(ctx, r.Client, syncState, config.Name)
+		// Update SyncState with project name (must succeed)
+		if err := common.UpdateCloudflareID(ctx, r.Client, syncState, config.Name); err != nil {
+			return err
+		}
 
 		// Mark as adopted in annotations
 		r.markAsAdopted(ctx, syncState)
@@ -294,8 +298,10 @@ func (r *ProjectSyncController) handleNewProject(
 		return fmt.Errorf("create Pages project: %w", err)
 	}
 
-	// Update SyncState with actual project name
-	common.UpdateCloudflareID(ctx, r.Client, syncState, result.Name)
+	// Update SyncState with actual project name (must succeed)
+	if err := common.UpdateCloudflareID(ctx, r.Client, syncState, result.Name); err != nil {
+		return err
+	}
 
 	logger.Info("Created Pages project",
 		"projectName", result.Name,

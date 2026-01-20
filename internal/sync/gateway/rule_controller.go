@@ -233,8 +233,10 @@ func (r *RuleController) syncToCloudflare(
 			return nil, fmt.Errorf("create Gateway rule: %w", err)
 		}
 
-		// Update SyncState with actual rule ID
-		common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID)
+		// Update SyncState with actual rule ID (must succeed)
+		if err := common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID); err != nil {
+			return nil, err
+		}
 
 		logger.Info("Created Gateway rule", "ruleId", result.ID)
 	} else {
@@ -253,7 +255,9 @@ func (r *RuleController) syncToCloudflare(
 					return nil, fmt.Errorf("recreate Gateway rule: %w", err)
 				}
 
-				common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID)
+				if updateErr := common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID); updateErr != nil {
+					logger.Error(updateErr, "Failed to update CloudflareID after recreating")
+				}
 			} else {
 				return nil, fmt.Errorf("update Gateway rule: %w", err)
 			}

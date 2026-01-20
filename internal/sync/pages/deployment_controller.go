@@ -242,8 +242,10 @@ func (r *DeploymentSyncController) handleCreateDeployment(
 		return nil, fmt.Errorf("create Pages deployment: %w", err)
 	}
 
-	// Update SyncState with actual deployment ID
-	common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID)
+	// Update SyncState with actual deployment ID (must succeed)
+	if err := common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID); err != nil {
+		return nil, err
+	}
 
 	logger.Info("Created Pages deployment",
 		"deploymentId", result.ID,
@@ -305,8 +307,10 @@ func (r *DeploymentSyncController) handleDirectUploadDeployment(
 		return nil, fmt.Errorf("create direct upload deployment: %w", err)
 	}
 
-	// Update SyncState with actual deployment ID
-	common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID)
+	// Update SyncState with actual deployment ID (must succeed)
+	if err := common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID); err != nil {
+		return nil, err
+	}
 
 	logger.Info("Created direct upload deployment",
 		"deploymentId", result.ID,

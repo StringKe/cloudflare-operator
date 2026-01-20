@@ -175,8 +175,10 @@ func (r *DomainSyncController) syncToCloudflare(
 			return fmt.Errorf("add Pages domain: %w", err)
 		}
 
-		// Update SyncState with actual domain ID
-		common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID)
+		// Update SyncState with actual domain ID (must succeed)
+		if err := common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID); err != nil {
+			return err
+		}
 
 		logger.Info("Added Pages domain",
 			"domainId", result.ID,
@@ -200,7 +202,9 @@ func (r *DomainSyncController) syncToCloudflare(
 				}
 
 				// Update SyncState with new domain ID
-				common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID)
+				if updateErr := common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID); updateErr != nil {
+					logger.Error(updateErr, "Failed to update CloudflareID after recreating")
+				}
 			} else {
 				return fmt.Errorf("get Pages domain: %w", err)
 			}

@@ -196,8 +196,10 @@ func (r *ApplicationController) syncToCloudflare(
 			return nil, fmt.Errorf("create AccessApplication: %w", err)
 		}
 
-		// Update SyncState CloudflareID with the actual application ID
-		common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID)
+		// Update SyncState CloudflareID with the actual application ID (must succeed)
+		if err := common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID); err != nil {
+			return nil, err
+		}
 
 		logger.Info("Created AccessApplication",
 			"applicationId", result.ID,
@@ -221,7 +223,10 @@ func (r *ApplicationController) syncToCloudflare(
 
 				// Update SyncState CloudflareID if ID changed
 				if result.ID != cloudflareID {
-					common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID)
+					if updateErr := common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID); updateErr != nil {
+						logger.Error(updateErr, "Failed to update CloudflareID after recreating")
+						// Continue - resource exists, next reconcile will retry
+					}
 				}
 			} else {
 				return nil, fmt.Errorf("update AccessApplication: %w", err)

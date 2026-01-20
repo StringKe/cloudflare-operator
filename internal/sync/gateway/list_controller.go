@@ -213,8 +213,10 @@ func (r *ListController) syncToCloudflare(
 			return nil, fmt.Errorf("create Gateway list: %w", err)
 		}
 
-		// Update SyncState with actual list ID
-		common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID)
+		// Update SyncState with actual list ID (must succeed)
+		if err := common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID); err != nil {
+			return nil, err
+		}
 
 		logger.Info("Created Gateway list", "listId", result.ID)
 	} else {
@@ -234,7 +236,9 @@ func (r *ListController) syncToCloudflare(
 			if err != nil {
 				return nil, fmt.Errorf("recreate Gateway list: %w", err)
 			}
-			common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID)
+			if updateErr := common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID); updateErr != nil {
+				logger.Error(updateErr, "Failed to update CloudflareID after recreating")
+			}
 		}
 
 		logger.Info("Updated Gateway list", "listId", result.ID)

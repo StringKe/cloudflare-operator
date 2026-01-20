@@ -284,9 +284,11 @@ func (r *RedirectRuleController) syncToCloudflare(
 		return nil, fmt.Errorf("update entrypoint ruleset: %w", err)
 	}
 
-	// Update SyncState with actual ruleset ID if it was pending
+	// Update SyncState with actual ruleset ID if it was pending (must succeed)
 	if common.IsPendingID(syncState.Spec.CloudflareID) && result.ID != "" {
-		common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID)
+		if err := common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID); err != nil {
+			return nil, err
+		}
 	}
 
 	return &rulesetsvc.RedirectRuleSyncResult{

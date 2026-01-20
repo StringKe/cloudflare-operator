@@ -194,8 +194,10 @@ func (r *IdentityProviderController) syncToCloudflare(
 			return nil, fmt.Errorf("create AccessIdentityProvider: %w", err)
 		}
 
-		// Update SyncState CloudflareID with the actual provider ID
-		common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID)
+		// Update SyncState CloudflareID with the actual provider ID (must succeed)
+		if err := common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID); err != nil {
+			return nil, err
+		}
 
 		logger.Info("Created AccessIdentityProvider",
 			"providerId", result.ID)
@@ -218,7 +220,10 @@ func (r *IdentityProviderController) syncToCloudflare(
 
 				// Update SyncState CloudflareID if ID changed
 				if result.ID != cloudflareID {
-					common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID)
+					if updateErr := common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID); updateErr != nil {
+						logger.Error(updateErr, "Failed to update CloudflareID after recreating")
+						// Continue - resource exists, next reconcile will retry
+					}
 				}
 			} else {
 				return nil, fmt.Errorf("update AccessIdentityProvider: %w", err)

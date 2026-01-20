@@ -199,8 +199,10 @@ func (r *BucketController) syncToCloudflare(
 		bucketName = bucket.Name
 		location = bucket.Location
 
-		// Update SyncState with actual bucket name
-		common.UpdateCloudflareID(ctx, r.Client, syncState, bucketName)
+		// Update SyncState with actual bucket name (must succeed)
+		if err := common.UpdateCloudflareID(ctx, r.Client, syncState, bucketName); err != nil {
+			return nil, err
+		}
 
 		logger.Info("Created R2 bucket", "bucketName", bucketName, "location", location)
 	} else {

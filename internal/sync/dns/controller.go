@@ -218,23 +218,67 @@ func (r *Controller) syncToCloudflare(
 	var result *cf.DNSRecordResult
 
 	if common.IsPendingID(cloudflareID) {
-		// Create new record
-		logger.Info("Creating new DNS record",
-			"name", config.Name,
-			"type", config.Type,
-			"zoneId", zoneID)
-
-		result, err = apiClient.CreateDNSRecordInZone(ctx, zoneID, params)
-		if err != nil {
-			return nil, fmt.Errorf("create DNS record: %w", err)
+		// Try to find existing record first (adoption logic)
+		existingID, searchErr := apiClient.GetDNSRecordIDInZone(ctx, zoneID, config.Name, config.Type)
+		if searchErr != nil {
+			logger.V(1).Info("Failed to search for existing DNS records, will try to create",
+				"error", searchErr.Error())
 		}
 
-		// Update SyncState with actual record ID
-		common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID)
+		if existingID != "" {
+			// Found existing record, adopt it by updating
+			logger.Info("Found existing DNS record, adopting",
+				"recordId", existingID,
+				"fqdn", config.Name,
+				"type", config.Type)
 
-		logger.Info("Created DNS record",
-			"recordId", result.ID,
-			"fqdn", result.Name)
+			result, err = apiClient.UpdateDNSRecordInZone(ctx, zoneID, existingID, params)
+			if err != nil {
+				return nil, fmt.Errorf("update adopted DNS record %s: %w", existingID, err)
+			}
+			logger.Info("Adopted and updated existing DNS record",
+				"recordId", result.ID,
+				"fqdn", result.Name)
+		} else {
+			// Create new record
+			logger.Info("Creating new DNS record",
+				"name", config.Name,
+				"type", config.Type,
+				"zoneId", zoneID)
+
+			result, err = apiClient.CreateDNSRecordInZone(ctx, zoneID, params)
+			if err != nil {
+				// Handle conflict error (record exists but wasn't found in search)
+				if cf.IsConflictError(err) {
+					logger.Info("DNS record already exists (conflict), searching to adopt",
+						"name", config.Name)
+					// Search again
+					conflictID, conflictSearchErr := apiClient.GetDNSRecordIDInZone(ctx, zoneID, config.Name, config.Type)
+					if conflictSearchErr != nil || conflictID == "" {
+						return nil, fmt.Errorf("find existing DNS record after conflict: %w", conflictSearchErr)
+					}
+					// Update the conflicting record
+					result, err = apiClient.UpdateDNSRecordInZone(ctx, zoneID, conflictID, params)
+					if err != nil {
+						return nil, fmt.Errorf("update DNS record after conflict: %w", err)
+					}
+					logger.Info("Adopted DNS record after conflict",
+						"recordId", result.ID,
+						"fqdn", result.Name)
+				} else {
+					return nil, fmt.Errorf("create DNS record: %w", err)
+				}
+			} else {
+				logger.Info("Created DNS record",
+					"recordId", result.ID,
+					"fqdn", result.Name)
+			}
+		}
+
+		// Update SyncState with actual record ID (must succeed before status update)
+		if err := common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID); err != nil {
+			return nil, err
+		}
 	} else {
 		// Update existing record
 		logger.Info("Updating DNS record",
@@ -254,8 +298,11 @@ func (r *Controller) syncToCloudflare(
 					return nil, fmt.Errorf("recreate DNS record: %w", err)
 				}
 
-				// Update SyncState with new record ID
-				common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID)
+				// Update SyncState with new record ID (must succeed)
+				if updateErr := common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID); updateErr != nil {
+					logger.Error(updateErr, "Failed to update CloudflareID after recreating record")
+					// Continue anyway - record exists, next reconcile will retry
+				}
 			} else {
 				return nil, fmt.Errorf("update DNS record: %w", err)
 			}
