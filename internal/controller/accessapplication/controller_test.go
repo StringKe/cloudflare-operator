@@ -945,6 +945,8 @@ func TestAppReferencesAccessPolicy(t *testing.T) {
 
 // TestFindAccessApplicationsForAccessPolicy tests that when an AccessPolicy changes,
 // the watch handler correctly identifies which AccessApplications need to be reconciled.
+//
+//nolint:revive // Cognitive complexity acceptable for table-driven test with comprehensive test cases
 func TestFindAccessApplicationsForAccessPolicy(t *testing.T) {
 	tests := []struct {
 		name         string
