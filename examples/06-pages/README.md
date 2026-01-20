@@ -15,13 +15,17 @@ This directory contains examples for managing Cloudflare Pages resources using t
 | `PagesDomain` | Custom domain for Pages project / Pages 项目自定义域名 |
 | `PagesDeployment` | Deployment operations (create, retry, rollback, direct upload) / 部署操作（创建、重试、回滚、直接上传） |
 
-## New Features (v0.28+) / 新功能
+## New Features (v0.27.12+) / 新功能
 
 | Feature / 功能 | Description / 说明 |
 |---------------|-------------------|
 | **Direct Upload** | Deploy static files from HTTP/S3/OCI sources without Git / 无需 Git，从 HTTP/S3/OCI 源部署静态文件 |
 | **Smart Rollback** | Intelligent rollback with multiple strategies / 支持多种策略的智能回滚 |
 | **Project Adoption** | Import existing Cloudflare Pages projects / 导入已存在的 Cloudflare Pages 项目 |
+| **Web Analytics** | Automatic Web Analytics integration / 自动 Web Analytics 集成 |
+| **Force Redeploy** | Trigger redeployment without config changes / 无需配置变更触发重新部署 |
+| **DNS Auto-Config** | Automatic DNS configuration for custom domains / 自定义域名的自动 DNS 配置 |
+| **FIFO History** | FIFO retention policy (max 200 entries) for deployment history / 部署历史的 FIFO 保留策略（最多 200 条） |
 
 ---
 
@@ -161,6 +165,50 @@ spec:
   domain: app.example.com
   projectRef:
     name: my-app  # Reference to PagesProject / 引用 PagesProject
+  autoConfigureDNS: true  # Default: true - auto DNS config / 默认：true - 自动 DNS 配置
+  cloudflare:
+    accountId: "<your-account-id>"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+### 5a. Custom Domain with Manual DNS / 手动 DNS 的自定义域名
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDomain
+metadata:
+  name: external-domain
+  namespace: default
+spec:
+  domain: app.external-dns.com
+  projectRef:
+    name: my-app
+  autoConfigureDNS: false  # Manual DNS management / 手动 DNS 管理
+  cloudflare:
+    accountId: "<your-account-id>"
+    credentialsRef:
+      name: cloudflare-credentials
+# Note: Create CNAME record manually: app.external-dns.com → my-app.pages.dev
+# 注意：手动创建 CNAME 记录：app.external-dns.com → my-app.pages.dev
+```
+
+### 5b. Pages Project with Web Analytics / 带 Web Analytics 的 Pages 项目
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesProject
+metadata:
+  name: my-app-with-analytics
+  namespace: default
+spec:
+  name: my-app-with-analytics
+  productionBranch: main
+  enableWebAnalytics: true  # Default: true / 默认：true
+  deploymentHistoryLimit: 100  # Max: 200 (FIFO retention) / 最大：200（FIFO 保留）
+  buildConfig:
+    buildCommand: npm run build
+    destinationDir: dist
   cloudflare:
     accountId: "<your-account-id>"
     credentialsRef:
@@ -319,6 +367,39 @@ metadata:
 type: kubernetes.io/dockerconfigjson
 data:
   .dockerconfigjson: <base64-encoded-docker-config>
+```
+
+### 9a. Force Redeploy with Annotation / 使用注解强制重新部署
+
+When the source URL/key doesn't change but you want to trigger a new deployment:
+当源 URL/key 不变但需要触发新部署时：
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDeployment
+metadata:
+  name: my-app-s3-deploy
+  namespace: default
+  annotations:
+    cloudflare-operator.io/force-redeploy: "2025-01-20-v1"  # Change this to trigger redeploy / 修改此值触发重新部署
+spec:
+  projectRef:
+    name: my-app
+  action: create
+  directUpload:
+    source:
+      s3:
+        bucket: my-ci-artifacts
+        key: builds/latest/dist.tar.gz  # Always the same key / 始终相同的 key
+        region: us-east-1
+        credentialsSecretRef:
+          name: aws-credentials
+    archive:
+      type: tar.gz
+  cloudflare:
+    accountId: "<your-account-id>"
+    credentialsRef:
+      name: cloudflare-credentials
 ```
 
 ---

@@ -1,16 +1,20 @@
 # Pages 高级部署指南
 
-本指南介绍 Cloudflare Pages 的高级部署功能，包括直接上传、智能回滚和项目导入。
+本指南介绍 Cloudflare Pages 的高级部署功能，包括直接上传、智能回滚、项目导入和 Web Analytics 集成。
+
+> **版本**: v0.27.12+
 
 ## 概述
 
-Cloudflare Operator 提供三项强大的 Pages 部署管理功能：
+Cloudflare Operator 提供强大的 Pages 部署管理功能：
 
 | 功能 | 说明 | 使用场景 |
 |------|------|----------|
 | **Direct Upload** | 从外部源部署静态文件 | CI/CD 流水线、构建产物存储 |
 | **Smart Rollback** | 支持多种策略的智能回滚 | 快速从失败部署中恢复 |
 | **Project Adoption** | 导入已存在的 Cloudflare Pages 项目 | 将现有项目迁移到 GitOps |
+| **Web Analytics** | 自动 Web Analytics 集成 | 监控站点性能 |
+| **Force Redeploy** | 无需配置变更触发新部署 | 重新部署相同源 |
 
 ## 架构
 
@@ -305,6 +309,47 @@ archive:
 
 结果：`index.html` 和 `assets/` 被部署到根目录。
 
+### 强制重新部署
+
+当源配置未更改时，可使用 `cloudflare-operator.io/force-redeploy` 注解触发新部署：
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDeployment
+metadata:
+  name: my-app-deploy
+  annotations:
+    cloudflare-operator.io/force-redeploy: "2025-01-20-v1"  # 修改此值触发重新部署
+spec:
+  projectRef:
+    name: my-app
+  action: create
+  directUpload:
+    source:
+      s3:
+        bucket: my-artifacts
+        key: builds/latest/dist.tar.gz
+        region: us-east-1
+        credentialsSecretRef:
+          name: aws-credentials
+    archive:
+      type: tar.gz
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+**工作原理**：
+- 当注解值变更时，Operator 检测到配置变化
+- 即使 S3 key 或其他设置保持不变，也会创建新部署
+- 适用于源文件在相同 URL 已更新的场景
+
+**使用场景**：
+- CI/CD 流水线始终上传到相同 S3 key（如 `latest/dist.tar.gz`）
+- 基础设施变更后强制重新部署
+- GitOps 工作流中的手动发布触发
+
 ---
 
 ## 智能回滚 (Smart Rollback)
@@ -410,7 +455,7 @@ spec:
 
 ### 部署历史
 
-PagesProject 跟踪用于回滚的部署历史：
+PagesProject 跟踪用于回滚的部署历史，采用 **FIFO（先进先出）保留策略**：
 
 ```yaml
 apiVersion: networking.cloudflare-operator.io/v1alpha2
@@ -420,17 +465,44 @@ metadata:
 spec:
   name: my-app
   productionBranch: main
-  deploymentHistoryLimit: 20  # 保留 20 个部署历史（默认：10）
+  deploymentHistoryLimit: 100  # 最大值：200（FIFO 保留）
   cloudflare:
     accountId: "your-account-id"
     credentialsRef:
       name: cloudflare-credentials
 ```
 
+**历史配置**：
+
+| 字段 | 默认值 | 最大值 | 说明 |
+|------|--------|--------|------|
+| `deploymentHistoryLimit` | 200 | 200 | 保留的部署记录数量 |
+
+**历史记录字段**：
+
+每个部署历史条目包含：
+- `deploymentId`：Cloudflare 部署 ID
+- `version`：顺序版本号（从 1 开始）
+- `url`：部署 URL
+- `source`：源描述（如 `git:main`、`direct-upload`、`rollback:v5`）
+- `sourceHash`：源包的 SHA-256 哈希（用于直接上传）
+- `sourceUrl`：获取源的 URL（用于直接上传）
+- `k8sResource`：创建此部署的 K8s 资源（`namespace/name`）
+- `createdAt`：部署创建时间戳
+- `status`：部署状态（`active`、`failed`、`superseded`）
+- `isProduction`：是否为当前生产部署
+
 查看部署历史：
 
 ```bash
+# 查看完整历史
 kubectl get pagesproject my-app -o jsonpath='{.status.deploymentHistory}' | jq
+
+# 查看最后成功部署 ID
+kubectl get pagesproject my-app -o jsonpath='{.status.lastSuccessfulDeploymentId}'
+
+# 查看最新部署信息
+kubectl get pagesproject my-app -o jsonpath='{.status.latestDeployment}' | jq
 ```
 
 ---
@@ -516,6 +588,112 @@ kubectl get pagesproject existing-project -o jsonpath='{.status.originalConfig}'
   },
   "capturedAt": "2025-01-19T12:00:00Z"
 }
+```
+
+---
+
+## Web Analytics
+
+PagesProject 支持自动 Cloudflare Web Analytics 集成：
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesProject
+metadata:
+  name: my-app
+spec:
+  name: my-app
+  productionBranch: main
+  enableWebAnalytics: true  # 默认启用
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+**行为**：
+- 当 `enableWebAnalytics: true`（默认）时，Web Analytics 自动为 `*.pages.dev` 域名启用
+- 启用自动安装，自动注入分析脚本
+- 对于自定义域名，需通过 PagesDomain 或 Cloudflare 控制台单独配置 Web Analytics
+
+**禁用 Web Analytics**：
+
+```yaml
+spec:
+  enableWebAnalytics: false
+```
+
+---
+
+## 自定义域名 (PagesDomain)
+
+PagesDomain 管理 Pages 项目的自定义域名，支持自动 DNS 配置。
+
+### DNS 自动配置
+
+当域名的 zone 在同一 Cloudflare 账户时，DNS 记录可自动配置：
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDomain
+metadata:
+  name: my-app-domain
+spec:
+  domain: app.example.com
+  projectRef:
+    name: my-app
+  autoConfigureDNS: true  # 默认：true - Cloudflare 自动配置 DNS
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+**DNS 配置模式**：
+
+| 模式 | `autoConfigureDNS` | 行为 |
+|------|-------------------|------|
+| **自动** | `true`（默认） | Cloudflare 创建/管理 CNAME 记录 |
+| **手动** | `false` | 您手动管理 DNS 记录 |
+
+**何时使用手动 DNS**：
+- 域名由外部 DNS 提供商管理
+- 需要自定义 DNS 配置（如代理记录、TTL 设置）
+- 域名 zone 在不同的 Cloudflare 账户
+- 使用高级 DNS 功能（如负载均衡）
+
+**手动 DNS 示例**：
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDomain
+metadata:
+  name: external-domain
+spec:
+  domain: app.external-dns.com
+  projectRef:
+    name: my-app
+  autoConfigureDNS: false  # DNS 由外部管理
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+对于手动 DNS，创建指向 Pages 子域的 CNAME 记录：
+```
+app.external-dns.com  CNAME  my-app.pages.dev
+```
+
+### 域名验证状态
+
+检查域名验证状态：
+
+```bash
+kubectl get pagesdomain my-app-domain -o wide
+
+# 如需手动验证，查看验证数据
+kubectl get pagesdomain my-app-domain -o jsonpath='{.status.verificationData}' | jq
 ```
 
 ---

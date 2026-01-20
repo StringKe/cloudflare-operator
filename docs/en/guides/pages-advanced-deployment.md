@@ -1,16 +1,20 @@
 # Pages Advanced Deployment Guide
 
-This guide covers advanced deployment features for Cloudflare Pages including Direct Upload, Smart Rollback, and Project Adoption.
+This guide covers advanced deployment features for Cloudflare Pages including Direct Upload, Smart Rollback, Project Adoption, and Web Analytics integration.
+
+> **Version**: v0.27.12+
 
 ## Overview
 
-The Cloudflare Operator provides three powerful features for managing Pages deployments:
+The Cloudflare Operator provides powerful features for managing Pages deployments:
 
 | Feature | Description | Use Case |
 |---------|-------------|----------|
 | **Direct Upload** | Deploy static files from external sources | CI/CD pipelines, build artifact storage |
 | **Smart Rollback** | Intelligent rollback with multiple strategies | Quick recovery from failed deployments |
 | **Project Adoption** | Import existing Cloudflare Pages projects | Migrate existing projects to GitOps |
+| **Web Analytics** | Automatic Web Analytics integration | Monitor site performance |
+| **Force Redeploy** | Trigger new deployment without config changes | Re-deploy same source |
 
 ## Architecture
 
@@ -305,6 +309,47 @@ archive:
 
 Result: `index.html` and `assets/` are deployed to the root.
 
+### Force Redeploy
+
+To trigger a new deployment even when the source configuration hasn't changed, use the `cloudflare-operator.io/force-redeploy` annotation:
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDeployment
+metadata:
+  name: my-app-deploy
+  annotations:
+    cloudflare-operator.io/force-redeploy: "2025-01-20-v1"  # Change this value to trigger redeployment
+spec:
+  projectRef:
+    name: my-app
+  action: create
+  directUpload:
+    source:
+      s3:
+        bucket: my-artifacts
+        key: builds/latest/dist.tar.gz
+        region: us-east-1
+        credentialsSecretRef:
+          name: aws-credentials
+    archive:
+      type: tar.gz
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+**How it works**:
+- When the annotation value changes, the operator detects a configuration change
+- A new deployment is created even if the S3 key or other settings remain the same
+- Useful for re-deploying when the source file at the same URL has been updated
+
+**Use cases**:
+- CI/CD pipelines that always upload to the same S3 key (e.g., `latest/dist.tar.gz`)
+- Force re-deployment after infrastructure changes
+- Manual rollout triggers in GitOps workflows
+
 ---
 
 ## Smart Rollback
@@ -410,7 +455,7 @@ spec:
 
 ### Deployment History
 
-The PagesProject tracks deployment history for rollback:
+The PagesProject tracks deployment history for rollback with a **FIFO (First-In-First-Out) retention policy**:
 
 ```yaml
 apiVersion: networking.cloudflare-operator.io/v1alpha2
@@ -420,17 +465,44 @@ metadata:
 spec:
   name: my-app
   productionBranch: main
-  deploymentHistoryLimit: 20  # Keep 20 deployments in history (default: 10)
+  deploymentHistoryLimit: 100  # Maximum: 200 (FIFO retention)
   cloudflare:
     accountId: "your-account-id"
     credentialsRef:
       name: cloudflare-credentials
 ```
 
+**History Configuration**:
+
+| Field | Default | Maximum | Description |
+|-------|---------|---------|-------------|
+| `deploymentHistoryLimit` | 200 | 200 | Number of deployment records to keep |
+
+**History Entry Fields**:
+
+Each deployment history entry contains:
+- `deploymentId`: Cloudflare deployment ID
+- `version`: Sequential version number (starts at 1)
+- `url`: Deployment URL
+- `source`: Source description (e.g., `git:main`, `direct-upload`, `rollback:v5`)
+- `sourceHash`: SHA-256 hash of the source package (for direct upload)
+- `sourceUrl`: URL where source was fetched from (for direct upload)
+- `k8sResource`: K8s resource that created this deployment (`namespace/name`)
+- `createdAt`: Timestamp when deployment was created
+- `status`: Deployment status (`active`, `failed`, `superseded`)
+- `isProduction`: Whether this is the current production deployment
+
 View deployment history:
 
 ```bash
+# View full history
 kubectl get pagesproject my-app -o jsonpath='{.status.deploymentHistory}' | jq
+
+# View last successful deployment ID
+kubectl get pagesproject my-app -o jsonpath='{.status.lastSuccessfulDeploymentId}'
+
+# View latest deployment info
+kubectl get pagesproject my-app -o jsonpath='{.status.latestDeployment}' | jq
 ```
 
 ---
@@ -516,6 +588,112 @@ Example output:
   },
   "capturedAt": "2025-01-19T12:00:00Z"
 }
+```
+
+---
+
+## Web Analytics
+
+PagesProject supports automatic Cloudflare Web Analytics integration:
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesProject
+metadata:
+  name: my-app
+spec:
+  name: my-app
+  productionBranch: main
+  enableWebAnalytics: true  # Enabled by default
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+**Behavior**:
+- When `enableWebAnalytics: true` (default), Web Analytics is automatically enabled for the `*.pages.dev` domain
+- Auto-install is enabled, which injects the analytics script automatically
+- For custom domains, configure Web Analytics separately through PagesDomain or Cloudflare dashboard
+
+**Disable Web Analytics**:
+
+```yaml
+spec:
+  enableWebAnalytics: false
+```
+
+---
+
+## Custom Domains (PagesDomain)
+
+PagesDomain manages custom domains for Pages projects with automatic DNS configuration support.
+
+### DNS Auto-Configuration
+
+When your domain's zone is in the same Cloudflare account, DNS records can be configured automatically:
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDomain
+metadata:
+  name: my-app-domain
+spec:
+  domain: app.example.com
+  projectRef:
+    name: my-app
+  autoConfigureDNS: true  # Default: true - Cloudflare configures DNS automatically
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+**DNS Configuration Modes**:
+
+| Mode | `autoConfigureDNS` | Behavior |
+|------|-------------------|----------|
+| **Automatic** | `true` (default) | Cloudflare creates/manages CNAME records |
+| **Manual** | `false` | You manage DNS records manually |
+
+**When to use Manual DNS**:
+- Domain is managed by external DNS provider
+- Need custom DNS configuration (e.g., proxied records, TTL settings)
+- Domain zone is in a different Cloudflare account
+- Using advanced DNS features (e.g., load balancing)
+
+**Manual DNS Example**:
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDomain
+metadata:
+  name: external-domain
+spec:
+  domain: app.external-dns.com
+  projectRef:
+    name: my-app
+  autoConfigureDNS: false  # DNS managed externally
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+For manual DNS, create a CNAME record pointing to your Pages subdomain:
+```
+app.external-dns.com  CNAME  my-app.pages.dev
+```
+
+### Domain Verification Status
+
+Check domain verification status:
+
+```bash
+kubectl get pagesdomain my-app-domain -o wide
+
+# View verification data if manual verification needed
+kubectl get pagesdomain my-app-domain -o jsonpath='{.status.verificationData}' | jq
 ```
 
 ---
