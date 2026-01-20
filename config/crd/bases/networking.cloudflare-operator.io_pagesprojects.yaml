@@ -1853,6 +1853,40 @@ spec:
               subdomain:
                 description: Subdomain is the *.pages.dev subdomain.
                 type: string
+              webAnalytics:
+                description: WebAnalytics contains the Web Analytics configuration
+                  status.
+                properties:
+                  autoInstall:
+                    description: AutoInstall indicates whether automatic script injection
+                      is enabled.
+                    type: boolean
+                  enabled:
+                    description: Enabled indicates whether Web Analytics is currently
+                      enabled.
+                    type: boolean
+                  hostname:
+                    description: Hostname is the hostname being tracked (e.g., "myproject.pages.dev").
+                    type: string
+                  lastChecked:
+                    description: LastChecked is the last time Web Analytics status
+                      was verified.
+                    format: date-time
+                    type: string
+                  message:
+                    description: Message contains additional information about Web
+                      Analytics status.
+                    type: string
+                  siteTag:
+                    description: SiteTag is the unique identifier for the Web Analytics
+                      site.
+                    type: string
+                  siteToken:
+                    description: |-
+                      SiteToken is the token used for tracking.
+                      This is sensitive information and should be protected.
+                    type: string
+                type: object
             type: object
         type: object
     served: true

@@ -461,6 +461,38 @@ type ManagedVersionStatus struct {
 	LastTransitionTime *metav1.Time `json:"lastTransitionTime,omitempty"`
 }
 
+// WebAnalyticsStatus represents the status of Cloudflare Web Analytics for this project.
+type WebAnalyticsStatus struct {
+	// Enabled indicates whether Web Analytics is currently enabled.
+	// +kubebuilder:validation:Optional
+	Enabled bool `json:"enabled"`
+
+	// SiteTag is the unique identifier for the Web Analytics site.
+	// +kubebuilder:validation:Optional
+	SiteTag string `json:"siteTag,omitempty"`
+
+	// SiteToken is the token used for tracking.
+	// This is sensitive information and should be protected.
+	// +kubebuilder:validation:Optional
+	SiteToken string `json:"siteToken,omitempty"`
+
+	// Hostname is the hostname being tracked (e.g., "myproject.pages.dev").
+	// +kubebuilder:validation:Optional
+	Hostname string `json:"hostname,omitempty"`
+
+	// AutoInstall indicates whether automatic script injection is enabled.
+	// +kubebuilder:validation:Optional
+	AutoInstall bool `json:"autoInstall"`
+
+	// LastChecked is the last time Web Analytics status was verified.
+	// +kubebuilder:validation:Optional
+	LastChecked *metav1.Time `json:"lastChecked,omitempty"`
+
+	// Message contains additional information about Web Analytics status.
+	// +kubebuilder:validation:Optional
+	Message string `json:"message,omitempty"`
+}
+
 // PagesDeploymentInfo contains information about a deployment.
 type PagesDeploymentInfo struct {
 	// ID is the deployment ID.
@@ -659,6 +691,10 @@ type PagesProjectStatus struct {
 	// Provides quick overview of all declarative versions without querying child resources.
 	// +kubebuilder:validation:Optional
 	ManagedVersions []ManagedVersionStatus `json:"managedVersions,omitempty"`
+
+	// WebAnalytics contains the Web Analytics configuration status.
+	// +kubebuilder:validation:Optional
+	WebAnalytics *WebAnalyticsStatus `json:"webAnalytics,omitempty"`
 }
 
 // PagesProjectOriginalConfig stores the original Cloudflare configuration before adoption.

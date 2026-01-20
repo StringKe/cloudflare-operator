@@ -24,6 +24,7 @@ import (
 
 	"github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
+	"github.com/StringKe/cloudflare-operator/internal/controller"
 	pagessvc "github.com/StringKe/cloudflare-operator/internal/service/pages"
 	"github.com/StringKe/cloudflare-operator/internal/sync/common"
 )
@@ -185,7 +186,7 @@ func (r *ProjectSyncController) syncToCloudflare(
 	logger.Info("Updating Pages project",
 		"projectName", cloudflareID)
 
-	_, err = apiClient.UpdatePagesProject(ctx, cloudflareID, *params)
+	result, err := apiClient.UpdatePagesProject(ctx, cloudflareID, *params)
 	if err != nil {
 		// Check if project was deleted externally
 		if common.HandleNotFoundOnUpdate(err) {
@@ -193,7 +194,7 @@ func (r *ProjectSyncController) syncToCloudflare(
 			logger.Info("Pages project not found, recreating",
 				"projectName", cloudflareID)
 
-			result, err := apiClient.CreatePagesProject(ctx, *params)
+			result, err = apiClient.CreatePagesProject(ctx, *params)
 			if err != nil {
 				return fmt.Errorf("recreate Pages project: %w", err)
 			}
@@ -209,6 +210,29 @@ func (r *ProjectSyncController) syncToCloudflare(
 
 	logger.Info("Updated Pages project",
 		"projectName", cloudflareID)
+
+	// Check and enable Web Analytics if configured (for existing projects)
+	// This ensures Web Analytics is enabled even if it failed during initial creation
+	subdomain := ""
+	if result != nil {
+		subdomain = result.Subdomain
+	}
+
+	// If subdomain is still empty, fetch the project to get subdomain
+	if subdomain == "" {
+		project, getErr := apiClient.GetPagesProject(ctx, cloudflareID)
+		if getErr == nil && project != nil {
+			subdomain = project.Subdomain
+		}
+	}
+
+	// Enable/verify Web Analytics
+	if waStatus := r.ensureWebAnalytics(ctx, apiClient, syncState, config, subdomain); waStatus != nil {
+		logger.V(1).Info("Web Analytics status",
+			"enabled", waStatus.Enabled,
+			"siteTag", waStatus.SiteTag,
+			"message", waStatus.Message)
+	}
 
 	return nil
 }
@@ -281,15 +305,17 @@ func (r *ProjectSyncController) handleNewProject(
 		// Mark as adopted in annotations
 		r.markAsAdopted(ctx, syncState)
 
-		// Enable Web Analytics if configured
-		if err := r.enableWebAnalyticsIfNeeded(ctx, apiClient, config, existingProject.Subdomain); err != nil {
-			logger.Error(err, "Failed to enable Web Analytics for adopted project")
-			// Non-fatal error, continue
-		}
-
 		logger.Info("Adopted Pages project",
 			"projectName", config.Name,
 			"subdomain", existingProject.Subdomain)
+
+		// Check and enable Web Analytics if configured
+		if waStatus := r.ensureWebAnalytics(ctx, apiClient, syncState, config, existingProject.Subdomain); waStatus != nil {
+			logger.V(1).Info("Web Analytics status after adoption",
+				"enabled", waStatus.Enabled,
+				"siteTag", waStatus.SiteTag,
+				"message", waStatus.Message)
+		}
 
 		return nil
 	}
@@ -309,35 +335,35 @@ func (r *ProjectSyncController) handleNewProject(
 		return err
 	}
 
-	// Enable Web Analytics if configured
-	if err := r.enableWebAnalyticsIfNeeded(ctx, apiClient, config, result.Subdomain); err != nil {
-		logger.Error(err, "Failed to enable Web Analytics for new project")
-		// Non-fatal error, continue
-	}
-
 	logger.Info("Created Pages project",
 		"projectName", result.Name,
 		"subdomain", result.Subdomain)
 
+	// Check and enable Web Analytics if configured
+	if waStatus := r.ensureWebAnalytics(ctx, apiClient, syncState, config, result.Subdomain); waStatus != nil {
+		logger.V(1).Info("Web Analytics status after creation",
+			"enabled", waStatus.Enabled,
+			"siteTag", waStatus.SiteTag,
+			"message", waStatus.Message)
+	}
+
 	return nil
 }
 
-// enableWebAnalyticsIfNeeded enables Web Analytics for the Pages project if configured.
-func (*ProjectSyncController) enableWebAnalyticsIfNeeded(
+// ensureWebAnalytics checks and ensures Web Analytics is properly configured for the Pages project.
+// It returns the current Web Analytics status and stores it in SyncState annotations.
+func (r *ProjectSyncController) ensureWebAnalytics(
 	ctx context.Context,
 	apiClient *cf.API,
+	syncState *v1alpha2.CloudflareSyncState,
 	config *pagessvc.PagesProjectConfig,
 	subdomain string,
-) error {
+) *v1alpha2.WebAnalyticsStatus {
 	logger := log.FromContext(ctx)
+	now := metav1.Now()
 
 	// Check if Web Analytics should be enabled (default: true)
-	enableWebAnalytics := config.EnableWebAnalytics == nil || *config.EnableWebAnalytics
-
-	if !enableWebAnalytics {
-		logger.V(1).Info("Web Analytics disabled for project", "projectName", config.Name)
-		return nil
-	}
+	shouldEnable := config.EnableWebAnalytics == nil || *config.EnableWebAnalytics
 
 	// The hostname for Pages is the subdomain + .pages.dev (e.g., "myproject.pages.dev")
 	// Note: subdomain from Cloudflare API is just the short name without .pages.dev suffix
@@ -346,34 +372,80 @@ func (*ProjectSyncController) enableWebAnalyticsIfNeeded(
 		hostname = fmt.Sprintf("%s.pages.dev", config.Name)
 	}
 
-	// Check if Web Analytics is already enabled
+	status := &v1alpha2.WebAnalyticsStatus{
+		Hostname:    hostname,
+		LastChecked: &now,
+	}
+
+	if !shouldEnable {
+		logger.V(1).Info("Web Analytics disabled for project", "projectName", config.Name)
+		status.Enabled = false
+		status.Message = "Web Analytics disabled by configuration"
+		r.storeWebAnalyticsStatus(ctx, syncState, status)
+		return status
+	}
+
+	// Check current Web Analytics status
 	existingSite, err := apiClient.GetWebAnalyticsSite(ctx, hostname)
 	if err != nil {
-		logger.V(1).Info("Failed to check existing Web Analytics site", "error", err)
-		// Continue to try enabling
+		logger.V(1).Info("Failed to query Web Analytics site",
+			"hostname", hostname,
+			"error", err)
+		status.Message = fmt.Sprintf("Failed to query Web Analytics: %v", err)
+		r.storeWebAnalyticsStatus(ctx, syncState, status)
+		return status
 	}
 
 	if existingSite != nil {
-		logger.V(1).Info("Web Analytics already enabled for project",
+		// Web Analytics already enabled
+		logger.V(1).Info("Web Analytics already enabled",
 			"projectName", config.Name,
 			"hostname", hostname,
 			"siteTag", existingSite.SiteTag)
-		return nil
+
+		status.Enabled = true
+		status.SiteTag = existingSite.SiteTag
+		status.SiteToken = existingSite.SiteToken
+		status.AutoInstall = existingSite.AutoInstall
+		status.Message = "Web Analytics active"
+
+		r.storeWebAnalyticsStatus(ctx, syncState, status)
+		return status
 	}
 
 	// Enable Web Analytics
+	logger.Info("Enabling Web Analytics for Pages project",
+		"projectName", config.Name,
+		"hostname", hostname)
+
 	site, err := apiClient.EnableWebAnalytics(ctx, hostname)
 	if err != nil {
-		return fmt.Errorf("enable Web Analytics for %s: %w", hostname, err)
+		errMsg := fmt.Sprintf("Failed to enable Web Analytics for %s: %v", hostname, err)
+		logger.Error(err, "Failed to enable Web Analytics",
+			"projectName", config.Name,
+			"hostname", hostname)
+
+		status.Enabled = false
+		status.Message = errMsg
+
+		r.storeWebAnalyticsStatus(ctx, syncState, status)
+		return status
 	}
 
-	logger.Info("Enabled Web Analytics for Pages project",
+	logger.Info("Successfully enabled Web Analytics",
 		"projectName", config.Name,
 		"hostname", hostname,
-		"siteTag", site.SiteTag,
-		"siteToken", site.SiteToken)
+		"siteTag", site.SiteTag)
 
-	return nil
+	status.Enabled = true
+	status.SiteTag = site.SiteTag
+	status.SiteToken = site.SiteToken
+	status.AutoInstall = site.AutoInstall
+	status.Message = "Web Analytics successfully enabled"
+
+	r.storeWebAnalyticsStatus(ctx, syncState, status)
+
+	return status
 }
 
 // storeOriginalConfig stores the original Cloudflare configuration before adoption.
@@ -672,6 +744,38 @@ func (r *ProjectSyncController) handleDeletion(
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// storeWebAnalyticsStatus stores the Web Analytics status in SyncState annotations.
+func (r *ProjectSyncController) storeWebAnalyticsStatus(
+	ctx context.Context,
+	syncState *v1alpha2.CloudflareSyncState,
+	status *v1alpha2.WebAnalyticsStatus,
+) {
+	logger := log.FromContext(ctx)
+
+	// Convert status to JSON
+	statusJSON, err := json.Marshal(status)
+	if err != nil {
+		logger.Error(err, "Failed to marshal Web Analytics status")
+		return
+	}
+
+	// Store in annotations using retry
+	err = controller.UpdateWithConflictRetry(ctx, r.Client, syncState, func() {
+		if syncState.Annotations == nil {
+			syncState.Annotations = make(map[string]string)
+		}
+		syncState.Annotations["networking.cloudflare-operator.io/web-analytics-status"] = string(statusJSON)
+	})
+
+	if err != nil {
+		logger.Error(err, "Failed to store Web Analytics status in annotations")
+	} else {
+		logger.V(1).Info("Stored Web Analytics status",
+			"enabled", status.Enabled,
+			"siteTag", status.SiteTag)
+	}
 }
 
 // SetupWithManager sets up the controller with the Manager.
