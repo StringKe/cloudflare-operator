@@ -70,6 +70,14 @@ type PagesDomainSpec struct {
 	// +kubebuilder:default=true
 	AutoConfigureDNS *bool `json:"autoConfigureDNS,omitempty"`
 
+	// ZoneID is the Cloudflare Zone ID for DNS auto-configuration.
+	// This is optional. If not provided and AutoConfigureDNS is enabled,
+	// the operator will automatically query the zone from Cloudflare API
+	// based on the domain name.
+	// Providing ZoneID explicitly can improve performance by avoiding API lookups.
+	// +kubebuilder:validation:Optional
+	ZoneID string `json:"zoneID,omitempty"`
+
 	// DeletionPolicy specifies what happens when the Kubernetes resource is deleted.
 	// Delete: The custom domain will be removed from the Pages project.
 	// Orphan: The custom domain will be left in Cloudflare.

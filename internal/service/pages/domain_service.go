@@ -53,13 +53,13 @@ func (s *DomainService) Register(ctx context.Context, opts DomainRegisterOptions
 	// Use domain name as CloudflareID (unique per account)
 	syncStateID := fmt.Sprintf("%s-%s", opts.ProjectName, opts.DomainName)
 
-	// Get or create SyncState
+	// Get or create SyncState with optional ZoneID for DNS auto-configuration
 	syncState, err := s.GetOrCreateSyncState(
 		ctx,
 		ResourceTypePagesDomain,
 		syncStateID,
 		opts.AccountID,
-		"", // No zoneID for Pages domains
+		opts.ZoneID, // Pass ZoneID if provided for DNS auto-configuration
 		opts.CredentialsRef,
 	)
 	if err != nil {

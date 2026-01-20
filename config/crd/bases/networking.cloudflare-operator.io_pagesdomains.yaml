@@ -176,6 +176,14 @@ spec:
                       The controller will look up the Cloudflare project name from this resource.
                     type: string
                 type: object
+              zoneID:
+                description: |-
+                  ZoneID is the Cloudflare Zone ID for DNS auto-configuration.
+                  This is optional. If not provided and AutoConfigureDNS is enabled,
+                  the operator will automatically query the zone from Cloudflare API
+                  based on the domain name.
+                  Providing ZoneID explicitly can improve performance by avoiding API lookups.
+                type: string
             required:
             - cloudflare
             - domain

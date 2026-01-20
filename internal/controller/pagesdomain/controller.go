@@ -141,6 +141,58 @@ func (r *PagesDomainReconciler) resolveProjectName(
 	return "", fmt.Errorf("project reference is required: specify name, cloudflareId, or cloudflareName")
 }
 
+// resolveZoneID resolves the Cloudflare Zone ID for DNS auto-configuration.
+// Priority:
+// 1. If Spec.ZoneID is explicitly provided, use it directly
+// 2. If AutoConfigureDNS is disabled, return empty string
+// 3. Otherwise, query Cloudflare API to find the zone for the domain
+func (r *PagesDomainReconciler) resolveZoneID(
+	ctx context.Context,
+	domain *networkingv1alpha2.PagesDomain,
+) (string, error) {
+	logger := log.FromContext(ctx)
+
+	// Priority 1: Explicit ZoneID in spec
+	if domain.Spec.ZoneID != "" {
+		logger.V(1).Info("Using explicit ZoneID from spec", "zoneID", domain.Spec.ZoneID)
+		return domain.Spec.ZoneID, nil
+	}
+
+	// If AutoConfigureDNS is disabled, no need to resolve ZoneID
+	if domain.Spec.AutoConfigureDNS != nil && !*domain.Spec.AutoConfigureDNS {
+		logger.V(1).Info("AutoConfigureDNS is disabled, skipping ZoneID resolution")
+		return "", nil
+	}
+
+	// Priority 2: Query from Cloudflare API
+	logger.Info("Querying Cloudflare API for Zone ID", "domain", domain.Spec.Domain)
+
+	// Create API client
+	apiClient, err := cf.NewAPIClientFromDetails(
+		ctx,
+		r.Client,
+		controller.OperatorNamespace, // PagesDomain is namespaced, but credentials are in operator namespace
+		domain.Spec.Cloudflare,
+	)
+	if err != nil {
+		return "", fmt.Errorf("create API client: %w", err)
+	}
+
+	// Extract base domain from FQDN
+	// e.g., "app.test.1xe.mip.sup-any.com" -> query zones and find matching one
+	zoneID, zoneName, err := apiClient.GetZoneIDForDomain(ctx, domain.Spec.Domain)
+	if err != nil {
+		return "", fmt.Errorf("query zone for domain %s: %w", domain.Spec.Domain, err)
+	}
+
+	logger.Info("Resolved Zone ID from Cloudflare API",
+		"domain", domain.Spec.Domain,
+		"zoneID", zoneID,
+		"zoneName", zoneName)
+
+	return zoneID, nil
+}
+
 // handleDeletion handles the deletion of a PagesDomain.
 func (r *PagesDomainReconciler) handleDeletion(
 	ctx context.Context,
@@ -208,6 +260,15 @@ func (r *PagesDomainReconciler) registerPagesDomain(
 		Name:      domain.Name,
 	}
 
+	// Resolve ZoneID if AutoConfigureDNS is enabled
+	zoneID, err := r.resolveZoneID(ctx, domain)
+	if err != nil {
+		logger.Error(err, "Failed to resolve Zone ID for DNS auto-configuration")
+		// Non-fatal: DNS auto-configuration will be skipped
+		r.Recorder.Event(domain, corev1.EventTypeWarning, "ZoneResolutionFailed",
+			fmt.Sprintf("Failed to resolve Zone ID: %s. DNS auto-configuration will be skipped.", err.Error()))
+	}
+
 	// Build Pages domain configuration
 	config := pagessvc.PagesDomainConfig{
 		Domain:           domain.Spec.Domain,
@@ -220,6 +281,7 @@ func (r *PagesDomainReconciler) registerPagesDomain(
 		DomainName:     domain.Spec.Domain,
 		ProjectName:    projectName,
 		AccountID:      credInfo.AccountID,
+		ZoneID:         zoneID,
 		Source:         source,
 		Config:         config,
 		CredentialsRef: credInfo.CredentialsRef,

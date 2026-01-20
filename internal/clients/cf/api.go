@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/cloudflare/cloudflare-go"
 	"github.com/go-logr/logr"
@@ -369,6 +370,60 @@ func (c *API) getZoneIdByName(ctx context.Context) (string, error) {
 		c.Log.Error(err, "found more than one zone, check domain", "domain", c.Domain)
 		return "", err
 	}
+}
+
+// GetZoneIDForDomain queries Cloudflare API to find the Zone ID for a given domain.
+// It supports both apex domains (example.com) and subdomains (app.example.com).
+// Returns the zoneID and zoneName.
+//
+// Algorithm:
+//  1. Try the domain as-is (for apex domains)
+//  2. Walk up the domain hierarchy (for subdomains)
+//     e.g., app.test.example.com -> test.example.com -> example.com
+func (c *API) GetZoneIDForDomain(ctx context.Context, domain string) (zoneID string, zoneName string, err error) {
+	if c.CloudflareClient == nil {
+		return "", "", errClientNotInitialized
+	}
+
+	if domain == "" {
+		return "", "", fmt.Errorf("domain cannot be empty")
+	}
+
+	// Try each possible zone name by walking up the domain hierarchy
+	parts := strings.Split(domain, ".")
+	for i := 0; i < len(parts)-1; i++ {
+		// Construct potential zone name (e.g., "example.com", "test.example.com")
+		potentialZone := strings.Join(parts[i:], ".")
+
+		c.Log.V(1).Info("Querying zone", "domain", domain, "potentialZone", potentialZone)
+
+		// Query Cloudflare API
+		zones, listErr := c.CloudflareClient.ListZones(ctx, potentialZone)
+		if listErr != nil {
+			c.Log.V(1).Info("Failed to query zone", "zone", potentialZone, "error", listErr)
+			continue
+		}
+
+		// Check if we found exactly one zone
+		if len(zones) == 1 {
+			zoneID = zones[0].ID
+			zoneName = zones[0].Name
+			c.Log.Info("Found zone for domain",
+				"domain", domain,
+				"zoneID", zoneID,
+				"zoneName", zoneName)
+			return zoneID, zoneName, nil
+		}
+
+		// If multiple zones found, log warning but continue searching
+		if len(zones) > 1 {
+			c.Log.Info("Multiple zones found for potential zone name, continuing search",
+				"potentialZone", potentialZone,
+				"count", len(zones))
+		}
+	}
+
+	return "", "", fmt.Errorf("no zone found for domain %s in account", domain)
 }
 
 // InsertOrUpdateCName upsert DNS CNAME record for the given FQDN to point to the tunnel

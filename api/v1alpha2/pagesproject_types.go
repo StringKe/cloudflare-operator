@@ -566,10 +566,10 @@ type PagesProjectSpec struct {
 
 	// ProductionTarget specifies which version to promote to production.
 	// - "latest": Use versions[0] (the first/newest version in the list)
-	// - "vX.Y.Z": Use a specific version by name
+	// - "<version-name>": Use a specific version by name (e.g., "v1.2.3", "sha-abc123")
 	// - "": Do not automatically promote to production
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Pattern=`^(latest|v.+)?$`
+	// +kubebuilder:validation:Pattern=`^(latest|[a-z0-9]([-a-z0-9]*[a-z0-9])?)?$`
 	ProductionTarget string `json:"productionTarget,omitempty"`
 
 	// RevisionHistoryLimit limits the number of managed PagesDeployment resources to keep.

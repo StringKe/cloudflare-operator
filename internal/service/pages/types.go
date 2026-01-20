@@ -322,6 +322,8 @@ type DomainRegisterOptions struct {
 	ProjectName string
 	// AccountID is the Cloudflare Account ID
 	AccountID string
+	// ZoneID is the Cloudflare Zone ID for DNS auto-configuration (optional)
+	ZoneID string
 	// Source identifies the K8s resource contributing this configuration
 	Source service.Source
 	// Config contains the Pages domain configuration
