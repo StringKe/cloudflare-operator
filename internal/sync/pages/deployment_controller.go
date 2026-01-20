@@ -115,6 +115,39 @@ func (r *DeploymentSyncController) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, nil
 	}
 
+	// CRITICAL FIX: When config changes (hash changed) and we have an existing deployment,
+	// we need to reset the CloudflareID to trigger a new deployment.
+	// Otherwise, handleCreateDeployment will just return the existing deployment info
+	// without creating a new one, even though the S3 key or other config has changed.
+	cloudflareID := syncState.Spec.CloudflareID
+	if !common.IsPendingID(cloudflareID) && cloudflareID != "" {
+		// Config changed but we have an existing deployment ID
+		// Reset to pending to force creation of a new deployment
+		logger.Info("Config changed, resetting CloudflareID to trigger new deployment",
+			"oldDeploymentId", cloudflareID,
+			"newHash", newHash,
+			"oldHash", syncState.Status.ConfigHash)
+
+		// Generate new pending ID
+		pendingID := ""
+		if len(syncState.Spec.Sources) > 0 {
+			src := syncState.Spec.Sources[0]
+			pendingID = fmt.Sprintf("pending-%s-%s", src.Ref.Namespace, src.Ref.Name)
+		} else {
+			pendingID = fmt.Sprintf("pending-%s", syncState.Name)
+		}
+
+		if err := common.UpdateCloudflareID(ctx, r.Client, syncState, pendingID); err != nil {
+			logger.Error(err, "Failed to reset CloudflareID for new deployment")
+			return ctrl.Result{}, err
+		}
+
+		// Re-fetch SyncState after update
+		if err := r.Client.Get(ctx, client.ObjectKey{Name: syncState.Name}, syncState); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	// Set syncing status
 	if err := r.SetSyncStatus(ctx, syncState, v1alpha2.SyncStatusSyncing); err != nil {
 		return ctrl.Result{}, err
