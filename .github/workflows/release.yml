@@ -11,50 +11,17 @@ on:
       - "main"
   workflow_dispatch:
 
-# Minimum required permissions - jobs declare their own
 permissions:
   contents: read
-  # Required for SLSA provenance
   id-token: write
   attestations: write
 
 env:
   REGISTRY: ghcr.io
-  # Force lowercase for Docker image name
   IMAGE_NAME: stringke/cloudflare-operator
 
 jobs:
-  # Build installer manifest (fast, ~30s)
-  build-installer:
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      - name: Setup Go
-        uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a # v5.2.0
-        with:
-          go-version-file: "go.mod"
-          cache: true
-
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
-
-      - name: Build installer
-        run: make build-installer VERSION=${{ steps.version.outputs.VERSION }}
-
-      - name: Upload installer artifacts
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
-        with:
-          name: installer
-          path: dist/*.yaml
-          retention-days: 1
-
-  # Build Docker images using matrix for native builds
+  # Build Docker images using matrix for native builds (faster than QEMU)
   docker:
     runs-on: ${{ matrix.runner }}
     permissions:
@@ -131,8 +98,8 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write      # Required for cosign keyless signing
-      attestations: write  # Required for GitHub attestations
+      id-token: write
+      attestations: write
     outputs:
       digest: ${{ steps.push.outputs.digest }}
     steps:
@@ -194,24 +161,18 @@ jobs:
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
-      - name: Inspect image
-        run: |
-          docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
-
-  # Create GitHub Release with GoReleaser (binaries + signed assets)
+  # Create GitHub Release (tag only)
   release:
     runs-on: ubuntu-latest
-    needs: [docker-merge, build-installer]
+    needs: docker-merge
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
-      id-token: write      # Required for cosign keyless signing
-      attestations: write  # Required for GitHub attestations
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          fetch-depth: 0
 
       - name: Setup Go
         uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a # v5.2.0
@@ -219,30 +180,27 @@ jobs:
           go-version-file: "go.mod"
           cache: true
 
-      - name: Download installer artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Build installer manifests
+        run: make build-installer VERSION=${{ steps.version.outputs.VERSION }}
+
+      - name: Generate release notes with git-cliff
+        id: changelog
+        uses: orhun/git-cliff-action@4a4a951bc43fafe41cd2348d181853f52356bee7 # v4.4.2
         with:
-          name: installer
-          path: /tmp/installer-artifacts
+          config: .github/cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: CHANGELOG-release.md
+          GITHUB_REPO: ${{ github.repository }}
 
       - name: Install cosign
         uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
 
-      - name: Install Syft (for SBOM)
-        uses: anchore/sbom-action/download-syft@0b82b0b1a22399a1c542d4d656f70cd903571b5c # v0.21.1
-
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@9c156ee8a17a598857849441385a2041ef570552 # v6.3.0
-        with:
-          version: latest
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Copy installer manifests to dist
-        run: cp /tmp/installer-artifacts/*.yaml dist/
-
-      - name: Sign installer manifests with cosign
+      - name: Sign manifests with cosign
         run: |
           for file in dist/cloudflare-operator*.yaml; do
             if [ -f "${file}" ]; then
@@ -251,21 +209,20 @@ jobs:
             fi
           done
 
-      - name: Upload installer manifests and signatures
+      - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ github.ref_name }}
         run: |
-          gh release upload "${TAG_NAME}" \
+          gh release create "${TAG_NAME}" \
             --repo ${{ github.repository }} \
+            --title "${TAG_NAME}" \
+            --notes-file CHANGELOG-release.md \
             dist/cloudflare-operator*.yaml \
             dist/cloudflare-operator*.sig \
-            dist/cloudflare-operator*.pem \
-            --clobber
+            dist/cloudflare-operator*.pem
 
       - name: Attest release artifacts
         uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2 # v2.2.3
         with:
-          subject-path: |
-            dist/*.yaml
-            dist/*.tar.gz
+          subject-path: dist/*.yaml

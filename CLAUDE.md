@@ -23,40 +23,51 @@
 - **Group**: `networking.cloudflare-operator.io`
 - **版本**: v1alpha1 (deprecated), v1alpha2 (storage version)
 
-### 已实现的 CRD (30个)
+### 已实现的 CRD (34个)
 
-| 类别         | CRD                      | 作用域     | 状态                               |
-| ------------ | ------------------------ | ---------- | ---------------------------------- |
-| **凭证**     | CloudflareCredentials    | Cluster    | ✅ 完成                            |
-| **域名配置** | CloudflareDomain         | Cluster    | ✅ 完成 (SSL/TLS, 缓存, 安全, WAF) |
-| **网络层**   | Tunnel                   | Namespaced | ✅ 完成                            |
-|              | ClusterTunnel            | Cluster    | ✅ 完成                            |
-|              | VirtualNetwork           | Cluster    | ✅ 完成                            |
-|              | NetworkRoute             | Cluster    | ✅ 完成                            |
-|              | WARPConnector            | Namespaced | ⚠️ 框架完成                        |
-| **服务层**   | TunnelBinding            | Namespaced | ✅ 完成                            |
-|              | PrivateService           | Namespaced | ✅ 完成                            |
-|              | DNSRecord                | Namespaced | ✅ 完成                            |
-| **身份层**   | AccessApplication        | Cluster    | ✅ 完成                            |
-|              | AccessGroup              | Cluster    | ✅ 完成                            |
-|              | AccessServiceToken       | Cluster    | ✅ 完成                            |
-|              | AccessIdentityProvider   | Cluster    | ✅ 完成                            |
-|              | AccessTunnel             | Namespaced | ⚠️ 框架完成                        |
-| **设备层**   | DevicePostureRule        | Cluster    | ⚠️ 框架完成                        |
-|              | DeviceSettingsPolicy     | Cluster    | ⚠️ 框架完成                        |
-| **网关层**   | GatewayRule              | Cluster    | ⚠️ 框架完成                        |
-|              | GatewayList              | Cluster    | ⚠️ 框架完成                        |
-|              | GatewayConfiguration     | Cluster    | ✅ 完成                            |
-| **SSL/TLS**  | OriginCACertificate      | Namespaced | ✅ 完成 (自动 K8s Secret)          |
-| **R2 存储**  | R2Bucket                 | Namespaced | ✅ 完成 (生命周期规则)             |
-|              | R2BucketDomain           | Namespaced | ✅ 完成 (自定义域名)               |
-|              | R2BucketNotification     | Namespaced | ✅ 完成 (事件通知)                 |
-| **规则引擎** | ZoneRuleset              | Namespaced | ✅ 完成 (WAF, 速率限制等)          |
-|              | TransformRule            | Namespaced | ✅ 完成 (URL/Header 转换)          |
-|              | RedirectRule             | Namespaced | ✅ 完成 (重定向规则)               |
-| **域名注册** | DomainRegistration       | Cluster    | ✅ 完成 (Enterprise)               |
-| **K8s 集成** | TunnelIngressClassConfig | Cluster    | ⚠️ 框架完成                        |
-|              | TunnelGatewayClassConfig | Cluster    | ⚠️ 框架完成                        |
+| 类别         | CRD                      | 作用域     | 状态                                        |
+| ------------ | ------------------------ | ---------- | ------------------------------------------- |
+| **凭证**     | CloudflareCredentials    | Cluster    | ✅ 完成                                      |
+| **域名配置** | CloudflareDomain         | Cluster    | ✅ 完成 (SSL/TLS, 缓存, 安全, WAF)           |
+| **网络层**   | Tunnel                   | Namespaced | ✅ 完成                                      |
+|              | ClusterTunnel            | Cluster    | ✅ 完成                                      |
+|              | VirtualNetwork           | Cluster    | ✅ 完成                                      |
+|              | NetworkRoute             | Cluster    | ✅ 完成 (跨 VNet 采用)                       |
+|              | WARPConnector            | Namespaced | ✅ 完成 (站点间连接)                         |
+| **服务层**   | TunnelBinding            | Namespaced | ⚠️ 废弃 (请迁移到 DNSRecord/Ingress)        |
+|              | PrivateService           | Namespaced | ✅ 完成                                      |
+|              | DNSRecord                | Namespaced | ✅ 完成                                      |
+| **身份层**   | AccessApplication        | Namespaced | ✅ 完成 (内联策略规则, Watch AccessPolicy)   |
+|              | AccessGroup              | Cluster    | ✅ 完成                                      |
+|              | AccessPolicy             | Cluster    | ✅ 完成 (可复用策略)                         |
+|              | AccessServiceToken       | Namespaced | ✅ 完成                                      |
+|              | AccessIdentityProvider   | Cluster    | ✅ 完成                                      |
+|              | AccessTunnel             | Namespaced | ⚠️ 废弃 (v1alpha1 遗留, 请使用 WARPConnector)|
+| **设备层**   | DevicePostureRule        | Cluster    | ✅ 完成                                      |
+|              | DeviceSettingsPolicy     | Cluster    | ✅ 完成                                      |
+| **网关层**   | GatewayRule              | Cluster    | ✅ 完成                                      |
+|              | GatewayList              | Cluster    | ✅ 完成                                      |
+|              | GatewayConfiguration     | Cluster    | ✅ 完成                                      |
+| **SSL/TLS**  | OriginCACertificate      | Namespaced | ✅ 完成 (自动 K8s Secret)                    |
+| **R2 存储**  | R2Bucket                 | Namespaced | ✅ 完成 (生命周期规则)                       |
+|              | R2BucketDomain           | Namespaced | ✅ 完成 (自定义域名)                         |
+|              | R2BucketNotification     | Namespaced | ✅ 完成 (事件通知)                           |
+| **规则引擎** | ZoneRuleset              | Namespaced | ✅ 完成 (WAF, 速率限制等)                    |
+|              | TransformRule            | Namespaced | ✅ 完成 (URL/Header 转换)                    |
+|              | RedirectRule             | Namespaced | ✅ 完成 (重定向规则)                         |
+| **Pages**    | PagesProject             | Namespaced | ✅ 完成 (构建配置、资源绑定、项目采用)       |
+|              | PagesDomain              | Namespaced | ✅ 完成 (自定义域名)                         |
+|              | PagesDeployment          | Namespaced | ✅ 完成 (直接上传、智能回滚)                 |
+| **域名注册** | DomainRegistration       | Cluster    | ✅ 完成 (Enterprise)                         |
+| **K8s 集成** | TunnelIngressClassConfig | Cluster    | ✅ 嵌入式 (Ingress 控制器配置)               |
+|              | TunnelGatewayClassConfig | Cluster    | ✅ 嵌入式 (Gateway DNS 管理)                 |
+
+**图例**:
+- ✅ 完成: 完整六层架构实现
+- ⚠️ L5 缺失: 缺少 L5 Sync Controller
+- ⚠️ 废弃: 资源已废弃，建议迁移
+- ✅ 嵌入式: 嵌入其他控制器中，非独立实现
+- ❌ 未实现: 仅有类型定义
 
 ### Secret 位置说明
 
@@ -879,40 +890,50 @@ if err = (&myresourcesync.SyncController{
 
 六层架构实施状态一览 (按数据流顺序):
 
-| 资源                       | L2 Controller | L3 Service | L4 SyncState | L5 Sync Ctrl | 完成度 | 备注                              |
-| -------------------------- | :-----------: | :--------: | :----------: | :----------: | :----: | --------------------------------- |
-| **Tunnel**                 |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | cfAPI 仅用于元数据存储            |
-| **ClusterTunnel**          |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | cfAPI 仅用于元数据存储            |
-| **TunnelBinding**          |   ⚠️ 废弃    |     ✅     |      ✅      |      ✅      |  75%   | DNS TXT 管理 (废弃资源)           |
-| **DNSRecord**              |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
-| **VirtualNetwork**         |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
-| **NetworkRoute**           |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
-| **PrivateService**         |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
-| **AccessApplication**      |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | Group 解析移至 L5                 |
-| **AccessGroup**            |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
-| **AccessServiceToken**     |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
-| **AccessIdentityProvider** |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
-| **DevicePostureRule**      |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | 删除通过 L5 Sync Controller       |
-| **DeviceSettingsPolicy**   |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
-| **GatewayRule**            |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | 删除通过 L5 Sync Controller       |
-| **GatewayList**            |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | 删除通过 L5 Sync Controller       |
-| **GatewayConfiguration**   |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
-| **R2Bucket**               |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
-| **R2BucketDomain**         |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
-| **R2BucketNotification**   |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
-| **ZoneRuleset**            |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
-| **TransformRule**          |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
-| **RedirectRule**           |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
-| **CloudflareDomain**       |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
-| **OriginCACertificate**    |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
-| **DomainRegistration**     |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
-| **Ingress**                |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | DNS Automatic 已迁移              |
-| **Gateway**                |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| 资源                         | L2 Controller | L3 Service | L4 SyncState | L5 Sync Ctrl | 完成度 | 备注                              |
+| ---------------------------- | :-----------: | :--------: | :----------: | :----------: | :----: | --------------------------------- |
+| **Tunnel**                   |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | cfAPI 仅用于元数据存储            |
+| **ClusterTunnel**            |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | cfAPI 仅用于元数据存储            |
+| **TunnelBinding**            |   ⚠️ 废弃    |     ❌     |      ❌      |      ❌      |  33%   | 废弃，请迁移到 DNSRecord/Ingress  |
+| **DNSRecord**                |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **VirtualNetwork**           |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **NetworkRoute**             |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | 跨 VNet 采用                      |
+| **PrivateService**           |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **WARPConnector**            |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | 站点间连接                        |
+| **AccessApplication**        |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | 内联策略规则, Watch AccessPolicy  |
+| **AccessGroup**              |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **AccessPolicy**             |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | 可复用策略                        |
+| **AccessServiceToken**       |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **AccessIdentityProvider**   |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **AccessTunnel**             |   ⚠️ 废弃    |     ❌     |      ❌      |      ❌      |  33%   | v1alpha1 遗留，直接创建 Deployment|
+| **DevicePostureRule**        |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **DeviceSettingsPolicy**     |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **GatewayRule**              |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **GatewayList**              |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **GatewayConfiguration**     |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **R2Bucket**                 |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **R2BucketDomain**           |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **R2BucketNotification**     |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **ZoneRuleset**              |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **TransformRule**            |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **RedirectRule**             |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **CloudflareDomain**         |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **OriginCACertificate**      |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **DomainRegistration**       |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **PagesProject**             |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | 构建配置、资源绑定                |
+| **PagesDomain**              |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **PagesDeployment**          |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | 直接上传、智能回滚                |
+| **Ingress**                  |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | DNS Automatic 已迁移              |
+| **Gateway**                  |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
+| **TunnelIngressClassConfig** |      -        |     -      |      -       |      -       |   -    | 嵌入式配置 (Ingress 控制器)       |
+| **TunnelGatewayClassConfig** |      -        |     -      |      -       |      -       |   -    | 嵌入式配置 (Gateway DNS 管理)     |
 
 **图例**:
 
 - ✅ 已按六层架构实现
+- ❌ 未实现或缺失
 - ⚠️ 废弃: 资源已标记为废弃，将在未来版本移除
+- `-`: 不适用 (嵌入式配置模式)
 
 **废弃资源说明**:
 
@@ -923,6 +944,10 @@ if err = (&myresourcesync.SyncController{
 
 TunnelBinding 的 DNS TXT 管理模式 (`createDNSLogic`/`deleteDNSLogic`) 是该资源特有的所有权追踪机制，
 与标准 DNSRecord CRD 模式不同。由于资源已废弃，保留现有实现直到移除。
+
+**AccessTunnel** (v1alpha1): 已废弃，请迁移到 **WARPConnector**。
+AccessTunnel 直接创建 K8s Deployment 而非通过六层架构，违反统一同步模式。
+WARPConnector 提供完整的六层架构实现和更好的站点间连接功能。
 
 **已完成迁移**:
 
@@ -943,6 +968,8 @@ TunnelBinding 的 DNS TXT 管理模式 (`createDNSLogic`/`deleteDNSLogic`) 是�
 - ✅ Tunnel/ClusterTunnel: cfAPI 仅用于元数据，核心操作通过 LifecycleService
 - ✅ DNSRecord: 完整六层架构
 - ✅ Gateway: 完整六层架构
+- ✅ AccessApplication: 添加 Watch AccessPolicy 触发器
+- ✅ TunnelGatewayClassConfig: 嵌入 Gateway 控制器实现 DNS 自动管理
 
 ---
 

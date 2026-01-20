@@ -222,7 +222,7 @@ Operator 根据 CRD 作用域使用不同的 Secret 查找规则：
 
 ## 版本信息
 
-- 当前版本：v0.26.x (Alpha)
+- 当前版本：v0.27.x (Alpha)
 - API 版本：`networking.cloudflare-operator.io/v1alpha2`
 - Kubernetes：v1.28+
 - Go：1.25
@@ -231,6 +231,11 @@ Operator 根据 CRD 作用域使用不同的 Secret 查找规则：
 - gateway-api：v1.4.1
 
 ## 版本变更
+
+### v0.27.x - AccessApplication 内联策略与 NetworkRoute 改进
+- **AccessApplication 内联策略**：直接在 AccessApplication spec 中定义 include/exclude/require 规则，无需单独创建 AccessPolicy 资源
+- **NetworkRoute 跨 VNet 采用**：修复 VirtualNetworkID 处理，正确搜索和采用所有虚拟网络中的路由
+- 新增 API 方法：`ListTunnelRoutesByNetwork`、`GetDefaultVirtualNetwork`、`ListVirtualNetworks`
 
 ### v0.26.0 - Cloudflare Pages 支持
 - **PagesProject CRD**：完整 Pages 项目管理，支持构建配置、环境变量、资源绑定（KV、R2、D1、Durable Objects、Queues、AI、Vectorize、Hyperdrive）

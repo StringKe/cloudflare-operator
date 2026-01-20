@@ -53,24 +53,79 @@ curl -X POST "https://api.cloudflare.com/client/v4/user/tokens" \
 
 ### Permission Matrix
 
+#### Tunnel & Network
+
 | Feature | Permission | Scope |
 |---------|------------|-------|
 | **Tunnel / ClusterTunnel** | `Account:Cloudflare Tunnel:Edit` | Account |
 | **VirtualNetwork** | `Account:Cloudflare Tunnel:Edit` | Account |
 | **NetworkRoute** | `Account:Cloudflare Tunnel:Edit` | Account |
 | **WARPConnector** | `Account:Cloudflare Tunnel:Edit` | Account |
-| **DNS Records** | `Zone:DNS:Edit` | Zone (specific or all) |
-| **TunnelBinding** | `Zone:DNS:Edit` + (optional) `Account:Access: Apps and Policies:Edit` | Account + Zone |
 | **PrivateService** | `Account:Cloudflare Tunnel:Edit` | Account |
-| **Access Applications** | `Account:Access: Apps and Policies:Edit` | Account |
-| **Access Groups** | `Account:Access: Organizations, Identity Providers, and Groups:Edit` | Account |
-| **Access Identity Providers** | `Account:Access: Organizations, Identity Providers, and Groups:Edit` | Account |
-| **Access Service Tokens** | `Account:Access: Service Tokens:Edit` | Account |
-| **Device Posture Rules** | `Account:Access: Device Posture:Edit` | Account |
-| **Device Settings Policy** | `Account:Zero Trust:Edit` | Account |
-| **Gateway Rules** | `Account:Zero Trust:Edit` | Account |
-| **Gateway Lists** | `Account:Zero Trust:Edit` | Account |
-| **Gateway Configuration** | `Account:Zero Trust:Edit` | Account |
+| **TunnelBinding** | `Zone:DNS:Edit` + (optional) `Account:Access: Apps and Policies:Edit` | Account + Zone |
+
+#### DNS & Connectivity
+
+| Feature | Permission | Scope |
+|---------|------------|-------|
+| **DNSRecord** | `Zone:DNS:Edit` | Zone (specific or all) |
+
+#### Access Control (Zero Trust)
+
+| Feature | Permission | Scope |
+|---------|------------|-------|
+| **AccessApplication** | `Account:Access: Apps and Policies:Edit` | Account |
+| **AccessGroup** | `Account:Access: Organizations, Identity Providers, and Groups:Edit` | Account |
+| **AccessPolicy** | `Account:Access: Apps and Policies:Edit` | Account |
+| **AccessIdentityProvider** | `Account:Access: Organizations, Identity Providers, and Groups:Edit` | Account |
+| **AccessServiceToken** | `Account:Access: Service Tokens:Edit` | Account |
+
+#### Gateway & Device
+
+| Feature | Permission | Scope |
+|---------|------------|-------|
+| **GatewayRule** | `Account:Zero Trust:Edit` | Account |
+| **GatewayList** | `Account:Zero Trust:Edit` | Account |
+| **GatewayConfiguration** | `Account:Zero Trust:Edit` | Account |
+| **DevicePostureRule** | `Account:Access: Device Posture:Edit` | Account |
+| **DeviceSettingsPolicy** | `Account:Zero Trust:Edit` | Account |
+
+#### Zone Settings & SSL/TLS
+
+| Feature | Permission | Scope |
+|---------|------------|-------|
+| **CloudflareDomain** | `Zone:Zone Settings:Edit` + `Zone:SSL and Certificates:Edit` | Zone |
+| **OriginCACertificate** | `Zone:SSL and Certificates:Edit` | Zone |
+
+#### R2 Storage
+
+| Feature | Permission | Scope |
+|---------|------------|-------|
+| **R2Bucket** | `Account:Workers R2 Storage:Edit` | Account |
+| **R2BucketDomain** | `Account:Workers R2 Storage:Edit` + `Zone:DNS:Edit` | Account + Zone |
+| **R2BucketNotification** | `Account:Workers R2 Storage:Edit` | Account |
+
+#### Rules Engine
+
+| Feature | Permission | Scope |
+|---------|------------|-------|
+| **ZoneRuleset** | `Zone:Zone Rulesets:Edit` | Zone |
+| **TransformRule** | `Zone:Zone Rulesets:Edit` | Zone |
+| **RedirectRule** | `Zone:Zone Rulesets:Edit` | Zone |
+
+#### Cloudflare Pages
+
+| Feature | Permission | Scope |
+|---------|------------|-------|
+| **PagesProject** | `Account:Cloudflare Pages:Edit` | Account |
+| **PagesDomain** | `Account:Cloudflare Pages:Edit` + `Zone:DNS:Edit` | Account + Zone |
+| **PagesDeployment** | `Account:Cloudflare Pages:Edit` | Account |
+
+#### Registrar (Enterprise)
+
+| Feature | Permission | Scope |
+|---------|------------|-------|
+| **DomainRegistration** | `Account:Registrar:Edit` | Account |
 
 ### Recommended Token Configurations
 

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -31,6 +32,7 @@ import (
 	"github.com/StringKe/cloudflare-operator/internal/controller/route"
 	tunnelpkg "github.com/StringKe/cloudflare-operator/internal/controller/tunnel"
 	"github.com/StringKe/cloudflare-operator/internal/service"
+	dnssvc "github.com/StringKe/cloudflare-operator/internal/service/dns"
 	tunnelsvc "github.com/StringKe/cloudflare-operator/internal/service/tunnel"
 )
 
@@ -128,6 +130,18 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		r.Recorder.Event(gateway, corev1.EventTypeWarning, "APISyncFailed", cf.SanitizeErrorMessage(err))
 		return r.setCondition(ctx, gateway, gatewayv1.GatewayConditionProgrammed, false, "APISyncFailed",
 			"Failed to sync configuration to Cloudflare API: "+cf.SanitizeErrorMessage(err))
+	}
+
+	// Handle DNS management if not Manual mode
+	if config.Spec.DNSManagement != networkingv1alpha2.DNSManagementManual {
+		hostnames := r.extractHostnamesFromRules(rules)
+		tunnelCNAME := fmt.Sprintf("%s.cfargotunnel.com", tunnel.GetStatus().TunnelId)
+		if err := r.reconcileDNS(ctx, gateway, tunnel, config, hostnames, tunnelCNAME); err != nil {
+			logger.Error(err, "Failed to reconcile DNS records", "hostnames", hostnames)
+			// DNS failure is not fatal - tunnel config is already synced
+			r.Recorder.Event(gateway, corev1.EventTypeWarning, "DNSSyncWarning",
+				"DNS sync incomplete: "+cf.SanitizeErrorMessage(err))
+		}
 	}
 
 	// Update status
@@ -784,4 +798,243 @@ func convertOriginRequest(req *cf.OriginRequestConfig) *tunnelsvc.OriginRequestC
 		ProxyType:              req.ProxyType,
 		HTTP2Origin:            req.HTTP2Origin,
 	}
+}
+
+// extractHostnamesFromRules extracts unique hostnames from ingress rules
+func (*GatewayReconciler) extractHostnamesFromRules(rules []cf.UnvalidatedIngressRule) []string {
+	hostnameSet := make(map[string]struct{})
+	for _, rule := range rules {
+		// Skip empty hostnames (catch-all rules)
+		if rule.Hostname == "" {
+			continue
+		}
+		// Normalize hostname (remove leading wildcard for DNS purposes)
+		hostname := rule.Hostname
+		if strings.HasPrefix(hostname, "*.") {
+			// Keep wildcard for DNS as Cloudflare supports wildcard CNAME
+			hostnameSet[hostname] = struct{}{}
+		} else {
+			hostnameSet[hostname] = struct{}{}
+		}
+	}
+
+	hostnames := make([]string, 0, len(hostnameSet))
+	for h := range hostnameSet {
+		hostnames = append(hostnames, h)
+	}
+	sort.Strings(hostnames)
+	return hostnames
+}
+
+// reconcileDNS manages DNS records for Gateway hostnames.
+// Supports three modes:
+// - Automatic: Registers DNS records directly via DNS Service
+// - DNSRecord: Creates DNSRecord CRDs with OwnerReference
+// - Manual: Skips DNS management (handled externally)
+//
+// nolint:revive // Cognitive complexity for DNS reconciliation
+func (r *GatewayReconciler) reconcileDNS(
+	ctx context.Context,
+	gateway *gatewayv1.Gateway,
+	tunnel tunnelpkg.Interface,
+	config *networkingv1alpha2.TunnelGatewayClassConfig,
+	hostnames []string,
+	tunnelCNAME string,
+) error {
+	logger := log.FromContext(ctx)
+
+	if len(hostnames) == 0 {
+		logger.V(1).Info("No hostnames to manage DNS for")
+		return nil
+	}
+
+	// Get zone info from tunnel status
+	zoneID := tunnel.GetStatus().ZoneId
+	accountID := tunnel.GetStatus().AccountId
+
+	// Get credentials reference from tunnel
+	credRef := r.getCredentialsReferenceFromTunnel(tunnel)
+
+	switch config.Spec.DNSManagement {
+	case networkingv1alpha2.DNSManagementAutomatic:
+		// Register DNS records directly via DNS Service
+		return r.reconcileDNSAutomatic(ctx, gateway, config, hostnames, tunnelCNAME, zoneID, accountID, credRef)
+
+	case networkingv1alpha2.DNSManagementDNSRecord:
+		// Create DNSRecord CRDs with OwnerReference
+		return r.reconcileDNSRecordCRDs(ctx, gateway, config, hostnames, tunnelCNAME)
+
+	case networkingv1alpha2.DNSManagementManual:
+		logger.V(1).Info("DNS management is manual, skipping")
+		return nil
+
+	default:
+		// Default to Automatic if not specified
+		return r.reconcileDNSAutomatic(ctx, gateway, config, hostnames, tunnelCNAME, zoneID, accountID, credRef)
+	}
+}
+
+// reconcileDNSAutomatic registers DNS records via DNS Service
+func (r *GatewayReconciler) reconcileDNSAutomatic(
+	ctx context.Context,
+	gateway *gatewayv1.Gateway,
+	config *networkingv1alpha2.TunnelGatewayClassConfig,
+	hostnames []string,
+	tunnelCNAME string,
+	zoneID string,
+	accountID string,
+	credRef networkingv1alpha2.CredentialsReference,
+) error {
+	logger := log.FromContext(ctx)
+
+	if zoneID == "" {
+		return fmt.Errorf("zone ID not available in tunnel status")
+	}
+
+	dnsService := dnssvc.NewService(r.Client)
+
+	var errs []error
+	for _, hostname := range hostnames {
+		opts := dnssvc.RegisterOptions{
+			ZoneID:    zoneID,
+			AccountID: accountID,
+			Source: service.Source{
+				Kind:      "Gateway",
+				Namespace: gateway.Namespace,
+				Name:      gateway.Name,
+			},
+			Config: dnssvc.DNSRecordConfig{
+				Name:    hostname,
+				Type:    "CNAME",
+				Content: tunnelCNAME,
+				Proxied: config.IsDNSProxied(),
+				TTL:     1, // Automatic TTL
+				Comment: fmt.Sprintf("Managed by cloudflare-operator Gateway %s/%s", gateway.Namespace, gateway.Name),
+			},
+			CredentialsRef: credRef,
+		}
+
+		if err := dnsService.Register(ctx, opts); err != nil {
+			errs = append(errs, fmt.Errorf("register DNS for %s: %w", hostname, err))
+			continue
+		}
+	}
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+
+	logger.Info("DNS records registered via DNS Service",
+		"hostnames", hostnames,
+		"mode", "Automatic",
+		"tunnelCNAME", tunnelCNAME)
+	return nil
+}
+
+// reconcileDNSRecordCRDs creates DNSRecord CRDs for each hostname
+// nolint:revive // Cognitive complexity for DNSRecord CRD creation
+func (r *GatewayReconciler) reconcileDNSRecordCRDs(
+	ctx context.Context,
+	gateway *gatewayv1.Gateway,
+	config *networkingv1alpha2.TunnelGatewayClassConfig,
+	hostnames []string,
+	tunnelCNAME string,
+) error {
+	logger := log.FromContext(ctx)
+
+	var errs []error
+	for _, hostname := range hostnames {
+		// Sanitize hostname for K8s resource name
+		resourceName := fmt.Sprintf("%s-%s", gateway.Name, sanitizeHostnameForK8s(hostname))
+
+		dnsRecord := &networkingv1alpha2.DNSRecord{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      resourceName,
+				Namespace: gateway.Namespace,
+				Labels: map[string]string{
+					"cloudflare-operator.io/managed-by": "gateway-controller",
+					"cloudflare-operator.io/gateway":    gateway.Name,
+				},
+				OwnerReferences: []metav1.OwnerReference{
+					{
+						APIVersion:         gatewayv1.GroupVersion.String(),
+						Kind:               "Gateway",
+						Name:               gateway.Name,
+						UID:                gateway.UID,
+						Controller:         boolPtr(true),
+						BlockOwnerDeletion: boolPtr(true),
+					},
+				},
+			},
+			Spec: networkingv1alpha2.DNSRecordSpec{
+				Name:    hostname,
+				Type:    "CNAME",
+				Content: tunnelCNAME,
+				Proxied: config.IsDNSProxied(),
+				TTL:     1, // Automatic TTL
+				Comment: fmt.Sprintf("Managed by Gateway %s/%s", gateway.Namespace, gateway.Name),
+				// Cloudflare credentials will be resolved by DNSRecord controller
+				// from the namespace's default credentials or the tunnel's credentials
+			},
+		}
+
+		// Create or Update
+		existing := &networkingv1alpha2.DNSRecord{}
+		err := r.Get(ctx, apitypes.NamespacedName{
+			Name:      resourceName,
+			Namespace: gateway.Namespace,
+		}, existing)
+
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				// Create new DNSRecord
+				if createErr := r.Create(ctx, dnsRecord); createErr != nil {
+					errs = append(errs, fmt.Errorf("create DNSRecord for %s: %w", hostname, createErr))
+					continue
+				}
+				logger.Info("Created DNSRecord CRD", "name", resourceName, "hostname", hostname)
+			} else {
+				errs = append(errs, fmt.Errorf("get DNSRecord %s: %w", resourceName, err))
+				continue
+			}
+		} else {
+			// Update existing DNSRecord
+			existing.Spec = dnsRecord.Spec
+			if updateErr := r.Update(ctx, existing); updateErr != nil {
+				errs = append(errs, fmt.Errorf("update DNSRecord for %s: %w", hostname, updateErr))
+				continue
+			}
+			logger.V(1).Info("Updated DNSRecord CRD", "name", resourceName, "hostname", hostname)
+		}
+	}
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+
+	logger.Info("DNS records managed via DNSRecord CRDs",
+		"hostnames", hostnames,
+		"mode", "DNSRecord",
+		"tunnelCNAME", tunnelCNAME)
+	return nil
+}
+
+// sanitizeHostnameForK8s converts a hostname to a valid K8s resource name suffix
+func sanitizeHostnameForK8s(hostname string) string {
+	// Replace dots with dashes, remove wildcards
+	result := strings.ReplaceAll(hostname, ".", "-")
+	result = strings.TrimPrefix(result, "*-")
+	result = strings.TrimPrefix(result, "-")
+
+	// Ensure it's a valid K8s name (lowercase, alphanumeric, dash)
+	// Max length consideration
+	if len(result) > 50 {
+		result = result[:50]
+	}
+	return result
+}
+
+// boolPtr returns a pointer to a bool value
+func boolPtr(b bool) *bool {
+	return &b
 }

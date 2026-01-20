@@ -370,6 +370,14 @@ func TestSanitizeLabelValue(t *testing.T) {
 		{"-leading-dash", "leading-dash"},
 		{"trailing-dash-", "trailing-dash"},
 		{"a-very-long-label-value-that-exceeds-the-kubernetes-limit-of-63-characters", "a-very-long-label-value-that-exceeds-the-kubernetes-limit-of-63"},
+		// Bug fix: handle slash and other invalid characters
+		{"pending-argo-workflows-argo-workflows/argo-workflows-server-wor", "pending-argo-workflows-argo-workflows-argo-workflows-server-wor"},
+		{"namespace/name", "namespace-name"},
+		{"value@with#special$chars", "value-with-special-chars"},
+		{"MixedCase/Value", "mixedcase-value"},
+		{"multiple///slashes", "multiple---slashes"},
+		{"dots.are.valid", "dots.are.valid"},
+		{"underscores_are_valid", "underscores_are_valid"},
 	}
 
 	for _, tt := range tests {

@@ -296,11 +296,28 @@ func sanitizeName(s string) string {
 	return name
 }
 
-// sanitizeLabelValue ensures the value is valid for Kubernetes label values
+// sanitizeLabelValue ensures the value is valid for Kubernetes label values.
+// Label values must be 63 characters or less and match regex: ^[a-z0-9A-Z]?([a-z0-9A-Z-_.]*[a-z0-9A-Z])?$
+//
+//nolint:revive // WriteRune error is always nil for valid runes
 func sanitizeLabelValue(s string) string {
-	// Label values must be 63 characters or less and match regex: ^[a-z0-9A-Z]?([a-z0-9A-Z-_.]*[a-z0-9A-Z])?$
-	if len(s) > 63 {
-		s = s[:63]
+	// Replace invalid characters with dashes (similar to sanitizeName)
+	var result strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			_, _ = result.WriteRune(r)
+		} else {
+			_, _ = result.WriteRune('-')
+		}
 	}
-	return strings.Trim(s, "-_.")
+
+	sanitized := result.String()
+
+	// Truncate to 63 characters
+	if len(sanitized) > 63 {
+		sanitized = sanitized[:63]
+	}
+
+	// Trim leading/trailing invalid characters for label values
+	return strings.Trim(sanitized, "-_.")
 }
