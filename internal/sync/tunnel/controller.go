@@ -147,6 +147,18 @@ func (r *Controller) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// Check if configuration has changed
 	if !r.ShouldSync(syncState, configHash) {
 		logger.V(1).Info("Configuration unchanged, skipping sync", "hash", configHash)
+		// Even if config unchanged, ensure status is Synced (not stuck at Syncing)
+		// and aggregatedConfig is persisted for observability
+		if syncState.Status.SyncStatus != v1alpha2.SyncStatusSynced {
+			syncResult := &common.SyncResult{
+				ConfigVersion: syncState.Status.ConfigVersion,
+				ConfigHash:    configHash,
+			}
+			if err := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusSynced, syncResult, nil); err != nil {
+				logger.Error(err, "Failed to update status to Synced")
+				return ctrl.Result{}, err
+			}
+		}
 		return ctrl.Result{}, nil
 	}
 
