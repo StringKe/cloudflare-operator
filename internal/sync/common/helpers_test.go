@@ -4,16 +4,25 @@
 package common
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/StringKe/cloudflare-operator/api/v1alpha2"
 )
+
+func init() {
+	_ = v1alpha2.AddToScheme(scheme.Scheme)
+}
 
 func TestIsPendingID(t *testing.T) {
 	tests := []struct {
@@ -315,4 +324,118 @@ func TestSourceReference_String(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestUpdateCloudflareID_Success(t *testing.T) {
+	// Create a SyncState with pending ID
+	syncState := &v1alpha2.CloudflareSyncState{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-syncstate",
+			Namespace: "default",
+		},
+		Spec: v1alpha2.CloudflareSyncStateSpec{
+			ResourceType: v1alpha2.SyncResourceDNSRecord,
+			CloudflareID: "pending-test-record",
+			AccountID:    "test-account",
+			ZoneID:       "test-zone",
+		},
+	}
+
+	// Create fake client with the SyncState
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme.Scheme).
+		WithObjects(syncState).
+		Build()
+
+	ctx := context.Background()
+	newID := "actual-cloudflare-id-123"
+
+	// Call UpdateCloudflareID
+	err := UpdateCloudflareID(ctx, fakeClient, syncState, newID)
+
+	// Verify no error
+	require.NoError(t, err)
+
+	// Verify the SyncState was updated
+	updated := &v1alpha2.CloudflareSyncState{}
+	err = fakeClient.Get(ctx, types.NamespacedName{
+		Name:      "test-syncstate",
+		Namespace: "default",
+	}, updated)
+	require.NoError(t, err)
+	assert.Equal(t, newID, updated.Spec.CloudflareID)
+}
+
+func TestUpdateCloudflareID_NotFound(t *testing.T) {
+	// Create a SyncState that is NOT in the fake client (simulating not found)
+	syncState := &v1alpha2.CloudflareSyncState{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "non-existent-syncstate",
+			Namespace: "default",
+		},
+		Spec: v1alpha2.CloudflareSyncStateSpec{
+			ResourceType: v1alpha2.SyncResourceDNSRecord,
+			CloudflareID: "pending-test-record",
+		},
+	}
+
+	// Create fake client WITHOUT the SyncState
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme.Scheme).
+		Build()
+
+	ctx := context.Background()
+	newID := "actual-cloudflare-id-123"
+
+	// Call UpdateCloudflareID - should fail because resource doesn't exist
+	err := UpdateCloudflareID(ctx, fakeClient, syncState, newID)
+
+	// Verify error is returned
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "update SyncState CloudflareID")
+}
+
+func TestUpdateCloudflareID_FromPendingToActual(t *testing.T) {
+	// Test the common case: transitioning from pending-* ID to actual Cloudflare ID
+	pendingID := GeneratePendingID("my-dns-record")
+	actualID := "abc123def456"
+
+	syncState := &v1alpha2.CloudflareSyncState{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "dns-syncstate",
+			Namespace: "test-ns",
+		},
+		Spec: v1alpha2.CloudflareSyncStateSpec{
+			ResourceType: v1alpha2.SyncResourceDNSRecord,
+			CloudflareID: pendingID,
+			AccountID:    "account-123",
+			ZoneID:       "zone-456",
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme.Scheme).
+		WithObjects(syncState).
+		Build()
+
+	ctx := context.Background()
+
+	// Verify initial state is pending
+	assert.True(t, IsPendingID(syncState.Spec.CloudflareID))
+
+	// Update to actual ID
+	err := UpdateCloudflareID(ctx, fakeClient, syncState, actualID)
+	require.NoError(t, err)
+
+	// Fetch and verify
+	updated := &v1alpha2.CloudflareSyncState{}
+	err = fakeClient.Get(ctx, types.NamespacedName{
+		Name:      "dns-syncstate",
+		Namespace: "test-ns",
+	}, updated)
+	require.NoError(t, err)
+
+	// Verify the ID is no longer pending
+	assert.False(t, IsPendingID(updated.Spec.CloudflareID))
+	assert.Equal(t, actualID, updated.Spec.CloudflareID)
 }
