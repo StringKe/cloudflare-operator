@@ -217,6 +217,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ github.ref_name }}
         run: |
+          # Delete existing release if it exists (allows re-release)
+          gh release delete "${TAG_NAME}" --repo ${{ github.repository }} --yes 2>/dev/null || true
+
+          # Create new release
           gh release create "${TAG_NAME}" \
             --repo ${{ github.repository }} \
             --title "${TAG_NAME}" \
