@@ -1112,6 +1112,177 @@ feat(networkroute): add VirtualNetwork watch handler
 
 ---
 
+## 文档编写规范
+
+### 文档覆盖要求
+
+**所有 CRD 必须提供完整的 API 参考文档**，包括：
+
+1. **中英双语版本**
+   - 英文版本：`docs/en/api-reference/{crd-name}.md`
+   - 中文版本：`docs/zh/api-reference/{crd-name}.md`
+   - 两个版本必须保持同步
+
+2. **完整性检查**
+   - 每个文档必须通过文档质量检查清单
+   - 包含完整的 Spec 和 Status 字段表格
+   - 至少提供 3 个可运行的示例
+   - 包含相关资源的交叉引用
+
+### API 参考文档标准结构
+
+```markdown
+# [CRD 名称]
+
+[单句定义]: [Scope] 资源，用于...
+
+## 概述 / Overview
+
+[详细描述 2-3 段]
+
+**主要特性 / Key Features:**
+
+| 特性 / Feature | 描述 / Description |
+|----------------|-------------------|
+| 特性1 | 说明 |
+
+**使用场景 / Use Cases:**
+- 用例 1
+- 用例 2
+
+## 架构 / Architecture
+
+[可选：Mermaid 图表展示数据流]
+
+## Spec
+
+### 主要字段
+
+| 字段 / Field | 类型 / Type | 必需 / Required | 默认值 / Default | 描述 / Description |
+|-------------|------------|----------------|------------------|-------------------|
+| fieldName   | type       | 是 / Yes       | value            | 说明              |
+
+### [子结构名称]
+
+[嵌套类型的详细表格]
+
+## Status
+
+| 字段 / Field | 类型 / Type | 描述 / Description |
+|-------------|------------|-------------------|
+| state       | string     | 资源状态           |
+| conditions  | []Condition| 标准 K8s 条件      |
+
+## 示例 / Examples
+
+### 基础示例 / Basic Example
+
+\`\`\`yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: ResourceName
+metadata:
+  name: example
+spec:
+  # 完整可运行的示例
+\`\`\`
+
+### 高级场景 1 / Advanced Scenario 1
+
+[场景描述]
+
+\`\`\`yaml
+[完整 YAML]
+\`\`\`
+
+### 高级场景 2-N
+
+[更多真实场景]
+
+## 前置条件 / Prerequisites
+
+- 前置条件 1
+- 前置条件 2
+
+## 限制 / Limitations
+
+- 限制 1
+- 限制 2
+
+## 相关资源 / Related Resources
+
+- [相关 CRD 1](link)
+- [相关 CRD 2](link)
+
+## 另请参阅 / See Also
+
+- [Cloudflare 官方文档](link)
+- [相关示例](link)
+```
+
+### 文档质量检查清单
+
+每个 CRD 文档必须通过以下检查：
+
+- [ ] 包含完整的 Spec 字段表格
+- [ ] 包含 Status 字段表格
+- [ ] 至少 1 个基础示例
+- [ ] 至少 2 个高级场景示例
+- [ ] 所有示例 YAML 语法正确且可运行
+- [ ] 包含 Mermaid 架构图（如适用）
+- [ ] 包含前置条件和限制说明
+- [ ] 包含相关资源交叉引用
+- [ ] 中英文版本同步
+- [ ] 链接均有效
+
+### Mermaid 图表规范
+
+所有架构图必须使用 Mermaid，并根据复杂度选择合适的布局引擎：
+
+```markdown
+\`\`\`mermaid
+---
+config:
+  layout: elk    # 复杂图表使用 elk，简单图表使用 dagre
+---
+graph TB
+    [图表内容]
+\`\`\`
+```
+
+| 布局引擎 | 适用场景 |
+|---------|---------|
+| `elk`   | 复杂图表、多层级、节点多、需要自动优化布局 |
+| `dagre` | 简单图表、流程清晰、默认布局 |
+
+### 文档维护
+
+1. **新增 CRD 时**
+   - 必须同时创建中英文档
+   - 在 `docs/{en,zh}/api-reference/README.md` 中添加索引
+
+2. **修改 CRD 时**
+   - 同步更新对应文档的字段表格
+   - 更新示例以反映新的 API 变化
+   - 更新中英文档
+
+3. **废弃 CRD 时**
+   - 在文档顶部添加废弃警告
+   - 提供迁移指南
+   - 保留文档直到 CRD 正式移除
+
+### 当前文档覆盖状态
+
+| 资源类型 | 英文文档 | 中文文档 | 状态 |
+|---------|---------|---------|------|
+| AccessApplication | ✅ | ✅ | 完成 |
+| AccessGroup | ✅ | ✅ | 完成 |
+| PagesProject | ✅ | ✅ | 完成 |
+| **其他 31 个 CRD** | ❌ | ❌ | **待补充** |
+
+**文档覆盖率**: 8.8% (3/34)
+
+---
+
 ## 参考资源
 
 ### 内部设计文档
