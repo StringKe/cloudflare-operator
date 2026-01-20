@@ -596,6 +596,21 @@ type DeploymentHistoryEntry struct {
 	// +kubebuilder:validation:Optional
 	Source string `json:"source,omitempty"`
 
+	// SourceHash is the SHA-256 hash of the source package file.
+	// Used for tracking and identifying deployments from the same source.
+	// +kubebuilder:validation:Optional
+	SourceHash string `json:"sourceHash,omitempty"`
+
+	// SourceURL is the URL where the source was fetched from.
+	// Only set for direct upload deployments from HTTP/S3/OCI sources.
+	// +kubebuilder:validation:Optional
+	SourceURL string `json:"sourceUrl,omitempty"`
+
+	// K8sResource identifies the K8s resource that created this deployment.
+	// Format: "namespace/name"
+	// +kubebuilder:validation:Optional
+	K8sResource string `json:"k8sResource,omitempty"`
+
 	// CreatedAt is when the deployment was created.
 	// +kubebuilder:validation:Required
 	CreatedAt metav1.Time `json:"createdAt"`

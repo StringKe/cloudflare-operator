@@ -32,6 +32,12 @@ import (
 
 const (
 	FinalizerName = "pagesdeployment.networking.cloudflare-operator.io/finalizer"
+
+	// AnnotationForceRedeploy is the annotation key to force a new deployment.
+	// When this annotation value changes, a new deployment will be triggered
+	// even if the spec hasn't changed. This is useful for re-deploying the
+	// same configuration.
+	AnnotationForceRedeploy = "cloudflare-operator.io/force-redeploy"
 )
 
 // PagesDeploymentReconciler reconciles a PagesDeployment object
@@ -203,6 +209,13 @@ func (r *PagesDeploymentReconciler) registerPagesDeployment(
 		Name:      deployment.Name,
 	}
 
+	// Get force-redeploy annotation value
+	// When this value changes, it forces a new deployment even if spec is unchanged
+	forceRedeploy := ""
+	if deployment.Annotations != nil {
+		forceRedeploy = deployment.Annotations[AnnotationForceRedeploy]
+	}
+
 	// Build Pages deployment configuration
 	config := pagessvc.PagesDeploymentActionConfig{
 		ProjectName:        projectName,
@@ -212,6 +225,7 @@ func (r *PagesDeploymentReconciler) registerPagesDeployment(
 		PurgeBuildCache:    deployment.Spec.PurgeBuildCache,
 		DirectUpload:       convertDirectUpload(deployment.Spec.DirectUpload),
 		Rollback:           convertRollback(deployment.Spec.Rollback),
+		ForceRedeploy:      forceRedeploy,
 	}
 
 	// Register to SyncState

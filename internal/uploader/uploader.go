@@ -7,6 +7,8 @@ package uploader
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -51,6 +53,13 @@ type FileManifest struct {
 
 	// FileCount is the number of files.
 	FileCount int
+
+	// SourceHash is the SHA-256 hash of the original source package file.
+	// Used for tracking and identifying deployments from the same source.
+	SourceHash string
+
+	// SourceURL is the URL where the source was fetched from (if applicable).
+	SourceURL string
 }
 
 // NewUploader creates an Uploader from DirectUploadSource configuration.
@@ -107,18 +116,53 @@ func ProcessSource(
 		return nil, fmt.Errorf("downloaded content exceeds maximum size of %d bytes", MaxDownloadSize)
 	}
 
-	// 4. Verify checksum if configured
+	// 4. Calculate source hash (SHA-256 of the raw downloaded data)
+	sourceHash := computeSourceHash(data)
+
+	// 5. Verify checksum if configured
 	if checksum != nil && checksum.Value != "" {
 		if err := VerifyChecksum(data, checksum); err != nil {
 			return nil, fmt.Errorf("checksum verification: %w", err)
 		}
 	}
 
-	// 5. Extract archive
+	// 6. Extract archive
 	manifest, err := ExtractArchive(data, archive)
 	if err != nil {
 		return nil, fmt.Errorf("extract archive: %w", err)
 	}
 
+	// 7. Set source metadata
+	manifest.SourceHash = sourceHash
+	manifest.SourceURL = getSourceURL(source)
+
 	return manifest, nil
+}
+
+// computeSourceHash calculates SHA-256 hash of the source data.
+func computeSourceHash(data []byte) string {
+	hash := sha256.Sum256(data)
+	return hex.EncodeToString(hash[:])
+}
+
+// getSourceURL extracts the source URL from the source configuration.
+func getSourceURL(source *v1alpha2.DirectUploadSource) string {
+	if source == nil {
+		return ""
+	}
+
+	switch {
+	case source.HTTP != nil:
+		return source.HTTP.URL
+	case source.S3 != nil:
+		// Format: s3://bucket/key or endpoint/bucket/key
+		if source.S3.Endpoint != "" {
+			return fmt.Sprintf("%s/%s/%s", source.S3.Endpoint, source.S3.Bucket, source.S3.Key)
+		}
+		return fmt.Sprintf("s3://%s/%s", source.S3.Bucket, source.S3.Key)
+	case source.OCI != nil:
+		return fmt.Sprintf("oci://%s", source.OCI.Image)
+	default:
+		return ""
+	}
 }

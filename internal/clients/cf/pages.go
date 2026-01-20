@@ -12,8 +12,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"path/filepath"
 	"time"
 
@@ -1008,7 +1010,10 @@ func (api *API) CreatePagesDirectUploadDeployment(
 		return nil, fmt.Errorf("write manifest field: %w", err)
 	}
 
-	// Add each file as a form file
+	// Add each file as a form file with correct Content-Type
+	// This mirrors Wrangler's behavior: the Content-Type header of each file part
+	// will be used by Cloudflare when serving the file.
+	// See: https://developers.cloudflare.com/workers/static-assets/direct-upload/
 	for path, content := range files {
 		// Ensure path starts with /
 		key := path
@@ -1016,8 +1021,20 @@ func (api *API) CreatePagesDirectUploadDeployment(
 			key = "/" + key
 		}
 
-		// Create form file with the path as field name
-		part, err := writer.CreateFormFile(key, filepath.Base(path))
+		// Determine MIME type based on file extension (mirrors Wrangler's getContentType)
+		contentType := GetContentType(path)
+
+		// Create form file with custom Content-Type header
+		// We use CreatePart instead of CreateFormFile to set the correct MIME type
+		// Use mime.FormatMediaType to properly escape parameter values (RFC 2231)
+		h := make(textproto.MIMEHeader)
+		h.Set("Content-Disposition", mime.FormatMediaType("form-data", map[string]string{
+			"name":     key,
+			"filename": filepath.Base(path),
+		}))
+		h.Set("Content-Type", contentType)
+
+		part, err := writer.CreatePart(h)
 		if err != nil {
 			return nil, fmt.Errorf("create form file %s: %w", path, err)
 		}

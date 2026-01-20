@@ -32,6 +32,17 @@ const (
 	PriorityPagesDeployment = 120
 )
 
+// Deployment history constants
+const (
+	// DefaultDeploymentHistoryLimit is the default number of deployment history entries to keep.
+	// This is used when not specified in the PagesProject spec.
+	DefaultDeploymentHistoryLimit = 200
+
+	// MaxDeploymentHistoryLimit is the maximum allowed deployment history limit.
+	// Set to 200 for FIFO retention as per requirements.
+	MaxDeploymentHistoryLimit = 200
+)
+
 // PagesProjectConfig represents a Pages project configuration.
 type PagesProjectConfig struct {
 	// Name is the project name in Cloudflare Pages
@@ -220,6 +231,10 @@ type PagesDeploymentActionConfig struct {
 	DirectUpload *DirectUploadConfig `json:"directUpload,omitempty"`
 	// Rollback contains configuration for intelligent rollback
 	Rollback *RollbackConfig `json:"rollback,omitempty"`
+	// ForceRedeploy is a value that, when changed, forces a new deployment
+	// even if other configuration hasn't changed. This is typically set from
+	// the cloudflare-operator.io/force-redeploy annotation.
+	ForceRedeploy string `json:"forceRedeploy,omitempty"`
 }
 
 // DirectUploadConfig contains configuration for direct upload deployments.

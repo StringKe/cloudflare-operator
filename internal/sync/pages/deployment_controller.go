@@ -5,10 +5,10 @@ package pages
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -138,6 +138,14 @@ func (r *DeploymentSyncController) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
+	// Update PagesProject deployment history (non-blocking)
+	// This stores the deployment metadata in PagesProject status for visibility and rollback support
+	if err := r.updatePagesProjectHistory(ctx, config.ProjectName, result); err != nil {
+		// Log but don't fail - deployment succeeded, history update is non-critical
+		logger.Error(err, "Failed to update PagesProject history",
+			"projectName", config.ProjectName)
+	}
+
 	logger.Info("Successfully synced Pages deployment to Cloudflare",
 		"deploymentId", result.DeploymentID,
 		"action", config.Action)
@@ -155,6 +163,16 @@ type DeploymentResult struct {
 	DeploymentID string
 	URL          string
 	Stage        string
+	// SourceHash is the SHA-256 hash of the source package (for direct upload).
+	SourceHash string
+	// SourceURL is the URL where source was fetched from (for direct upload).
+	SourceURL string
+	// K8sResource identifies the K8s resource that created this deployment.
+	// Format: "namespace/name"
+	K8sResource string
+	// Source describes the deployment source type.
+	// Examples: "direct-upload:http", "git:main", "rollback:v5"
+	Source string
 }
 
 // syncToCloudflare syncs the Pages deployment configuration to Cloudflare API.
@@ -181,9 +199,9 @@ func (r *DeploymentSyncController) syncToCloudflare(
 	case "create", "":
 		return r.handleCreateDeployment(ctx, apiClient, syncState, config)
 	case "retry":
-		return r.handleRetryDeployment(ctx, apiClient, config)
+		return r.handleRetryDeployment(ctx, apiClient, syncState, config)
 	case "rollback":
-		return r.handleRollbackDeployment(ctx, apiClient, config)
+		return r.handleRollbackDeployment(ctx, apiClient, syncState, config)
 	default:
 		return nil, fmt.Errorf("unsupported deployment action: %s", config.Action)
 	}
@@ -247,6 +265,19 @@ func (r *DeploymentSyncController) handleCreateDeployment(
 		return nil, err
 	}
 
+	// Extract K8s resource info from SyncState sources
+	k8sResource := ""
+	if len(syncState.Spec.Sources) > 0 {
+		src := syncState.Spec.Sources[0]
+		k8sResource = fmt.Sprintf("%s/%s", src.Ref.Namespace, src.Ref.Name)
+	}
+
+	// Determine source description
+	branch := config.Branch
+	if branch == "" {
+		branch = "main"
+	}
+
 	logger.Info("Created Pages deployment",
 		"deploymentId", result.ID,
 		"url", result.URL)
@@ -255,6 +286,8 @@ func (r *DeploymentSyncController) handleCreateDeployment(
 		DeploymentID: result.ID,
 		URL:          result.URL,
 		Stage:        result.Stage,
+		K8sResource:  k8sResource,
+		Source:       fmt.Sprintf("git:%s", branch),
 	}, nil
 }
 
@@ -312,14 +345,26 @@ func (r *DeploymentSyncController) handleDirectUploadDeployment(
 		return nil, err
 	}
 
+	// Extract K8s resource info from SyncState sources
+	k8sResource := ""
+	if len(syncState.Spec.Sources) > 0 {
+		src := syncState.Spec.Sources[0]
+		k8sResource = fmt.Sprintf("%s/%s", src.Ref.Namespace, src.Ref.Name)
+	}
+
 	logger.Info("Created direct upload deployment",
 		"deploymentId", result.ID,
-		"url", result.URL)
+		"url", result.URL,
+		"sourceHash", manifest.SourceHash)
 
 	return &DeploymentResult{
 		DeploymentID: result.ID,
 		URL:          result.URL,
 		Stage:        result.Stage,
+		SourceHash:   manifest.SourceHash,
+		SourceURL:    manifest.SourceURL,
+		K8sResource:  k8sResource,
+		Source:       "direct-upload",
 	}, nil
 }
 
@@ -327,6 +372,7 @@ func (r *DeploymentSyncController) handleDirectUploadDeployment(
 func (*DeploymentSyncController) handleRetryDeployment(
 	ctx context.Context,
 	apiClient *cf.API,
+	syncState *v1alpha2.CloudflareSyncState,
 	config *pagessvc.PagesDeploymentActionConfig,
 ) (*DeploymentResult, error) {
 	logger := log.FromContext(ctx)
@@ -344,6 +390,13 @@ func (*DeploymentSyncController) handleRetryDeployment(
 		return nil, fmt.Errorf("retry Pages deployment: %w", err)
 	}
 
+	// Extract K8s resource info from SyncState sources
+	k8sResource := ""
+	if len(syncState.Spec.Sources) > 0 {
+		src := syncState.Spec.Sources[0]
+		k8sResource = fmt.Sprintf("%s/%s", src.Ref.Namespace, src.Ref.Name)
+	}
+
 	logger.Info("Retried Pages deployment",
 		"deploymentId", result.ID,
 		"url", result.URL)
@@ -352,6 +405,8 @@ func (*DeploymentSyncController) handleRetryDeployment(
 		DeploymentID: result.ID,
 		URL:          result.URL,
 		Stage:        result.Stage,
+		K8sResource:  k8sResource,
+		Source:       fmt.Sprintf("retry:%s", config.TargetDeploymentID),
 	}, nil
 }
 
@@ -361,6 +416,7 @@ func (*DeploymentSyncController) handleRetryDeployment(
 func (r *DeploymentSyncController) handleRollbackDeployment(
 	ctx context.Context,
 	apiClient *cf.API,
+	syncState *v1alpha2.CloudflareSyncState,
 	config *pagessvc.PagesDeploymentActionConfig,
 ) (*DeploymentResult, error) {
 	logger := log.FromContext(ctx)
@@ -392,6 +448,13 @@ func (r *DeploymentSyncController) handleRollbackDeployment(
 		return nil, fmt.Errorf("rollback Pages deployment: %w", err)
 	}
 
+	// Extract K8s resource info from SyncState sources
+	k8sResource := ""
+	if len(syncState.Spec.Sources) > 0 {
+		src := syncState.Spec.Sources[0]
+		k8sResource = fmt.Sprintf("%s/%s", src.Ref.Namespace, src.Ref.Name)
+	}
+
 	logger.Info("Rolled back to Pages deployment",
 		"deploymentId", result.ID,
 		"url", result.URL)
@@ -400,6 +463,8 @@ func (r *DeploymentSyncController) handleRollbackDeployment(
 		DeploymentID: result.ID,
 		URL:          result.URL,
 		Stage:        result.Stage,
+		K8sResource:  k8sResource,
+		Source:       fmt.Sprintf("rollback:%s", targetDeploymentID),
 	}, nil
 }
 
@@ -434,55 +499,47 @@ func (r *DeploymentSyncController) resolveRollbackTarget(
 	}
 }
 
-// findLastSuccessfulDeployment finds the last successful deployment from project history.
+// findLastSuccessfulDeployment finds the last successful deployment from PagesProject status.
 func (r *DeploymentSyncController) findLastSuccessfulDeployment(
 	ctx context.Context,
 	projectName string,
 ) (string, error) {
-	// Get project SyncState
-	projectSyncState, err := r.getProjectSyncState(ctx, projectName)
+	// Find the PagesProject
+	pagesProject, err := r.findPagesProjectByName(ctx, projectName)
 	if err != nil {
-		return "", fmt.Errorf("get project syncstate: %w", err)
+		return "", fmt.Errorf("find pagesproject: %w", err)
 	}
 
-	// Check annotation for last successful deployment
-	if projectSyncState.Annotations != nil {
-		if deploymentID := projectSyncState.Annotations["cloudflare-operator.io/last-successful-deployment"]; deploymentID != "" {
-			return deploymentID, nil
-		}
+	if pagesProject == nil {
+		return "", errors.New("PagesProject not found")
+	}
+
+	// Check LastSuccessfulDeploymentID in status
+	if pagesProject.Status.LastSuccessfulDeploymentID != "" {
+		return pagesProject.Status.LastSuccessfulDeploymentID, nil
 	}
 
 	return "", errors.New("no successful deployment found for rollback")
 }
 
-// findDeploymentByVersion finds a deployment ID by version number from history.
+// findDeploymentByVersion finds a deployment ID by version number from PagesProject status history.
 func (r *DeploymentSyncController) findDeploymentByVersion(
 	ctx context.Context,
 	projectName string,
 	version int,
 ) (string, error) {
-	// Get project SyncState
-	projectSyncState, err := r.getProjectSyncState(ctx, projectName)
+	// Find the PagesProject
+	pagesProject, err := r.findPagesProjectByName(ctx, projectName)
 	if err != nil {
-		return "", fmt.Errorf("get project syncstate: %w", err)
+		return "", fmt.Errorf("find pagesproject: %w", err)
 	}
 
-	// Parse deployment history from annotations
-	if projectSyncState.Annotations == nil {
-		return "", errors.New("no deployment history found")
+	if pagesProject == nil {
+		return "", errors.New("PagesProject not found")
 	}
 
-	historyJSON := projectSyncState.Annotations["cloudflare-operator.io/deployment-history"]
-	if historyJSON == "" {
-		return "", errors.New("no deployment history found")
-	}
-
-	var history []v1alpha2.DeploymentHistoryEntry
-	if err := json.Unmarshal([]byte(historyJSON), &history); err != nil {
-		return "", fmt.Errorf("parse deployment history: %w", err)
-	}
-
-	for _, entry := range history {
+	// Search deployment history for the version
+	for _, entry := range pagesProject.Status.DeploymentHistory {
 		if entry.Version == version {
 			return entry.DeploymentID, nil
 		}
@@ -491,62 +548,54 @@ func (r *DeploymentSyncController) findDeploymentByVersion(
 	return "", fmt.Errorf("deployment version %d not found in history", version)
 }
 
-// getProjectSyncState retrieves the project's SyncState.
-func (r *DeploymentSyncController) getProjectSyncState(
-	ctx context.Context,
-	projectName string,
-) (*v1alpha2.CloudflareSyncState, error) {
-	syncStateName := fmt.Sprintf("pages-project-%s", projectName)
-
-	syncState := &v1alpha2.CloudflareSyncState{}
-	if err := r.Client.Get(ctx, client.ObjectKey{
-		Namespace: common.OperatorNamespace,
-		Name:      syncStateName,
-	}, syncState); err != nil {
-		return nil, err
-	}
-
-	return syncState, nil
-}
-
-// updateDeploymentHistory updates the project's deployment history after a successful deployment.
-// TODO: Connect this to the sync flow when deployment history tracking is fully implemented.
+// updatePagesProjectHistory updates the PagesProject's deployment history after a successful deployment.
+// This stores the history in the PagesProject status for visibility and rollback support.
 //
-//nolint:revive,unused // cyclomatic complexity is acceptable; function will be connected in future PR
-func (r *DeploymentSyncController) updateDeploymentHistory(
+//nolint:revive // cyclomatic complexity is acceptable for history update logic
+func (r *DeploymentSyncController) updatePagesProjectHistory(
 	ctx context.Context,
 	projectName string,
 	deployment *DeploymentResult,
-	source string,
-	historyLimit int,
 ) error {
-	if historyLimit <= 0 {
-		historyLimit = 10
+	logger := log.FromContext(ctx)
+
+	// Find the PagesProject by name
+	pagesProject, err := r.findPagesProjectByName(ctx, projectName)
+	if err != nil {
+		logger.Error(err, "Failed to find PagesProject for history update",
+			"projectName", projectName)
+		// Non-fatal: deployment succeeded, history update failure shouldn't fail the sync
+		return nil
 	}
 
-	syncStateName := fmt.Sprintf("pages-project-%s", projectName)
+	if pagesProject == nil {
+		logger.V(1).Info("PagesProject not found for history update",
+			"projectName", projectName)
+		return nil
+	}
+
+	// Use FIFO 200 as default limit
+	historyLimit := pagessvc.DefaultDeploymentHistoryLimit
+	if pagesProject.Spec.DeploymentHistoryLimit != nil && *pagesProject.Spec.DeploymentHistoryLimit > 0 {
+		historyLimit = *pagesProject.Spec.DeploymentHistoryLimit
+		if historyLimit > pagessvc.MaxDeploymentHistoryLimit {
+			historyLimit = pagessvc.MaxDeploymentHistoryLimit
+		}
+	}
 
 	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		syncState := &v1alpha2.CloudflareSyncState{}
+		// Re-fetch to get latest version
 		if err := r.Client.Get(ctx, client.ObjectKey{
-			Namespace: common.OperatorNamespace,
-			Name:      syncStateName,
-		}, syncState); err != nil {
-			return fmt.Errorf("get project syncstate: %w", err)
+			Namespace: pagesProject.Namespace,
+			Name:      pagesProject.Name,
+		}, pagesProject); err != nil {
+			return fmt.Errorf("get pagesproject: %w", err)
 		}
 
-		if syncState.Annotations == nil {
-			syncState.Annotations = make(map[string]string)
-		}
-
-		// Parse existing history
-		var history []v1alpha2.DeploymentHistoryEntry
-		if historyJSON := syncState.Annotations["cloudflare-operator.io/deployment-history"]; historyJSON != "" {
-			if err := json.Unmarshal([]byte(historyJSON), &history); err != nil {
-				// Log but continue with empty history
-				log.FromContext(ctx).Error(err, "Failed to parse existing deployment history")
-				history = nil
-			}
+		// Get existing history
+		history := pagesProject.Status.DeploymentHistory
+		if history == nil {
+			history = []v1alpha2.DeploymentHistoryEntry{}
 		}
 
 		// Determine version number
@@ -555,41 +604,108 @@ func (r *DeploymentSyncController) updateDeploymentHistory(
 			version = history[0].Version + 1
 		}
 
-		// Add new entry at the beginning
+		// Create new entry with all metadata
+		now := metav1.Now()
 		newEntry := v1alpha2.DeploymentHistoryEntry{
 			DeploymentID: deployment.DeploymentID,
 			Version:      version,
 			URL:          deployment.URL,
-			Source:       source,
+			Source:       deployment.Source,
+			SourceHash:   deployment.SourceHash,
+			SourceURL:    deployment.SourceURL,
+			K8sResource:  deployment.K8sResource,
+			CreatedAt:    now,
 			Status:       deployment.Stage,
+			IsProduction: deployment.Stage == "active" || deployment.Stage == "success",
 		}
 
+		// Add new entry at the beginning (newest first)
 		history = append([]v1alpha2.DeploymentHistoryEntry{newEntry}, history...)
 
-		// Trim to limit
+		// Mark previous production deployments as superseded
+		for i := 1; i < len(history); i++ {
+			if history[i].IsProduction {
+				history[i].IsProduction = false
+				history[i].Status = "superseded"
+			}
+		}
+
+		// Trim to FIFO limit
 		if len(history) > historyLimit {
 			history = history[:historyLimit]
 		}
 
-		// Save history
-		historyJSON, err := json.Marshal(history)
-		if err != nil {
-			return fmt.Errorf("marshal history: %w", err)
-		}
-		syncState.Annotations["cloudflare-operator.io/deployment-history"] = string(historyJSON)
+		// Update PagesProject status
+		pagesProject.Status.DeploymentHistory = history
 
-		// Update last successful deployment if appropriate
+		// Update last successful deployment ID if this is a successful deployment
 		if deployment.Stage == "active" || deployment.Stage == "success" || deployment.Stage == "deploy" {
-			syncState.Annotations["cloudflare-operator.io/last-successful-deployment"] = deployment.DeploymentID
+			pagesProject.Status.LastSuccessfulDeploymentID = deployment.DeploymentID
 		}
 
-		return r.Client.Update(ctx, syncState)
+		// Update latest deployment info
+		pagesProject.Status.LatestDeployment = &v1alpha2.PagesDeploymentInfo{
+			ID:        deployment.DeploymentID,
+			URL:       deployment.URL,
+			Stage:     deployment.Stage,
+			CreatedOn: now.Format("2006-01-02T15:04:05Z"),
+		}
+
+		if err := r.Client.Status().Update(ctx, pagesProject); err != nil {
+			return fmt.Errorf("update pagesproject status: %w", err)
+		}
+
+		logger.Info("Updated PagesProject deployment history",
+			"projectName", projectName,
+			"deploymentId", deployment.DeploymentID,
+			"version", version,
+			"historyCount", len(history))
+
+		return nil
 	})
 }
 
-// handleDeletion handles the deletion of Pages deployment from Cloudflare.
+// findPagesProjectByName finds a PagesProject by its Cloudflare project name.
+// The project name is stored in spec.name or defaults to the resource name.
+func (r *DeploymentSyncController) findPagesProjectByName(
+	ctx context.Context,
+	projectName string,
+) (*v1alpha2.PagesProject, error) {
+	// List all PagesProjects
+	var projectList v1alpha2.PagesProjectList
+	if err := r.Client.List(ctx, &projectList); err != nil {
+		return nil, fmt.Errorf("list pagesprojects: %w", err)
+	}
+
+	// Find the one matching the project name
+	for i := range projectList.Items {
+		project := &projectList.Items[i]
+		// Check spec.name first, then fall back to metadata.name
+		cfProjectName := project.Spec.Name
+		if cfProjectName == "" {
+			cfProjectName = project.Name
+		}
+		if cfProjectName == projectName {
+			return project, nil
+		}
+	}
+
+	return nil, nil
+}
+
+// handleDeletion handles the cleanup when a Pages deployment SyncState is being deleted.
 //
-//nolint:revive // cognitive complexity unavoidable: deletion logic requires multiple cleanup steps
+// IMPORTANT: This function does NOT delete the Cloudflare deployment!
+//
+// Cloudflare Pages behavior:
+// - Active production deployments CANNOT be deleted (error 8000034)
+// - Deployments are immutable and serve as version history
+// - New deployments automatically replace old ones as the active deployment
+//
+// Design decision:
+// - Deleting PagesDeployment K8s resource only cleans up K8s state
+// - The Cloudflare deployment is preserved and will be replaced by the next deployment
+// - This avoids the "cannot delete active production deployment" error that blocks finalizer removal
 func (r *DeploymentSyncController) handleDeletion(
 	ctx context.Context,
 	syncState *v1alpha2.CloudflareSyncState,
@@ -601,48 +717,25 @@ func (r *DeploymentSyncController) handleDeletion(
 		return ctrl.Result{}, nil
 	}
 
-	// Get the Cloudflare deployment ID
+	// Get the Cloudflare deployment ID for logging
 	cloudflareID := syncState.Spec.CloudflareID
 
-	// Skip if pending ID (deployment was never created)
+	// Log the cleanup action
 	if common.IsPendingID(cloudflareID) {
-		logger.Info("Skipping deletion - Pages deployment was never created",
+		logger.Info("Cleaning up SyncState - deployment was never created",
 			"cloudflareId", cloudflareID)
 	} else if cloudflareID != "" {
-		// Extract config to get project name
-		config, err := r.extractConfig(syncState)
-		if err != nil {
-			logger.Error(err, "Failed to extract config for deletion")
-			// Continue to remove finalizer even if we can't extract config
-		} else {
-			// Create API client
-			apiClient, err := common.CreateAPIClient(ctx, r.Client, syncState)
-			if err != nil {
-				logger.Error(err, "Failed to create API client for deletion")
-				return ctrl.Result{RequeueAfter: common.RequeueAfterError(err)}, nil
-			}
-
-			logger.Info("Deleting Pages deployment from Cloudflare",
-				"deploymentId", cloudflareID,
-				"projectName", config.ProjectName)
-
-			if err := apiClient.DeletePagesDeployment(ctx, config.ProjectName, cloudflareID); err != nil {
-				if !cf.IsNotFoundError(err) {
-					logger.Error(err, "Failed to delete Pages deployment from Cloudflare")
-					if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
-						logger.Error(statusErr, "Failed to update error status")
-					}
-					return ctrl.Result{RequeueAfter: common.RequeueAfterError(err)}, nil
-				}
-				logger.Info("Pages deployment already deleted from Cloudflare")
-			} else {
-				logger.Info("Successfully deleted Pages deployment from Cloudflare",
-					"deploymentId", cloudflareID)
-			}
-		}
+		// We intentionally do NOT delete the Cloudflare deployment
+		// because:
+		// 1. Active production deployments cannot be deleted (Cloudflare API limitation)
+		// 2. Deployments are part of project history and should be preserved
+		// 3. New deployments will automatically replace old ones
+		logger.Info("Cleaning up SyncState - Cloudflare deployment preserved",
+			"deploymentId", cloudflareID,
+			"reason", "Pages deployments are immutable; active deployment cannot be deleted and will be replaced by next deployment")
 	}
 
-	// Remove finalizer
+	// Remove finalizer - this allows the SyncState to be deleted
 	if err := common.RemoveFinalizerWithRetry(ctx, r.Client, syncState, DeploymentFinalizerName); err != nil {
 		logger.Error(err, "Failed to remove finalizer")
 		return ctrl.Result{}, err

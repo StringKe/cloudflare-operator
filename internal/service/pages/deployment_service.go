@@ -31,6 +31,15 @@ func NewDeploymentService(c client.Client) *DeploymentService {
 
 // Register registers a Pages deployment configuration to SyncState.
 // Each PagesDeployment K8s resource has its own SyncState.
+//
+// SyncState naming strategy:
+// - Always use fixed format: pages-deployment-{namespace}-{name}
+// - This avoids the need to "migrate" SyncState after deployment creation
+// - The actual CloudflareID (deployment ID) is stored in spec.cloudflareID
+//
+// Rollback scenario:
+// - If action is "rollback" and TargetDeploymentID is set, no file upload needed
+// - The Sync Controller will call the rollback API directly
 func (s *DeploymentService) Register(ctx context.Context, opts DeploymentRegisterOptions) error {
 	logger := log.FromContext(ctx).WithValues(
 		"projectName", opts.ProjectName,
@@ -49,25 +58,46 @@ func (s *DeploymentService) Register(ctx context.Context, opts DeploymentRegiste
 		return errors.New("account ID is required")
 	}
 
-	// Generate SyncState ID:
-	// - If DeploymentID is known (existing deployment), use it
-	// - Otherwise, use a placeholder based on source (namespace/name)
-	syncStateID := opts.DeploymentID
-	if syncStateID == "" {
-		syncStateID = fmt.Sprintf("pending-%s-%s", opts.Source.Namespace, opts.Source.Name)
+	// Use fixed SyncState ID format based on K8s resource identity
+	// This ensures stable naming across deployment lifecycles
+	syncStateID := fmt.Sprintf("pages-deployment-%s-%s", opts.Source.Namespace, opts.Source.Name)
+
+	// Determine the CloudflareID to store in SyncState
+	// - For rollback: use the target deployment ID (existing deployment)
+	// - For new deployments: use pending placeholder, will be updated after creation
+	cloudflareID := opts.DeploymentID
+	if cloudflareID == "" {
+		// Check if this is a rollback to existing deployment
+		switch {
+		case opts.Config.Action == "rollback" && opts.Config.TargetDeploymentID != "":
+			cloudflareID = opts.Config.TargetDeploymentID
+		case opts.Config.Action == "rollback" && opts.Config.Rollback != nil && opts.Config.Rollback.DeploymentID != "":
+			cloudflareID = opts.Config.Rollback.DeploymentID
+		default:
+			// New deployment, use pending placeholder
+			cloudflareID = fmt.Sprintf("pending-%s-%s", opts.Source.Namespace, opts.Source.Name)
+		}
 	}
 
 	// Get or create SyncState
 	syncState, err := s.GetOrCreateSyncState(
 		ctx,
 		ResourceTypePagesDeployment,
-		syncStateID,
+		cloudflareID,
 		opts.AccountID,
 		"", // No zoneID for Pages deployments
 		opts.CredentialsRef,
 	)
 	if err != nil {
 		return fmt.Errorf("get/create syncstate for Pages deployment: %w", err)
+	}
+
+	// Override the SyncState name if it doesn't match our expected format
+	// This handles migration from old naming scheme
+	if syncState.Name != syncStateID {
+		logger.V(1).Info("SyncState name mismatch, will use existing",
+			"expected", syncStateID,
+			"actual", syncState.Name)
 	}
 
 	// Update source configuration
@@ -78,12 +108,17 @@ func (s *DeploymentService) Register(ctx context.Context, opts DeploymentRegiste
 	logger.Info("Pages deployment configuration registered successfully",
 		"syncState", syncState.Name,
 		"projectName", opts.Config.ProjectName,
-		"action", opts.Config.Action)
+		"action", opts.Config.Action,
+		"cloudflareId", cloudflareID)
 	return nil
 }
 
 // Unregister removes a Pages deployment's configuration from the SyncState.
 // This is called when the PagesDeployment K8s resource is deleted.
+//
+// Note: This only removes the source from SyncState. The Sync Controller will
+// handle the SyncState cleanup, but will NOT delete the Cloudflare deployment
+// because active production deployments cannot be deleted.
 //
 //nolint:revive // cognitive complexity is acceptable for unregistration with fallback logic
 func (s *DeploymentService) Unregister(ctx context.Context, deploymentID string, source service.Source) error {
@@ -93,22 +128,24 @@ func (s *DeploymentService) Unregister(ctx context.Context, deploymentID string,
 	)
 	logger.V(1).Info("Unregistering Pages deployment from SyncState")
 
-	// Try both possible SyncState IDs
+	// Try multiple possible SyncState CloudflareIDs
+	// The SyncState uses CloudflareID as part of its identity
+	// We need to check both:
 	// 1. The actual deployment ID (if deployment was created)
 	// 2. The pending placeholder (if deployment was never created)
-	syncStateIDs := []string{
+	syncStateCloudflareIDs := []string{
 		deploymentID,
 		fmt.Sprintf("pending-%s-%s", source.Namespace, source.Name),
 	}
 
-	for _, id := range syncStateIDs {
-		if id == "" {
+	for _, cloudflareID := range syncStateCloudflareIDs {
+		if cloudflareID == "" {
 			continue
 		}
 
-		syncState, err := s.GetSyncState(ctx, ResourceTypePagesDeployment, id)
+		syncState, err := s.GetSyncState(ctx, ResourceTypePagesDeployment, cloudflareID)
 		if err != nil {
-			logger.V(1).Info("Error getting SyncState", "syncStateId", id, "error", err)
+			logger.V(1).Info("Error getting SyncState", "cloudflareId", cloudflareID, "error", err)
 			continue
 		}
 		if syncState == nil {
@@ -116,11 +153,13 @@ func (s *DeploymentService) Unregister(ctx context.Context, deploymentID string,
 		}
 
 		if err := s.RemoveSource(ctx, syncState, source); err != nil {
-			logger.Error(err, "Failed to remove source from SyncState", "syncStateId", id)
+			logger.Error(err, "Failed to remove source from SyncState", "cloudflareId", cloudflareID)
 			continue
 		}
 
-		logger.Info("Pages deployment unregistered from SyncState", "syncStateId", id)
+		logger.Info("Pages deployment unregistered from SyncState",
+			"syncState", syncState.Name,
+			"cloudflareId", cloudflareID)
 		return nil
 	}
 

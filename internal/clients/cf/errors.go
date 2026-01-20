@@ -309,6 +309,29 @@ func IsAccessApplicationRecoverableError(err error) bool {
 	return IsDomainNotInDestinationsError(err) || IsTemporaryError(err) || IsRateLimitError(err)
 }
 
+// IsActiveProductionDeploymentError checks if the error indicates that the
+// deployment cannot be deleted because it is the active production deployment.
+// Cloudflare Pages does not allow deleting the active production deployment.
+// Error code: 8000034
+func IsActiveProductionDeploymentError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "8000034") ||
+		strings.Contains(errStr, "active production deployment") ||
+		strings.Contains(errStr, "cannot delete the active") ||
+		strings.Contains(errStr, "you cannot delete the active")
+}
+
+// IsPagesDeploymentNonRetryableError checks if a Pages deployment error
+// should not be retried because it will never succeed.
+// Active production deployment errors are non-retryable because the deployment
+// can only be replaced by creating a new deployment, not deleted directly.
+func IsPagesDeploymentNonRetryableError(err error) bool {
+	return IsActiveProductionDeploymentError(err)
+}
+
 // SanitizeErrorMessage removes potentially sensitive information from error messages
 // before storing them in Status conditions
 func SanitizeErrorMessage(err error) string {

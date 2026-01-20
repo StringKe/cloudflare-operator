@@ -846,10 +846,25 @@ spec:
                       description: IsProduction indicates if this is the current production
                         deployment.
                       type: boolean
+                    k8sResource:
+                      description: |-
+                        K8sResource identifies the K8s resource that created this deployment.
+                        Format: "namespace/name"
+                      type: string
                     source:
                       description: |-
                         Source describes the deployment source.
                         Examples: "git:main", "direct-upload:http", "rollback:v5"
+                      type: string
+                    sourceHash:
+                      description: |-
+                        SourceHash is the SHA-256 hash of the source package file.
+                        Used for tracking and identifying deployments from the same source.
+                      type: string
+                    sourceUrl:
+                      description: |-
+                        SourceURL is the URL where the source was fetched from.
+                        Only set for direct upload deployments from HTTP/S3/OCI sources.
                       type: string
                     status:
                       description: |-
