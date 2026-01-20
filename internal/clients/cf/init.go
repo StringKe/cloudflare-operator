@@ -58,6 +58,8 @@ func NewAPIClientFromDetails(ctx context.Context, k8sClient client.Client, names
 		AccountId:        creds.AccountID,
 		Domain:           creds.Domain,
 		APIToken:         creds.APIToken,
+		APIKey:           creds.APIKey,
+		APIEmail:         creds.Email,
 	}
 
 	// Override domain if specified in details
@@ -93,6 +95,8 @@ func NewAPIClientFromCredentialsRef(ctx context.Context, k8sClient client.Client
 		AccountId:        creds.AccountID,
 		Domain:           creds.Domain,
 		APIToken:         creds.APIToken,
+		APIKey:           creds.APIKey,
+		APIEmail:         creds.Email,
 	}, nil
 }
 
@@ -121,6 +125,8 @@ func NewAPIClientFromDefaultCredentials(ctx context.Context, k8sClient client.Cl
 		AccountId:        creds.AccountID,
 		Domain:           creds.Domain,
 		APIToken:         creds.APIToken,
+		APIKey:           creds.APIKey,
+		APIEmail:         creds.Email,
 	}, nil
 }
 
@@ -165,6 +171,8 @@ func NewAPIClientFromSecret(ctx context.Context, k8sClient client.Client, secret
 		Log:              log,
 		CloudflareClient: cfClient,
 		APIToken:         apiToken,
+		APIKey:           apiKey,
+		APIEmail:         apiEmail,
 	}, nil
 }
 

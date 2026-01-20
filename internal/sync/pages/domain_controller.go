@@ -252,6 +252,12 @@ func (r *DomainSyncController) syncToCloudflare(
 						if updateErr := common.UpdateCloudflareID(ctx, r.Client, syncState, existingDomain.ID); updateErr != nil {
 							logger.Error(updateErr, "Failed to update CloudflareID after external recreation")
 						}
+						// Configure DNS for externally recreated domain
+						if autoConfigureDNS {
+							if err := r.configureDNS(ctx, syncState, config); err != nil {
+								logger.Error(err, "Failed to configure DNS for recreated domain")
+							}
+						}
 						return nil
 					}
 					return fmt.Errorf("recreate Pages domain: %w", addErr)
@@ -261,8 +267,23 @@ func (r *DomainSyncController) syncToCloudflare(
 				if updateErr := common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID); updateErr != nil {
 					logger.Error(updateErr, "Failed to update CloudflareID after recreating")
 				}
+
+				// Configure DNS for recreated domain
+				if autoConfigureDNS {
+					if err := r.configureDNS(ctx, syncState, config); err != nil {
+						logger.Error(err, "Failed to configure DNS for recreated domain")
+					}
+				}
 			} else {
 				return fmt.Errorf("get Pages domain: %w", err)
+			}
+		} else {
+			// Domain exists - ensure DNS is configured (retry if previous attempt failed)
+			if autoConfigureDNS {
+				if err := r.ensureDNSConfigured(ctx, syncState, config); err != nil {
+					logger.Error(err, "Failed to ensure DNS configured for existing domain")
+					// Non-fatal, domain exists
+				}
 			}
 		}
 
@@ -349,6 +370,53 @@ func (r *DomainSyncController) handleDeletion(
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// ensureDNSConfigured checks if DNS is already configured, and creates it if not.
+// This is used to retry DNS configuration for existing domains.
+func (r *DomainSyncController) ensureDNSConfigured(
+	ctx context.Context,
+	syncState *v1alpha2.CloudflareSyncState,
+	config *pagessvc.PagesDomainConfig,
+) error {
+	logger := log.FromContext(ctx)
+
+	// Check if we have Zone ID for DNS configuration
+	zoneID := syncState.Spec.ZoneID
+	if zoneID == "" {
+		logger.V(1).Info("No Zone ID available, skipping DNS check",
+			"domain", config.Domain)
+		return nil
+	}
+
+	// Build source name (must match what's used in configureDNS)
+	sourceName := fmt.Sprintf("pagesdomain-%s", sanitizeDomainForSource(config.Domain))
+
+	// Check if DNS SyncState already exists
+	svc := dnssvc.NewService(r.Client)
+	syncStatus, err := svc.GetSyncStatus(ctx, service.Source{
+		Kind:      "PagesDomainAutomatic",
+		Namespace: syncState.Namespace,
+		Name:      sourceName,
+	}, "")
+	if err != nil {
+		logger.V(1).Info("Failed to check DNS sync status", "error", err)
+		// Continue to try configuring
+	}
+
+	if syncStatus != nil && syncStatus.IsSynced {
+		logger.V(1).Info("DNS already configured for Pages domain",
+			"domain", config.Domain,
+			"dnsRecordId", syncStatus.RecordID)
+		return nil
+	}
+
+	// DNS not configured or sync failed, configure it
+	logger.Info("DNS not yet configured for Pages domain, configuring now",
+		"domain", config.Domain,
+		"zoneId", zoneID)
+
+	return r.configureDNS(ctx, syncState, config)
 }
 
 // configureDNS creates a CNAME DNS record pointing to the Pages project.

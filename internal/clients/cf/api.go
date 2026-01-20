@@ -30,6 +30,8 @@ type API struct {
 	ValidDomainName  string // Domain name corresponding to ValidZoneId
 	CloudflareClient *cloudflare.API
 	APIToken         string // API Token for direct API calls (e.g., Pages Direct Upload)
+	APIKey           string // Global API Key for direct API calls
+	APIEmail         string // Email for Global API Key authentication
 }
 
 // TunnelCredentialsFile object containing the fields that make up a Cloudflare Tunnel's credentials

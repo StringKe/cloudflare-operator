@@ -339,9 +339,10 @@ func (*ProjectSyncController) enableWebAnalyticsIfNeeded(
 		return nil
 	}
 
-	// The hostname for Pages is the subdomain (e.g., "myproject.pages.dev")
-	hostname := subdomain
-	if hostname == "" {
+	// The hostname for Pages is the subdomain + .pages.dev (e.g., "myproject.pages.dev")
+	// Note: subdomain from Cloudflare API is just the short name without .pages.dev suffix
+	hostname := fmt.Sprintf("%s.pages.dev", subdomain)
+	if subdomain == "" {
 		hostname = fmt.Sprintf("%s.pages.dev", config.Name)
 	}
 

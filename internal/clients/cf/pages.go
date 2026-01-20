@@ -7,15 +7,14 @@ package cf
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
+	"crypto/md5" //nolint:gosec // Cloudflare Pages API requires MD5 hashes
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
-	"mime"
 	"mime/multipart"
 	"net/http"
-	"net/textproto"
 	"path/filepath"
 	"time"
 
@@ -962,9 +961,43 @@ type PagesDirectUploadResult struct {
 	Stage string `json:"stage"`
 }
 
+// pagesUploadPayload represents a file upload payload for the Pages API.
+type pagesUploadPayload struct {
+	Key      string              `json:"key"`
+	Value    string              `json:"value"`
+	Metadata pagesUploadMetadata `json:"metadata"`
+	Base64   bool                `json:"base64"`
+}
+
+// pagesUploadMetadata contains metadata for uploaded files.
+type pagesUploadMetadata struct {
+	ContentType string `json:"contentType"`
+}
+
+// pagesSpecialFiles are config files that should NOT be included in manifest.
+// These files are handled specially by Cloudflare Pages.
+var pagesSpecialFiles = map[string]bool{
+	"_headers":     true,
+	"_redirects":   true,
+	"_worker.js":   true,
+	"_routes.json": true,
+}
+
+// isPagesSpecialFile checks if a file is a special Pages config file.
+func isPagesSpecialFile(path string) bool {
+	base := filepath.Base(path)
+	return pagesSpecialFiles[base]
+}
+
 // CreatePagesDirectUploadDeployment creates a deployment via direct upload.
-// This uses the Pages Direct Upload API with multipart/form-data format.
-// The API expects: manifest (JSON object mapping file paths to hashes) + file contents.
+// This uses the Pages Direct Upload API with the correct 4-step flow:
+// 1. Get upload token (JWT)
+// 2. Check which files are missing
+// 3. Upload missing files
+// 4. Upsert hashes and create deployment
+//
+// Important: Uses MD5 hashes (not SHA256) as required by Cloudflare Pages API.
+// Special files (_headers, _redirects, etc.) are excluded from manifest.
 //
 //nolint:revive // cognitive complexity is acceptable for multi-step upload process
 func (api *API) CreatePagesDirectUploadDeployment(
@@ -985,109 +1018,292 @@ func (api *API) CreatePagesDirectUploadDeployment(
 		"project", projectName,
 		"fileCount", len(files))
 
-	// Build manifest: map of file paths to their SHA256 hashes
-	manifest := make(map[string]string, len(files))
+	// Build manifest with MD5 hashes, excluding special files
+	manifest := make(map[string]string)
+	hashToPath := make(map[string]string)
+	hashToContent := make(map[string][]byte)
+	specialCount := 0
+
 	for path, content := range files {
-		hash := sha256.Sum256(content)
-		// Ensure path starts with /
+		// Normalize path
 		key := path
 		if len(key) == 0 || key[0] != '/' {
 			key = "/" + key
 		}
-		manifest[key] = hex.EncodeToString(hash[:])
+
+		// Skip special Pages config files
+		if isPagesSpecialFile(path) {
+			specialCount++
+			api.Log.V(1).Info("Skipping special file", "path", key)
+			continue
+		}
+
+		// Use MD5 hash (required by Cloudflare Pages API)
+		hash := md5.Sum(content) //nolint:gosec // Required by Cloudflare API
+		hashStr := hex.EncodeToString(hash[:])
+
+		manifest[key] = hashStr
+		hashToPath[hashStr] = key
+		hashToContent[hashStr] = content
 	}
 
-	// Create multipart form data
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
+	api.Log.Info("Built manifest",
+		"files", len(manifest),
+		"skippedSpecial", specialCount)
 
-	// Add manifest field as JSON
-	manifestJSON, err := json.Marshal(manifest)
+	// Step 1: Get upload token
+	jwt, err := api.pagesGetUploadToken(ctx, accountID, projectName)
 	if err != nil {
-		return nil, fmt.Errorf("marshal manifest: %w", err)
-	}
-	if err := writer.WriteField("manifest", string(manifestJSON)); err != nil {
-		return nil, fmt.Errorf("write manifest field: %w", err)
+		return nil, fmt.Errorf("get upload token: %w", err)
 	}
 
-	// Add each file as a form file with correct Content-Type
-	// This mirrors Wrangler's behavior: the Content-Type header of each file part
-	// will be used by Cloudflare when serving the file.
-	// See: https://developers.cloudflare.com/workers/static-assets/direct-upload/
-	for path, content := range files {
-		// Ensure path starts with /
-		key := path
-		if len(key) == 0 || key[0] != '/' {
-			key = "/" + key
+	// Step 2: Check missing assets
+	hashes := make([]string, 0, len(manifest))
+	for _, h := range manifest {
+		hashes = append(hashes, h)
+	}
+
+	missing, err := api.pagesCheckMissing(ctx, jwt, hashes)
+	if err != nil {
+		return nil, fmt.Errorf("check missing: %w", err)
+	}
+
+	api.Log.Info("Checked missing assets",
+		"total", len(hashes),
+		"missing", len(missing))
+
+	// Step 3: Upload missing files in batches
+	if len(missing) > 0 {
+		const batchSize = 100
+		for i := 0; i < len(missing); i += batchSize {
+			end := i + batchSize
+			if end > len(missing) {
+				end = len(missing)
+			}
+
+			var payloads []pagesUploadPayload
+			for _, hash := range missing[i:end] {
+				content := hashToContent[hash]
+				path := hashToPath[hash]
+
+				contentType := GetContentType(path)
+
+				payloads = append(payloads, pagesUploadPayload{
+					Key:      hash,
+					Value:    base64.StdEncoding.EncodeToString(content),
+					Metadata: pagesUploadMetadata{ContentType: contentType},
+					Base64:   true,
+				})
+			}
+
+			if err := api.pagesUploadFiles(ctx, jwt, payloads); err != nil {
+				return nil, fmt.Errorf("upload batch %d-%d: %w", i+1, end, err)
+			}
+
+			api.Log.V(1).Info("Uploaded batch",
+				"start", i+1,
+				"end", end,
+				"total", len(missing))
 		}
-
-		// Determine MIME type based on file extension (mirrors Wrangler's getContentType)
-		contentType := GetContentType(path)
-
-		// Create form file with custom Content-Type header
-		// We use CreatePart instead of CreateFormFile to set the correct MIME type
-		// Use mime.FormatMediaType to properly escape parameter values (RFC 2231)
-		h := make(textproto.MIMEHeader)
-		h.Set("Content-Disposition", mime.FormatMediaType("form-data", map[string]string{
-			"name":     key,
-			"filename": filepath.Base(path),
-		}))
-		h.Set("Content-Type", contentType)
-
-		part, err := writer.CreatePart(h)
-		if err != nil {
-			return nil, fmt.Errorf("create form file %s: %w", path, err)
-		}
-		if _, err := part.Write(content); err != nil {
-			return nil, fmt.Errorf("write file content %s: %w", path, err)
-		}
 	}
 
-	if err := writer.Close(); err != nil {
-		return nil, fmt.Errorf("close multipart writer: %w", err)
+	// Step 4: Upsert hashes
+	if err := api.pagesUpsertHashes(ctx, jwt, hashes); err != nil {
+		return nil, fmt.Errorf("upsert hashes: %w", err)
 	}
 
-	// Send request to Cloudflare API
-	endpoint := fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/pages/projects/%s/deployments",
+	// Step 5: Create deployment with manifest
+	result, err := api.pagesCreateDeployment(ctx, accountID, projectName, manifest)
+	if err != nil {
+		return nil, fmt.Errorf("create deployment: %w", err)
+	}
+
+	api.Log.Info("Created direct upload deployment",
+		"project", projectName,
+		"deploymentId", result.ID,
+		"url", result.URL)
+
+	return result, nil
+}
+
+// pagesGetUploadToken gets a JWT upload token for Pages direct upload.
+func (api *API) pagesGetUploadToken(ctx context.Context, accountID, projectName string) (string, error) {
+	endpoint := fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/pages/projects/%s/upload-token",
 		accountID, projectName)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, &body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return "", err
 	}
-
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	if api.APIToken != "" {
-		req.Header.Set("Authorization", "Bearer "+api.APIToken)
-	}
+	api.setAuthHeaders(req)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("execute request: %w", err)
+		return "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("create deployment failed with status %d: %s", resp.StatusCode, string(respBody))
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Result struct {
+			JWT string `json:"jwt"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", err
+	}
+
+	return result.Result.JWT, nil
+}
+
+// pagesCheckMissing checks which file hashes are missing from Cloudflare.
+func (api *API) pagesCheckMissing(ctx context.Context, jwt string, hashes []string) ([]string, error) {
+	endpoint := "https://api.cloudflare.com/client/v4/pages/assets/check-missing"
+
+	body, _ := json.Marshal(map[string][]string{"hashes": hashes})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var result struct {
+		Result []string `json:"result"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, err
+	}
+
+	return result.Result, nil
+}
+
+// pagesUploadFiles uploads files to Cloudflare Pages.
+func (api *API) pagesUploadFiles(ctx context.Context, jwt string, payloads []pagesUploadPayload) error {
+	endpoint := "https://api.cloudflare.com/client/v4/pages/assets/upload"
+
+	body, _ := json.Marshal(payloads)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
+// pagesUpsertHashes registers file hashes with Cloudflare.
+func (api *API) pagesUpsertHashes(ctx context.Context, jwt string, hashes []string) error {
+	endpoint := "https://api.cloudflare.com/client/v4/pages/assets/upsert-hashes"
+
+	body, _ := json.Marshal(map[string][]string{"hashes": hashes})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
+// pagesCreateDeployment creates a Pages deployment with the given manifest.
+func (api *API) pagesCreateDeployment(ctx context.Context, accountID, projectName string, manifest map[string]string) (*PagesDirectUploadResult, error) {
+	endpoint := fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/pages/projects/%s/deployments",
+		accountID, projectName)
+
+	// Use multipart/form-data with manifest field
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+
+	manifestJSON, err := json.Marshal(manifest)
+	if err != nil {
+		return nil, err
+	}
+	if err := writer.WriteField("manifest", string(manifestJSON)); err != nil {
+		return nil, err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, &body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	api.setAuthHeaders(req)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var response struct {
 		Result cloudflare.PagesProjectDeployment `json:"result"`
 	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
+	if err := json.Unmarshal(respBody, &response); err != nil {
+		return nil, err
 	}
-
-	api.Log.Info("Created direct upload deployment",
-		"project", projectName,
-		"deploymentId", response.Result.ID,
-		"url", response.Result.URL)
 
 	return &PagesDirectUploadResult{
 		ID:    response.Result.ID,
 		URL:   response.Result.URL,
 		Stage: response.Result.LatestStage.Name,
 	}, nil
+}
+
+// setAuthHeaders sets authentication headers on the request.
+// Supports both API Token (Bearer) and Global API Key authentication.
+func (api *API) setAuthHeaders(req *http.Request) {
+	if api.APIToken != "" {
+		req.Header.Set("Authorization", "Bearer "+api.APIToken)
+	} else if api.APIKey != "" && api.APIEmail != "" {
+		req.Header.Set("X-Auth-Key", api.APIKey)
+		req.Header.Set("X-Auth-Email", api.APIEmail)
+	}
 }

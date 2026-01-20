@@ -245,9 +245,29 @@ func (s *DeploymentService) GetSyncStatus(ctx context.Context, source service.So
 			deploymentID = ""
 		}
 
+		// Read Stage and URL from ResultData (stored by Sync Controller)
+		stage := ""
+		url := ""
+		if syncState.Status.ResultData != nil {
+			if v, ok := syncState.Status.ResultData["stage"]; ok {
+				stage = v
+			}
+			if v, ok := syncState.Status.ResultData["url"]; ok {
+				url = v
+			}
+			// Also try to get deploymentId from ResultData as fallback
+			if deploymentID == "" {
+				if v, ok := syncState.Status.ResultData["deploymentId"]; ok {
+					deploymentID = v
+				}
+			}
+		}
+
 		return &DeploymentSyncStatus{
 			IsSynced:     isSynced,
 			DeploymentID: deploymentID,
+			Stage:        stage,
+			URL:          url,
 			SyncStateID:  syncState.Name,
 		}, nil
 	}

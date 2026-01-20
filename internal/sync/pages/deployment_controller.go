@@ -171,6 +171,13 @@ func (r *DeploymentSyncController) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
+	// Store deployment result data (Stage, URL) in SyncState.ResultData
+	// This enables the L2 Controller to retrieve deployment status
+	if err := r.storeDeploymentResultData(ctx, syncState, result); err != nil {
+		logger.Error(err, "Failed to store deployment result data")
+		// Non-fatal, continue - status was already updated
+	}
+
 	// Update PagesProject deployment history (non-blocking)
 	// This stores the deployment metadata in PagesProject status for visibility and rollback support
 	if err := r.updatePagesProjectHistory(ctx, config.ProjectName, result); err != nil {
@@ -786,6 +793,40 @@ func (r *DeploymentSyncController) handleDeletion(
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// storeDeploymentResultData stores the deployment result (Stage, URL, DeploymentID) in SyncState.ResultData.
+// This enables the L2 Controller to retrieve deployment status without querying Cloudflare API.
+func (r *DeploymentSyncController) storeDeploymentResultData(
+	ctx context.Context,
+	syncState *v1alpha2.CloudflareSyncState,
+	result *DeploymentResult,
+) error {
+	if result == nil {
+		return nil
+	}
+
+	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		// Re-fetch to get latest version
+		if err := r.Client.Get(ctx, client.ObjectKey{Name: syncState.Name}, syncState); err != nil {
+			return err
+		}
+
+		// Initialize ResultData if nil
+		if syncState.Status.ResultData == nil {
+			syncState.Status.ResultData = make(map[string]string)
+		}
+
+		// Store deployment result
+		syncState.Status.ResultData["deploymentId"] = result.DeploymentID
+		syncState.Status.ResultData["stage"] = result.Stage
+		syncState.Status.ResultData["url"] = result.URL
+		if result.SourceHash != "" {
+			syncState.Status.ResultData["sourceHash"] = result.SourceHash
+		}
+
+		return r.Client.Status().Update(ctx, syncState)
+	})
 }
 
 // SetupWithManager sets up the controller with the Manager.
