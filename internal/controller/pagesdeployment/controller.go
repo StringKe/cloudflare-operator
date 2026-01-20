@@ -210,6 +210,8 @@ func (r *PagesDeploymentReconciler) registerPagesDeployment(
 		Action:             string(deployment.Spec.Action),
 		TargetDeploymentID: deployment.Spec.TargetDeploymentID,
 		PurgeBuildCache:    deployment.Spec.PurgeBuildCache,
+		DirectUpload:       convertDirectUpload(deployment.Spec.DirectUpload),
+		Rollback:           convertRollback(deployment.Spec.Rollback),
 	}
 
 	// Register to SyncState
@@ -414,4 +416,30 @@ func (r *PagesDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&networkingv1alpha2.PagesProject{},
 			handler.EnqueueRequestsFromMapFunc(r.findDeploymentsForProject)).
 		Complete(r)
+}
+
+// convertDirectUpload converts CRD DirectUpload spec to service type.
+func convertDirectUpload(du *networkingv1alpha2.PagesDirectUpload) *pagessvc.DirectUploadConfig {
+	if du == nil {
+		return nil
+	}
+	return &pagessvc.DirectUploadConfig{
+		Source:               du.Source,
+		Checksum:             du.Checksum,
+		Archive:              du.Archive,
+		ManifestConfigMapRef: du.ManifestConfigMapRef,
+		Manifest:             du.Manifest,
+	}
+}
+
+// convertRollback converts CRD Rollback spec to service type.
+func convertRollback(rb *networkingv1alpha2.RollbackConfig) *pagessvc.RollbackConfig {
+	if rb == nil {
+		return nil
+	}
+	return &pagessvc.RollbackConfig{
+		Strategy:     rb.Strategy,
+		Version:      rb.Version,
+		DeploymentID: rb.DeploymentID,
+	}
 }

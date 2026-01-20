@@ -172,6 +172,28 @@ func (r *DomainSyncController) syncToCloudflare(
 
 		result, err := apiClient.AddPagesDomain(ctx, config.ProjectName, config.Domain)
 		if err != nil {
+			// Check if domain already exists - adopt it
+			if cf.IsConflictError(err) {
+				logger.Info("Pages domain already exists, attempting to adopt",
+					"domain", config.Domain,
+					"projectName", config.ProjectName)
+
+				existingDomain, getErr := apiClient.GetPagesDomain(ctx, config.ProjectName, config.Domain)
+				if getErr != nil {
+					return fmt.Errorf("domain exists but failed to get for adoption: %w", getErr)
+				}
+
+				// Adopt the existing domain by updating CloudflareID
+				if err := common.UpdateCloudflareID(ctx, r.Client, syncState, existingDomain.ID); err != nil {
+					return err
+				}
+
+				logger.Info("Adopted existing Pages domain",
+					"domainId", existingDomain.ID,
+					"domain", existingDomain.Name,
+					"status", existingDomain.Status)
+				return nil
+			}
 			return fmt.Errorf("add Pages domain: %w", err)
 		}
 
@@ -196,9 +218,21 @@ func (r *DomainSyncController) syncToCloudflare(
 				// Domain was deleted externally, recreate it
 				logger.Info("Pages domain not found, recreating",
 					"domain", config.Domain)
-				result, err := apiClient.AddPagesDomain(ctx, config.ProjectName, config.Domain)
-				if err != nil {
-					return fmt.Errorf("recreate Pages domain: %w", err)
+				result, addErr := apiClient.AddPagesDomain(ctx, config.ProjectName, config.Domain)
+				if addErr != nil {
+					// Handle race condition where domain was recreated externally
+					if cf.IsConflictError(addErr) {
+						logger.Info("Pages domain was recreated externally, re-verifying")
+						existingDomain, getErr := apiClient.GetPagesDomain(ctx, config.ProjectName, config.Domain)
+						if getErr != nil {
+							return fmt.Errorf("failed to get recreated domain: %w", getErr)
+						}
+						if updateErr := common.UpdateCloudflareID(ctx, r.Client, syncState, existingDomain.ID); updateErr != nil {
+							logger.Error(updateErr, "Failed to update CloudflareID after external recreation")
+						}
+						return nil
+					}
+					return fmt.Errorf("recreate Pages domain: %w", addErr)
 				}
 
 				// Update SyncState with new domain ID
