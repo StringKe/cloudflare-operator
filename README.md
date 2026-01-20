@@ -31,7 +31,6 @@
 [![CI](https://github.com/StringKe/cloudflare-operator/actions/workflows/release.yml/badge.svg)](https://github.com/StringKe/cloudflare-operator/actions/workflows/release.yml)
 [![Test](https://github.com/StringKe/cloudflare-operator/actions/workflows/test.yml/badge.svg)](https://github.com/StringKe/cloudflare-operator/actions/workflows/test.yml)
 [![Lint](https://github.com/StringKe/cloudflare-operator/actions/workflows/lint.yml/badge.svg)](https://github.com/StringKe/cloudflare-operator/actions/workflows/lint.yml)
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/StringKe/cloudflare-operator/badge)](https://securityscorecards.dev/viewer/?uri=github.com/StringKe/cloudflare-operator)
 
 </div>
 
@@ -362,6 +361,9 @@ Documentation includes:
 | Tunnels | `Account:Cloudflare Tunnel:Edit` | Account |
 | DNS | `Zone:DNS:Edit` | Zone |
 | Access | `Account:Access: Apps and Policies:Edit` | Account |
+| Access Groups & IdP | `Account:Access: Organizations, Identity Providers, and Groups:Edit` | Account |
+| Service Tokens | `Account:Access: Service Tokens:Edit` | Account |
+| Device Posture | `Account:Access: Device Posture:Edit` | Account |
 | Gateway | `Account:Zero Trust:Edit` | Account |
 | Zone Settings | `Zone:Zone Settings:Edit` | Zone |
 | SSL/TLS | `Zone:SSL and Certificates:Edit` | Zone |
@@ -369,6 +371,8 @@ Documentation includes:
 | Pages | `Account:Cloudflare Pages:Edit` | Account |
 | Rules | `Zone:Zone Rulesets:Edit` | Zone |
 | Registrar | `Account:Registrar:Edit` | Account |
+
+> For detailed per-CRD permission requirements, see [Configuration Guide](docs/en/configuration.md#permission-matrix).
 
 ## Contributing
 

@@ -31,7 +31,6 @@
 [![CI](https://github.com/StringKe/cloudflare-operator/actions/workflows/release.yml/badge.svg)](https://github.com/StringKe/cloudflare-operator/actions/workflows/release.yml)
 [![Test](https://github.com/StringKe/cloudflare-operator/actions/workflows/test.yml/badge.svg)](https://github.com/StringKe/cloudflare-operator/actions/workflows/test.yml)
 [![Lint](https://github.com/StringKe/cloudflare-operator/actions/workflows/lint.yml/badge.svg)](https://github.com/StringKe/cloudflare-operator/actions/workflows/lint.yml)
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/StringKe/cloudflare-operator/badge)](https://securityscorecards.dev/viewer/?uri=github.com/StringKe/cloudflare-operator)
 
 </div>
 
@@ -362,6 +361,9 @@ tunnelRef:
 | 隧道 | `Account:Cloudflare Tunnel:Edit` | Account |
 | DNS | `Zone:DNS:Edit` | Zone |
 | Access | `Account:Access: Apps and Policies:Edit` | Account |
+| Access 组和 IdP | `Account:Access: Organizations, Identity Providers, and Groups:Edit` | Account |
+| 服务令牌 | `Account:Access: Service Tokens:Edit` | Account |
+| 设备态势 | `Account:Access: Device Posture:Edit` | Account |
 | Gateway | `Account:Zero Trust:Edit` | Account |
 | Zone 设置 | `Zone:Zone Settings:Edit` | Zone |
 | SSL/TLS | `Zone:SSL and Certificates:Edit` | Zone |
@@ -369,6 +371,8 @@ tunnelRef:
 | Pages | `Account:Cloudflare Pages:Edit` | Account |
 | 规则 | `Zone:Zone Rulesets:Edit` | Zone |
 | 域名注册 | `Account:Registrar:Edit` | Account |
+
+> 详细的每个 CRD 权限要求，请参阅[配置指南](docs/zh/configuration.md#权限矩阵)。
 
 ## 贡献
 

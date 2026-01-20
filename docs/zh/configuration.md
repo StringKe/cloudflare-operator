@@ -53,24 +53,79 @@ curl -X POST "https://api.cloudflare.com/client/v4/user/tokens" \
 
 ### 权限矩阵
 
+#### 隧道与网络
+
 | 功能 | 权限 | 范围 |
 |------|------|------|
 | **Tunnel / ClusterTunnel** | `Account:Cloudflare Tunnel:Edit` | Account |
 | **VirtualNetwork** | `Account:Cloudflare Tunnel:Edit` | Account |
 | **NetworkRoute** | `Account:Cloudflare Tunnel:Edit` | Account |
 | **WARPConnector** | `Account:Cloudflare Tunnel:Edit` | Account |
-| **DNS 记录** | `Zone:DNS:Edit` | Zone（指定或全部）|
-| **TunnelBinding** | `Zone:DNS:Edit` + (可选) `Account:Access: Apps and Policies:Edit` | Account + Zone |
 | **PrivateService** | `Account:Cloudflare Tunnel:Edit` | Account |
-| **Access 应用** | `Account:Access: Apps and Policies:Edit` | Account |
-| **Access 组** | `Account:Access: Organizations, Identity Providers, and Groups:Edit` | Account |
-| **Access 身份提供商** | `Account:Access: Organizations, Identity Providers, and Groups:Edit` | Account |
-| **Access 服务令牌** | `Account:Access: Service Tokens:Edit` | Account |
-| **设备态势规则** | `Account:Access: Device Posture:Edit` | Account |
-| **设备设置策略** | `Account:Zero Trust:Edit` | Account |
-| **网关规则** | `Account:Zero Trust:Edit` | Account |
-| **网关列表** | `Account:Zero Trust:Edit` | Account |
-| **网关配置** | `Account:Zero Trust:Edit` | Account |
+| **TunnelBinding** | `Zone:DNS:Edit` + (可选) `Account:Access: Apps and Policies:Edit` | Account + Zone |
+
+#### DNS 与连接
+
+| 功能 | 权限 | 范围 |
+|------|------|------|
+| **DNSRecord** | `Zone:DNS:Edit` | Zone（指定或全部）|
+
+#### 访问控制 (Zero Trust)
+
+| 功能 | 权限 | 范围 |
+|------|------|------|
+| **AccessApplication** | `Account:Access: Apps and Policies:Edit` | Account |
+| **AccessGroup** | `Account:Access: Organizations, Identity Providers, and Groups:Edit` | Account |
+| **AccessPolicy** | `Account:Access: Apps and Policies:Edit` | Account |
+| **AccessIdentityProvider** | `Account:Access: Organizations, Identity Providers, and Groups:Edit` | Account |
+| **AccessServiceToken** | `Account:Access: Service Tokens:Edit` | Account |
+
+#### 网关与设备
+
+| 功能 | 权限 | 范围 |
+|------|------|------|
+| **GatewayRule** | `Account:Zero Trust:Edit` | Account |
+| **GatewayList** | `Account:Zero Trust:Edit` | Account |
+| **GatewayConfiguration** | `Account:Zero Trust:Edit` | Account |
+| **DevicePostureRule** | `Account:Access: Device Posture:Edit` | Account |
+| **DeviceSettingsPolicy** | `Account:Zero Trust:Edit` | Account |
+
+#### Zone 设置与 SSL/TLS
+
+| 功能 | 权限 | 范围 |
+|------|------|------|
+| **CloudflareDomain** | `Zone:Zone Settings:Edit` + `Zone:SSL and Certificates:Edit` | Zone |
+| **OriginCACertificate** | `Zone:SSL and Certificates:Edit` | Zone |
+
+#### R2 存储
+
+| 功能 | 权限 | 范围 |
+|------|------|------|
+| **R2Bucket** | `Account:Workers R2 Storage:Edit` | Account |
+| **R2BucketDomain** | `Account:Workers R2 Storage:Edit` + `Zone:DNS:Edit` | Account + Zone |
+| **R2BucketNotification** | `Account:Workers R2 Storage:Edit` | Account |
+
+#### 规则引擎
+
+| 功能 | 权限 | 范围 |
+|------|------|------|
+| **ZoneRuleset** | `Zone:Zone Rulesets:Edit` | Zone |
+| **TransformRule** | `Zone:Zone Rulesets:Edit` | Zone |
+| **RedirectRule** | `Zone:Zone Rulesets:Edit` | Zone |
+
+#### Cloudflare Pages
+
+| 功能 | 权限 | 范围 |
+|------|------|------|
+| **PagesProject** | `Account:Cloudflare Pages:Edit` | Account |
+| **PagesDomain** | `Account:Cloudflare Pages:Edit` + `Zone:DNS:Edit` | Account + Zone |
+| **PagesDeployment** | `Account:Cloudflare Pages:Edit` | Account |
+
+#### 域名注册 (Enterprise)
+
+| 功能 | 权限 | 范围 |
+|------|------|------|
+| **DomainRegistration** | `Account:Registrar:Edit` | Account |
 
 ### 推荐的 Token 配置
 
