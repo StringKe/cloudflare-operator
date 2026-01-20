@@ -33,8 +33,10 @@ const (
 	PagesDeploymentStateRollingBack PagesDeploymentState = "RollingBack"
 )
 
-// PagesDeploymentAction defines the action to perform
+// PagesDeploymentAction defines the action to perform.
+//
 // Deprecated: Use Environment and Source instead. Action will be removed in v1alpha3.
+//
 // +kubebuilder:validation:Enum=create;retry;rollback
 type PagesDeploymentAction string
 
@@ -363,13 +365,17 @@ type PagesDeploymentSpec struct {
 	// These fields will be removed in v1alpha3. Use Environment and Source instead.
 
 	// Branch is the branch to deploy from (for git-based deployments).
+	//
 	// Deprecated: Use Source.Git.Branch instead.
+	//
 	// +kubebuilder:validation:Optional
 	Branch string `json:"branch,omitempty"`
 
 	// Action is the deployment action to perform.
+	//
 	// Deprecated: Use Environment and Source instead. Rollback should be done by
 	// creating a new deployment with the same source as the target.
+	//
 	// +kubebuilder:validation:Enum=create;retry;rollback
 	// +kubebuilder:default=create
 	Action PagesDeploymentAction `json:"action,omitempty"`
