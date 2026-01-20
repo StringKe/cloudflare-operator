@@ -14,6 +14,8 @@ import (
 
 	"github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
+	"github.com/StringKe/cloudflare-operator/internal/service"
+	dnssvc "github.com/StringKe/cloudflare-operator/internal/service/dns"
 	pagessvc "github.com/StringKe/cloudflare-operator/internal/service/pages"
 	"github.com/StringKe/cloudflare-operator/internal/sync/common"
 )
@@ -166,17 +168,13 @@ func (r *DomainSyncController) syncToCloudflare(
 
 	// Determine DNS configuration mode
 	autoConfigureDNS := config.AutoConfigureDNS == nil || *config.AutoConfigureDNS
-	dnsConfigMode := "automatic"
-	if !autoConfigureDNS {
-		dnsConfigMode = "manual"
-	}
 
 	if common.IsPendingID(cloudflareID) {
 		// Add new domain
 		logger.Info("Adding new Pages domain",
 			"domain", config.Domain,
 			"projectName", config.ProjectName,
-			"dnsConfigMode", dnsConfigMode)
+			"autoConfigureDNS", autoConfigureDNS)
 
 		result, err := apiClient.AddPagesDomain(ctx, config.ProjectName, config.Domain)
 		if err != nil {
@@ -199,14 +197,14 @@ func (r *DomainSyncController) syncToCloudflare(
 				logger.Info("Adopted existing Pages domain",
 					"domainId", existingDomain.ID,
 					"domain", existingDomain.Name,
-					"status", existingDomain.Status,
-					"dnsConfigMode", dnsConfigMode)
+					"status", existingDomain.Status)
 
-				// Log DNS configuration notice if manual mode
-				if !autoConfigureDNS {
-					logger.Info("Manual DNS configuration requested - verify DNS records are correctly configured",
-						"domain", config.Domain,
-						"hint", "Create CNAME record pointing to your Pages project's *.pages.dev subdomain")
+				// Configure DNS if autoConfigureDNS is enabled
+				if autoConfigureDNS {
+					if err := r.configureDNS(ctx, syncState, config); err != nil {
+						logger.Error(err, "Failed to configure DNS for adopted domain")
+						// Non-fatal, domain was added successfully
+					}
 				}
 				return nil
 			}
@@ -221,14 +219,14 @@ func (r *DomainSyncController) syncToCloudflare(
 		logger.Info("Added Pages domain",
 			"domainId", result.ID,
 			"domain", result.Name,
-			"status", result.Status,
-			"dnsConfigMode", dnsConfigMode)
+			"status", result.Status)
 
-		// Log DNS configuration notice if manual mode
-		if !autoConfigureDNS {
-			logger.Info("Manual DNS configuration requested - verify DNS records are correctly configured",
-				"domain", config.Domain,
-				"hint", "Create CNAME record pointing to your Pages project's *.pages.dev subdomain")
+		// Configure DNS if autoConfigureDNS is enabled
+		if autoConfigureDNS {
+			if err := r.configureDNS(ctx, syncState, config); err != nil {
+				logger.Error(err, "Failed to configure DNS for new domain")
+				// Non-fatal, domain was added successfully
+			}
 		}
 	} else {
 		// Check if domain exists (domains can only be added/deleted, not updated)
@@ -303,6 +301,9 @@ func (r *DomainSyncController) handleDeletion(
 			logger.Error(err, "Failed to extract config for deletion")
 			// Continue to remove finalizer even if we can't extract config
 		} else {
+			// Cleanup DNS record first (if autoConfigureDNS was enabled)
+			r.cleanupDNS(ctx, syncState, config)
+
 			// Create API client
 			apiClient, err := common.CreateAPIClient(ctx, r.Client, syncState)
 			if err != nil {
@@ -348,6 +349,114 @@ func (r *DomainSyncController) handleDeletion(
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// configureDNS creates a CNAME DNS record pointing to the Pages project.
+func (r *DomainSyncController) configureDNS(
+	ctx context.Context,
+	syncState *v1alpha2.CloudflareSyncState,
+	config *pagessvc.PagesDomainConfig,
+) error {
+	logger := log.FromContext(ctx)
+
+	// Check if we have Zone ID for DNS configuration
+	zoneID := syncState.Spec.ZoneID
+	if zoneID == "" {
+		logger.Info("No Zone ID available, skipping automatic DNS configuration",
+			"domain", config.Domain,
+			"hint", "DNS must be configured manually or zone is not managed by this account")
+		return nil
+	}
+
+	// Build CNAME target: {project-name}.pages.dev
+	cnameTarget := fmt.Sprintf("%s.pages.dev", config.ProjectName)
+
+	// Create DNS record config
+	dnsConfig := dnssvc.DNSRecordConfig{
+		Name:    config.Domain,
+		Type:    "CNAME",
+		Content: cnameTarget,
+		TTL:     1, // Auto
+		Proxied: true,
+		Comment: fmt.Sprintf("Managed by cloudflare-operator PagesDomain: %s", config.Domain),
+	}
+
+	// Build source for DNS record
+	source := service.Source{
+		Kind:      "PagesDomainAutomatic",
+		Namespace: syncState.Namespace,
+		Name:      fmt.Sprintf("pagesdomain-%s", sanitizeDomainForSource(config.Domain)),
+	}
+
+	// Register DNS record via DNS Service
+	svc := dnssvc.NewService(r.Client)
+	if err := svc.Register(ctx, dnssvc.RegisterOptions{
+		ZoneID:         zoneID,
+		AccountID:      syncState.Spec.AccountID,
+		Source:         source,
+		Config:         dnsConfig,
+		CredentialsRef: syncState.Spec.CredentialsRef,
+	}); err != nil {
+		return fmt.Errorf("register DNS record: %w", err)
+	}
+
+	logger.Info("DNS record registered for Pages domain",
+		"domain", config.Domain,
+		"cname", cnameTarget,
+		"zoneId", zoneID)
+
+	return nil
+}
+
+// cleanupDNS removes the automatically created DNS record for a Pages domain.
+func (r *DomainSyncController) cleanupDNS(
+	ctx context.Context,
+	syncState *v1alpha2.CloudflareSyncState,
+	config *pagessvc.PagesDomainConfig,
+) {
+	logger := log.FromContext(ctx)
+
+	// Check if autoConfigureDNS was enabled
+	autoConfigureDNS := config.AutoConfigureDNS == nil || *config.AutoConfigureDNS
+	if !autoConfigureDNS {
+		return
+	}
+
+	// Check if we have Zone ID
+	zoneID := syncState.Spec.ZoneID
+	if zoneID == "" {
+		return
+	}
+
+	// Build source for DNS record (must match what was used in configureDNS)
+	source := service.Source{
+		Kind:      "PagesDomainAutomatic",
+		Namespace: syncState.Namespace,
+		Name:      fmt.Sprintf("pagesdomain-%s", sanitizeDomainForSource(config.Domain)),
+	}
+
+	// Unregister DNS record via DNS Service
+	svc := dnssvc.NewService(r.Client)
+	if err := svc.Unregister(ctx, "", source); err != nil {
+		logger.Error(err, "Failed to unregister DNS record", "domain", config.Domain)
+		// Non-fatal, continue with domain deletion
+	} else {
+		logger.Info("DNS record unregistered for Pages domain", "domain", config.Domain)
+	}
+}
+
+// sanitizeDomainForSource converts a domain name to a valid Kubernetes resource name part.
+func sanitizeDomainForSource(domain string) string {
+	// Replace dots with dashes for Kubernetes compatibility
+	result := ""
+	for _, c := range domain {
+		if c == '.' {
+			result += "-"
+		} else {
+			result += string(c)
+		}
+	}
+	return result
 }
 
 // SetupWithManager sets up the controller with the Manager.
