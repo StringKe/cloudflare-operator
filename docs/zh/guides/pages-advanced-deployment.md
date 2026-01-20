@@ -2,7 +2,7 @@
 
 本指南介绍 Cloudflare Pages 的高级部署功能，包括直接上传、智能回滚、项目导入和 Web Analytics 集成。
 
-> **版本**: v0.27.12+
+> **版本**: v0.27.13+
 
 ## 概述
 
@@ -35,10 +35,18 @@ flowchart TB
         UP["Uploader 模块"]
         CS["校验和验证"]
         AR["归档解压"]
+        MD5["MD5 哈希生成"]
+    end
+
+    subgraph CloudflareAPI["Cloudflare Pages API (4步流程)"]
+        JWT["1. 获取上传令牌 (JWT)"]
+        CHK["2. 检查缺失资源"]
+        UPL["3. 上传缺失文件"]
+        UPS["4. 注册哈希"]
+        DEP["5. 创建部署"]
     end
 
     subgraph Cloudflare["Cloudflare"]
-        DU["Direct Upload API"]
         PP["Pages 项目"]
         DEPLOY["部署"]
     end
@@ -49,11 +57,32 @@ flowchart TB
 
     UP --> CS
     CS --> AR
-    AR --> PD
-    PD --> DU
-    DU --> PP
+    AR --> MD5
+    MD5 --> PD
+    PD --> JWT
+    JWT --> CHK
+    CHK --> UPL
+    UPL --> UPS
+    UPS --> DEP
+    DEP --> PP
     PP --> DEPLOY
 ```
+
+### Direct Upload API 流程
+
+Operator 使用 Cloudflare 的 Direct Upload API，采用 4 步流程：
+
+1. **获取上传令牌**: 获取用于资源 API 认证的 JWT 令牌
+2. **检查缺失资源**: 查询哪些文件（按 MD5 哈希）尚未上传
+3. **上传缺失文件**: 仅上传 Cloudflare 没有的文件（base64 编码）
+4. **注册哈希**: 为部署注册所有文件哈希
+5. **创建部署**: 使用清单（路径 → MD5 哈希映射）创建部署
+
+**重要说明**:
+- 文件使用 **MD5 哈希**（非 SHA256）标识，这是 Cloudflare API 的要求
+- Pages 特殊配置文件（`_headers`、`_redirects`、`_worker.js`、`_routes.json`）不包含在清单中
+- 文件以每批 100 个的方式上传以提高效率
+- 同时支持 API Token 和 Global API Key 两种认证方式
 
 ---
 

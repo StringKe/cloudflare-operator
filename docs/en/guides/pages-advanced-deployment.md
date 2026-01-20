@@ -2,7 +2,7 @@
 
 This guide covers advanced deployment features for Cloudflare Pages including Direct Upload, Smart Rollback, Project Adoption, and Web Analytics integration.
 
-> **Version**: v0.27.12+
+> **Version**: v0.27.13+
 
 ## Overview
 
@@ -35,10 +35,18 @@ flowchart TB
         UP["Uploader Module"]
         CS["Checksum Verification"]
         AR["Archive Extraction"]
+        MD5["MD5 Hash Generation"]
+    end
+
+    subgraph CloudflareAPI["Cloudflare Pages API (4-Step Flow)"]
+        JWT["1. Get Upload Token (JWT)"]
+        CHK["2. Check Missing Assets"]
+        UPL["3. Upload Missing Files"]
+        UPS["4. Upsert Hashes"]
+        DEP["5. Create Deployment"]
     end
 
     subgraph Cloudflare["Cloudflare"]
-        DU["Direct Upload API"]
         PP["Pages Project"]
         DEPLOY["Deployment"]
     end
@@ -49,11 +57,32 @@ flowchart TB
 
     UP --> CS
     CS --> AR
-    AR --> PD
-    PD --> DU
-    DU --> PP
+    AR --> MD5
+    MD5 --> PD
+    PD --> JWT
+    JWT --> CHK
+    CHK --> UPL
+    UPL --> UPS
+    UPS --> DEP
+    DEP --> PP
     PP --> DEPLOY
 ```
+
+### Direct Upload API Flow
+
+The operator implements Cloudflare's Direct Upload API using a 4-step flow:
+
+1. **Get Upload Token**: Obtain a JWT token for authentication with the assets API
+2. **Check Missing Assets**: Query which files (by MD5 hash) are not already uploaded
+3. **Upload Missing Files**: Upload only the files that Cloudflare doesn't have (base64 encoded)
+4. **Upsert Hashes**: Register all file hashes for the deployment
+5. **Create Deployment**: Create the deployment with the manifest (path → MD5 hash mapping)
+
+**Important Notes**:
+- Files are identified by **MD5 hash** (not SHA256) as required by Cloudflare's API
+- Special Pages config files (`_headers`, `_redirects`, `_worker.js`, `_routes.json`) are excluded from the manifest
+- Files are uploaded in batches of 100 for efficiency
+- Both API Token and Global API Key authentication are supported
 
 ---
 

@@ -15,17 +15,31 @@ This directory contains examples for managing Cloudflare Pages resources using t
 | `PagesDomain` | Custom domain for Pages project / Pages 项目自定义域名 |
 | `PagesDeployment` | Deployment operations (create, retry, rollback, direct upload) / 部署操作（创建、重试、回滚、直接上传） |
 
-## New Features (v0.27.12+) / 新功能
+## New Features (v0.27.13+) / 新功能
 
 | Feature / 功能 | Description / 说明 |
 |---------------|-------------------|
 | **Direct Upload** | Deploy static files from HTTP/S3/OCI sources without Git / 无需 Git，从 HTTP/S3/OCI 源部署静态文件 |
+| **4-Step API Flow** | Correct MD5-based upload flow (v0.27.13) / 正确的基于 MD5 的 4 步上传流程 (v0.27.13) |
 | **Smart Rollback** | Intelligent rollback with multiple strategies / 支持多种策略的智能回滚 |
 | **Project Adoption** | Import existing Cloudflare Pages projects / 导入已存在的 Cloudflare Pages 项目 |
 | **Web Analytics** | Automatic Web Analytics integration / 自动 Web Analytics 集成 |
 | **Force Redeploy** | Trigger redeployment without config changes / 无需配置变更触发重新部署 |
 | **DNS Auto-Config** | Automatic DNS configuration for custom domains / 自定义域名的自动 DNS 配置 |
 | **FIFO History** | FIFO retention policy (max 200 entries) for deployment history / 部署历史的 FIFO 保留策略（最多 200 条） |
+
+### Direct Upload Technical Details (v0.27.13) / 直接上传技术细节
+
+The Direct Upload feature uses Cloudflare's 4-step API flow:
+直接上传功能使用 Cloudflare 的 4 步 API 流程：
+
+1. **Get Upload Token** / 获取上传令牌 - Obtain JWT for assets API authentication
+2. **Check Missing** / 检查缺失 - Query which files (by MD5 hash) need uploading
+3. **Upload Files** / 上传文件 - Upload missing files in batches (base64 encoded)
+4. **Create Deployment** / 创建部署 - Create deployment with manifest (path → MD5 mapping)
+
+**Note**: Special config files (`_headers`, `_redirects`, `_worker.js`, `_routes.json`) are automatically excluded from the manifest.
+**注意**: 特殊配置文件（`_headers`、`_redirects`、`_worker.js`、`_routes.json`）会自动从清单中排除。
 
 ---
 
