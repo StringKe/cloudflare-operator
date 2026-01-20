@@ -7,6 +7,146 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.6] - 2026-01-20
+
+### Changed
+- **docs**: Update API permissions matrix with detailed per-CRD requirements
+- **docs**: Remove OpenSSF Scorecard badge from README
+
+## [0.27.5] - 2026-01-19
+
+### Added
+- **feat**: CRD completeness improvements with AccessApplication Watch for AccessPolicy
+- **feat**: TunnelBinding migration tooling and documentation
+- **feat**: TunnelGatewayClassConfig DNS management implementation
+
+### Changed
+- **ci**: Use matrix build for multi-arch Docker images (amd64 + arm64)
+
+## [0.27.4] - 2026-01-19
+
+### Changed
+- **ci**: Add native multi-arch support using ARM64 runners
+- **ci**: Simplify CI/CD pipeline for faster releases
+
+## [0.27.3] - 2026-01-18
+
+### Fixed
+- **syncstate**: Sanitize label values to remove invalid characters
+
+### Changed
+- **docs**: Update documentation for v0.27.x features
+
+## [0.27.2] - 2026-01-18
+
+### Added
+- **pages**: Advanced deployment features (Direct Upload, Smart Rollback, Project Adoption)
+  - HTTP/S3/OCI source support for Direct Upload
+  - Checksum verification and archive extraction
+  - Three rollback strategies: LastSuccessful, ByVersion, ExactDeploymentID
+  - Project adoption with MustNotExist/IfExists/MustExist policies
+
+## [0.27.1] - 2026-01-17
+
+### Fixed
+- **networkroute**: Fix VirtualNetworkID adoption and deletion logic
+
+## [0.27.0] - 2026-01-17
+
+### Added
+- **access**: Inline include/exclude/require rules support for AccessApplication policies
+- **access**: Comprehensive tests and documentation for inline policies
+
+### Changed
+- **docs**: Update documentation for v0.24.0-v0.26.0 releases
+
+## [0.26.0] - 2026-01-16
+
+### Added
+- **Cloudflare Pages CRDs** with full six-layer architecture:
+  - `PagesProject` - Pages project management with build config and resource bindings
+  - `PagesDomain` - Custom domain configuration for Pages projects
+  - `PagesDeployment` - Deployment management (create, retry, rollback)
+
+## [0.25.0] - 2026-01-15
+
+### Added
+- **AccessPolicy CRD** for reusable access policies
+  - Can be referenced by multiple AccessApplication resources
+  - Supports all access rule types (email, SAML, OIDC, GitHub, Azure, etc.)
+
+### Fixed
+- **lint**: Resolve deprecatedComment and cognitive-complexity issues
+
+## [0.24.0] - 2026-01-14
+
+### Added
+- **sync**: Unified aggregation pattern for L5 sync controllers
+- **sync**: Complete L5 deletion handling for state consistency
+- **test**: Comprehensive unit and E2E tests for L5 sync controllers
+
+### Fixed
+- **e2e**: Resolve mock server integration for E2E tests
+- **e2e**: Correct API type field names in E2E tests
+
+## [0.23.2] - 2026-01-13
+
+### Added
+- **build**: Modular YAML installer architecture
+  - `cloudflare-operator-full.yaml` - Complete installation
+  - `cloudflare-operator-full-no-webhook.yaml` - Without webhook
+  - `cloudflare-operator-crds.yaml` - CRDs only
+  - `cloudflare-operator-namespace.yaml` - Namespace only
+
+## [0.23.1] - 2026-01-13
+
+### Changed
+- **build(deps)**: Update Go and GitHub Actions dependencies
+
+### Fixed
+- **mockserver**: Correct CreateTunnelRoute API path to match cloudflare-go SDK
+
+## [0.23.0] - 2026-01-12
+
+### Added
+- **e2e**: Comprehensive E2E test framework improvements
+- **controller**: Unified credentials resolution pattern
+- **test**: Comprehensive test infrastructure with mock server
+
+### Fixed
+- **e2e**: Correct field names and remove unused imports
+- **lint**: Resolve all golangci-lint errors
+
+## [0.22.3] - 2026-01-12
+
+### Added
+- **tunnel**: Read-merge-write pattern to fix race conditions
+
+## [0.22.2] - 2026-01-12
+
+### Fixed
+- **tunnel**: Sync warp-routing configuration to Cloudflare Remote Config
+
+## [0.22.1] - 2026-01-12
+
+### Fixed
+- **access**: Include main domain in destinations for API validation
+- **accessapplication**: Add Ingress/Tunnel watch and smart retry mechanism
+
+## [0.22.0] - 2026-01-11
+
+### Added
+- **Six-Layer Unified Sync Architecture** implementation
+  - Layer 1: K8s Resources (user-facing CRDs)
+  - Layer 2: Resource Controllers (lightweight, validation)
+  - Layer 3: Core Services (business logic)
+  - Layer 4: CloudflareSyncState CRD (shared state with optimistic locking)
+  - Layer 5: Sync Controllers (debouncing, aggregation, API calls)
+  - Layer 6: Cloudflare API Client
+- Eliminated race conditions through single sync point design
+- 500ms debouncing for API call aggregation
+- Hash-based change detection to reduce unnecessary API calls
+
 ## [0.21.0] - 2026-01-11
 
 ### Added
@@ -42,7 +182,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `OriginCACertificate` - Cloudflare Origin CA certificate with automatic K8s Secret creation
 - **Registrar CRD**:
   - `DomainRegistration` - Domain registration settings (Enterprise)
-- OpenSSF Scorecard security compliance improvements
 - GitHub Actions security with pinned SHA hashes
 - Minimal token permissions per workflow job
 
@@ -134,30 +273,49 @@ See [GitHub Releases](https://github.com/StringKe/cloudflare-operator/releases) 
 
 ---
 
-## Version Summary (v0.18.0 → v0.21.0)
+## Version Summary
 
-### New CRDs Added (9 total)
+### CRD Count by Version
 
-| CRD | Version | Purpose |
-|-----|---------|---------|
-| CloudflareDomain | v0.19.0 | Multi-zone DNS support, Zone-level configuration |
-| R2Bucket | v0.20.0 | R2 storage bucket management with lifecycle rules |
-| R2BucketDomain | v0.20.0 | Custom domains for R2 buckets |
-| R2BucketNotification | v0.20.0 | Event notifications for R2 buckets |
-| ZoneRuleset | v0.20.0 | WAF, rate limiting, and zone rulesets |
-| TransformRule | v0.20.0 | URL/Header transformation rules |
-| RedirectRule | v0.20.0 | URL redirect rules |
-| OriginCACertificate | v0.20.0 | Origin CA certificate management |
-| DomainRegistration | v0.20.0 | Domain registration (Enterprise) |
+| Version | Total CRDs | New CRDs |
+|---------|------------|----------|
+| v0.27.x | 34 | - |
+| v0.26.0 | 34 | PagesProject, PagesDomain, PagesDeployment |
+| v0.25.0 | 31 | AccessPolicy |
+| v0.24.0 | 30 | - (architecture improvements) |
+| v0.22.0 | 30 | CloudflareSyncState |
+| v0.21.0 | 29 | - (type safety) |
+| v0.20.0 | 29 | R2Bucket, R2BucketDomain, R2BucketNotification, ZoneRuleset, TransformRule, RedirectRule, OriginCACertificate, DomainRegistration |
+| v0.19.0 | 21 | CloudflareDomain |
+| v0.18.0 | 20 | TunnelIngressClassConfig, TunnelGatewayClassConfig |
 
-### Statistics
+### Architecture Milestones
 
-- **Total Commits**: 25+
-- **Lines Added**: ~10,000+
-- **Total CRDs**: 30
-- **New Unit Tests**: 200+
+- **v0.22.0**: Six-Layer Unified Sync Architecture
+- **v0.24.0**: L5 Sync Controller completion
+- **v0.26.0**: Cloudflare Pages support
+- **v0.27.0**: Inline Access policies
 
-[Unreleased]: https://github.com/StringKe/cloudflare-operator/compare/v0.21.0...HEAD
+---
+
+[Unreleased]: https://github.com/StringKe/cloudflare-operator/compare/v0.27.6...HEAD
+[0.27.6]: https://github.com/StringKe/cloudflare-operator/compare/v0.27.5...v0.27.6
+[0.27.5]: https://github.com/StringKe/cloudflare-operator/compare/v0.27.4...v0.27.5
+[0.27.4]: https://github.com/StringKe/cloudflare-operator/compare/v0.27.3...v0.27.4
+[0.27.3]: https://github.com/StringKe/cloudflare-operator/compare/v0.27.2...v0.27.3
+[0.27.2]: https://github.com/StringKe/cloudflare-operator/compare/v0.27.1...v0.27.2
+[0.27.1]: https://github.com/StringKe/cloudflare-operator/compare/v0.27.0...v0.27.1
+[0.27.0]: https://github.com/StringKe/cloudflare-operator/compare/v0.26.0...v0.27.0
+[0.26.0]: https://github.com/StringKe/cloudflare-operator/compare/v0.25.0...v0.26.0
+[0.25.0]: https://github.com/StringKe/cloudflare-operator/compare/v0.24.0...v0.25.0
+[0.24.0]: https://github.com/StringKe/cloudflare-operator/compare/v0.23.2...v0.24.0
+[0.23.2]: https://github.com/StringKe/cloudflare-operator/compare/v0.23.1...v0.23.2
+[0.23.1]: https://github.com/StringKe/cloudflare-operator/compare/v0.23.0...v0.23.1
+[0.23.0]: https://github.com/StringKe/cloudflare-operator/compare/v0.22.3...v0.23.0
+[0.22.3]: https://github.com/StringKe/cloudflare-operator/compare/v0.22.2...v0.22.3
+[0.22.2]: https://github.com/StringKe/cloudflare-operator/compare/v0.22.1...v0.22.2
+[0.22.1]: https://github.com/StringKe/cloudflare-operator/compare/v0.22.0...v0.22.1
+[0.22.0]: https://github.com/StringKe/cloudflare-operator/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/StringKe/cloudflare-operator/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/StringKe/cloudflare-operator/compare/v0.19.5...v0.20.0
 [0.19.5]: https://github.com/StringKe/cloudflare-operator/compare/v0.19.4...v0.19.5
