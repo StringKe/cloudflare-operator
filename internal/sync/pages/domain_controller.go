@@ -164,11 +164,19 @@ func (r *DomainSyncController) syncToCloudflare(
 	// Check if this is a new domain or existing
 	cloudflareID := syncState.Spec.CloudflareID
 
+	// Determine DNS configuration mode
+	autoConfigureDNS := config.AutoConfigureDNS == nil || *config.AutoConfigureDNS
+	dnsConfigMode := "automatic"
+	if !autoConfigureDNS {
+		dnsConfigMode = "manual"
+	}
+
 	if common.IsPendingID(cloudflareID) {
 		// Add new domain
 		logger.Info("Adding new Pages domain",
 			"domain", config.Domain,
-			"projectName", config.ProjectName)
+			"projectName", config.ProjectName,
+			"dnsConfigMode", dnsConfigMode)
 
 		result, err := apiClient.AddPagesDomain(ctx, config.ProjectName, config.Domain)
 		if err != nil {
@@ -191,7 +199,15 @@ func (r *DomainSyncController) syncToCloudflare(
 				logger.Info("Adopted existing Pages domain",
 					"domainId", existingDomain.ID,
 					"domain", existingDomain.Name,
-					"status", existingDomain.Status)
+					"status", existingDomain.Status,
+					"dnsConfigMode", dnsConfigMode)
+
+				// Log DNS configuration notice if manual mode
+				if !autoConfigureDNS {
+					logger.Info("Manual DNS configuration requested - verify DNS records are correctly configured",
+						"domain", config.Domain,
+						"hint", "Create CNAME record pointing to your Pages project's *.pages.dev subdomain")
+				}
 				return nil
 			}
 			return fmt.Errorf("add Pages domain: %w", err)
@@ -205,7 +221,15 @@ func (r *DomainSyncController) syncToCloudflare(
 		logger.Info("Added Pages domain",
 			"domainId", result.ID,
 			"domain", result.Name,
-			"status", result.Status)
+			"status", result.Status,
+			"dnsConfigMode", dnsConfigMode)
+
+		// Log DNS configuration notice if manual mode
+		if !autoConfigureDNS {
+			logger.Info("Manual DNS configuration requested - verify DNS records are correctly configured",
+				"domain", config.Domain,
+				"hint", "Create CNAME record pointing to your Pages project's *.pages.dev subdomain")
+		}
 	} else {
 		// Check if domain exists (domains can only be added/deleted, not updated)
 		logger.Info("Verifying Pages domain exists",
