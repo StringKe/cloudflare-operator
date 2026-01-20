@@ -236,22 +236,29 @@ func TestPagesDomainConfig(t *testing.T) {
 	assert.Equal(t, "my-project", config.ProjectName)
 }
 
-func TestPagesDeploymentActionConfig(t *testing.T) {
-	// Test create action
-	createConfig := PagesDeploymentActionConfig{
-		ProjectName:     "my-project",
-		Branch:          "main",
-		Action:          "create",
+func TestPagesDeploymentConfig(t *testing.T) {
+	// Test new Source-based configuration (preferred)
+	gitConfig := PagesDeploymentConfig{
+		ProjectName: "my-project",
+		Environment: "production",
+		Source: &DeploymentSourceConfig{
+			Type: "git",
+			Git: &GitSourceConfig{
+				Branch: "main",
+			},
+		},
 		PurgeBuildCache: true,
 	}
 
-	assert.Equal(t, "my-project", createConfig.ProjectName)
-	assert.Equal(t, "main", createConfig.Branch)
-	assert.Equal(t, "create", createConfig.Action)
-	assert.True(t, createConfig.PurgeBuildCache)
+	assert.Equal(t, "my-project", gitConfig.ProjectName)
+	assert.Equal(t, "production", gitConfig.Environment)
+	assert.NotNil(t, gitConfig.Source)
+	assert.Equal(t, "git", gitConfig.Source.Type)
+	assert.Equal(t, "main", gitConfig.Source.Git.Branch)
+	assert.True(t, gitConfig.PurgeBuildCache)
 
-	// Test retry action
-	retryConfig := PagesDeploymentActionConfig{
+	// Test legacy retry action (deprecated)
+	retryConfig := PagesDeploymentConfig{
 		ProjectName:        "my-project",
 		Action:             "retry",
 		TargetDeploymentID: "deploy-123",
@@ -260,8 +267,8 @@ func TestPagesDeploymentActionConfig(t *testing.T) {
 	assert.Equal(t, "retry", retryConfig.Action)
 	assert.Equal(t, "deploy-123", retryConfig.TargetDeploymentID)
 
-	// Test rollback action
-	rollbackConfig := PagesDeploymentActionConfig{
+	// Test legacy rollback action (deprecated)
+	rollbackConfig := PagesDeploymentConfig{
 		ProjectName:        "my-project",
 		Action:             "rollback",
 		TargetDeploymentID: "deploy-456",
@@ -269,6 +276,19 @@ func TestPagesDeploymentActionConfig(t *testing.T) {
 
 	assert.Equal(t, "rollback", rollbackConfig.Action)
 	assert.Equal(t, "deploy-456", rollbackConfig.TargetDeploymentID)
+
+	// Test direct upload source
+	directUploadConfig := PagesDeploymentConfig{
+		ProjectName: "my-project",
+		Environment: "preview",
+		Source: &DeploymentSourceConfig{
+			Type:         "directUpload",
+			DirectUpload: &DirectUploadConfig{},
+		},
+	}
+
+	assert.Equal(t, "preview", directUploadConfig.Environment)
+	assert.Equal(t, "directUpload", directUploadConfig.Source.Type)
 }
 
 func TestProjectRegisterOptions(t *testing.T) {
@@ -311,17 +331,23 @@ func TestDeploymentRegisterOptions(t *testing.T) {
 		DeploymentID: "deploy-123",
 		ProjectName:  "my-project",
 		AccountID:    "account-123",
-		Config: PagesDeploymentActionConfig{
+		Config: PagesDeploymentConfig{
 			ProjectName: "my-project",
-			Branch:      "main",
-			Action:      "create",
+			Environment: "production",
+			Source: &DeploymentSourceConfig{
+				Type: "git",
+				Git: &GitSourceConfig{
+					Branch: "main",
+				},
+			},
 		},
 	}
 
 	assert.Equal(t, "deploy-123", opts.DeploymentID)
 	assert.Equal(t, "my-project", opts.ProjectName)
 	assert.Equal(t, "account-123", opts.AccountID)
-	assert.Equal(t, "create", opts.Config.Action)
+	assert.Equal(t, "production", opts.Config.Environment)
+	assert.Equal(t, "git", opts.Config.Source.Type)
 }
 
 func TestPagesEnvVarTypes(t *testing.T) {

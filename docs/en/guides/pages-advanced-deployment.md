@@ -1,8 +1,8 @@
 # Pages Advanced Deployment Guide
 
-This guide covers advanced deployment features for Cloudflare Pages including Direct Upload, Smart Rollback, Project Adoption, and Web Analytics integration.
+This guide covers advanced deployment features for Cloudflare Pages including the new Persistent Version Entity model, Direct Upload, Smart Rollback, Project Adoption, and Web Analytics integration.
 
-> **Version**: v0.27.13+
+> **Version**: v0.28.0+
 
 ## Overview
 
@@ -10,11 +10,52 @@ The Cloudflare Operator provides powerful features for managing Pages deployment
 
 | Feature | Description | Use Case |
 |---------|-------------|----------|
+| **Persistent Version Entity** | Deployments as persistent K8s resources | GitOps version management |
+| **Environment Control** | Explicit production/preview environment | Multi-environment workflows |
+| **Git Source** | Deploy from Git branches/commits | Standard CI/CD integration |
 | **Direct Upload** | Deploy static files from external sources | CI/CD pipelines, build artifact storage |
 | **Smart Rollback** | Intelligent rollback with multiple strategies | Quick recovery from failed deployments |
 | **Project Adoption** | Import existing Cloudflare Pages projects | Migrate existing projects to GitOps |
 | **Web Analytics** | Automatic Web Analytics integration | Monitor site performance |
 | **Force Redeploy** | Trigger new deployment without config changes | Re-deploy same source |
+
+---
+
+## Persistent Version Entity Model
+
+> **New in v0.28.0**
+
+PagesDeployment has been redesigned from a "one-time operation" pattern to a "persistent version entity" pattern.
+
+### Key Concepts
+
+| Aspect | Previous Design | New Design |
+|--------|-----------------|------------|
+| **Model** | One-time operation (Action: create/retry/rollback) | Persistent version entity |
+| **State** | Becomes dead state after execution | Persists, represents a deployment version |
+| **Quantity** | One per operation | Multiple per Project |
+| **Environment** | Only in Status | Declared in Spec (production/preview) |
+| **Source** | Mixed Branch + DirectUpload | Unified source structure (git/directUpload) |
+
+### Production Uniqueness
+
+**Important**: Each PagesProject can only have **one** production environment PagesDeployment at a time.
+
+```
+my-app-project/
+├── my-app-prod           # environment: production ✓
+├── my-app-preview-v1     # environment: preview ✓
+├── my-app-preview-v2     # environment: preview ✓
+└── my-app-prod-v2        # environment: production ✗ (rejected - already has production)
+```
+
+### Production Deletion Protection
+
+Deleting the only production PagesDeployment is blocked to prevent accidental production outage. You must either:
+- Create a new production deployment first
+- Or delete the entire PagesProject
+
+---
 
 ## Architecture
 
@@ -24,7 +65,8 @@ config:
   layout: elk
 ---
 flowchart TB
-    subgraph Sources["External Sources"]
+    subgraph Sources["Deployment Sources"]
+        GIT["Git Branch/Commit"]
         HTTP["HTTP/HTTPS URL"]
         S3["S3/R2/MinIO"]
         OCI["OCI Registry"]
@@ -38,7 +80,8 @@ flowchart TB
         MD5["MD5 Hash Generation"]
     end
 
-    subgraph CloudflareAPI["Cloudflare Pages API (4-Step Flow)"]
+    subgraph CloudflareAPI["Cloudflare Pages API"]
+        GITDEP["Git Deployment API"]
         JWT["1. Get Upload Token (JWT)"]
         CHK["2. Check Missing Assets"]
         UPL["3. Upload Missing Files"]
@@ -51,10 +94,12 @@ flowchart TB
         DEPLOY["Deployment"]
     end
 
+    GIT --> PD
     HTTP --> UP
     S3 --> UP
     OCI --> UP
 
+    PD --> GITDEP
     UP --> CS
     CS --> AR
     AR --> MD5
@@ -64,9 +109,209 @@ flowchart TB
     CHK --> UPL
     UPL --> UPS
     UPS --> DEP
+    GITDEP --> PP
     DEP --> PP
     PP --> DEPLOY
 ```
+
+---
+
+## PagesDeployment Spec
+
+### New Format (Recommended)
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDeployment
+metadata:
+  name: my-app-prod
+spec:
+  projectRef:
+    name: my-pages-project
+
+  # NEW: Deployment environment (required)
+  environment: production  # or "preview"
+
+  # NEW: Unified source configuration (required)
+  source:
+    type: git  # or "directUpload"
+    git:
+      branch: main
+      commitSha: "abc123def456"  # optional: specific commit
+
+  purgeBuildCache: false
+
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+### Spec Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `projectRef` | object | Yes | Reference to the PagesProject |
+| `environment` | string | Yes* | `production` or `preview` |
+| `source` | object | Yes* | Deployment source configuration |
+| `purgeBuildCache` | bool | No | Purge build cache before deployment |
+| `cloudflare` | object | Yes | Cloudflare account and credentials |
+
+*Required for new format. Legacy fields still supported for backward compatibility.
+
+### Source Types
+
+#### Git Source
+
+```yaml
+source:
+  type: git
+  git:
+    branch: main           # Branch to deploy
+    commitSha: "abc123"    # Optional: specific commit SHA
+```
+
+#### Direct Upload Source
+
+```yaml
+source:
+  type: directUpload
+  directUpload:
+    source:
+      http:
+        url: "https://example.com/dist.tar.gz"
+    archive:
+      type: tar.gz
+    checksum:
+      algorithm: sha256
+      value: "e3b0c44..."
+```
+
+---
+
+## Status Fields
+
+PagesDeployment status now includes rich deployment information:
+
+```yaml
+status:
+  # Core fields
+  deploymentId: "abc123def456"
+  projectName: "my-pages-project"
+  state: Succeeded        # Pending, Building, Succeeded, Failed
+
+  # URL fields
+  url: "my-pages-project.pages.dev"
+  hashUrl: "abc123def.my-pages-project.pages.dev"
+  branchUrl: "main.my-pages-project.pages.dev"
+
+  # Environment fields
+  environment: production
+  isCurrentProduction: true
+
+  # Version tracking
+  version: 5
+  sourceDescription: "git:main@abc123"
+
+  # Stage tracking
+  stage: deploy          # queued, initialize, clone_repo, build, deploy
+
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: DeploymentSucceeded
+```
+
+### Status Field Descriptions
+
+| Field | Description |
+|-------|-------------|
+| `deploymentId` | Cloudflare deployment ID |
+| `hashUrl` | Unique hash-based URL (e.g., `<hash>.project.pages.dev`) |
+| `branchUrl` | Branch-based URL (e.g., `<branch>.project.pages.dev`) |
+| `environment` | Deployment environment (production/preview) |
+| `isCurrentProduction` | Whether this is the active production deployment |
+| `version` | Sequential version number within the project |
+| `sourceDescription` | Human-readable source description |
+
+---
+
+## Git Source Deployment
+
+Deploy directly from a Git branch or commit:
+
+### Basic Git Deployment
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDeployment
+metadata:
+  name: my-app-prod
+spec:
+  projectRef:
+    name: my-app
+  environment: production
+  source:
+    type: git
+    git:
+      branch: main
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+### Deploy Specific Commit
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDeployment
+metadata:
+  name: my-app-hotfix
+spec:
+  projectRef:
+    name: my-app
+  environment: preview
+  source:
+    type: git
+    git:
+      branch: main
+      commitSha: "abc123def456789"  # Deploy this specific commit
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+### Preview Deployment from Feature Branch
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDeployment
+metadata:
+  name: my-app-feature-x
+spec:
+  projectRef:
+    name: my-app
+  environment: preview
+  source:
+    type: git
+    git:
+      branch: feature/new-feature
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+---
+
+## Direct Upload
+
+Direct Upload allows deploying static files without a Git repository. This is ideal for:
+- CI/CD pipelines that build artifacts separately
+- Pre-built static sites stored in object storage
+- Air-gapped environments without Git access
 
 ### Direct Upload API Flow
 
@@ -83,15 +328,6 @@ The operator implements Cloudflare's Direct Upload API using a 4-step flow:
 - Special Pages config files (`_headers`, `_redirects`, `_worker.js`, `_routes.json`) are excluded from the manifest
 - Files are uploaded in batches of 100 for efficiency
 - Both API Token and Global API Key authentication are supported
-
----
-
-## Direct Upload
-
-Direct Upload allows deploying static files without a Git repository. This is ideal for:
-- CI/CD pipelines that build artifacts separately
-- Pre-built static sites stored in object storage
-- Air-gapped environments without Git access
 
 ### Supported Sources
 
@@ -111,18 +347,20 @@ metadata:
 spec:
   projectRef:
     name: my-app
-  action: create
-  directUpload:
-    source:
-      http:
-        url: "https://artifacts.example.com/builds/my-app/latest.tar.gz"
-        headers:
-          Authorization: "Bearer ${CI_TOKEN}"
-        timeout: "10m"
-        insecureSkipVerify: false  # Only for testing
-    archive:
-      type: tar.gz
-      stripComponents: 1
+  environment: production
+  source:
+    type: directUpload
+    directUpload:
+      source:
+        http:
+          url: "https://artifacts.example.com/builds/my-app/latest.tar.gz"
+          headers:
+            Authorization: "Bearer ${CI_TOKEN}"
+          timeout: "10m"
+          insecureSkipVerify: false  # Only for testing
+      archive:
+        type: tar.gz
+        stripComponents: 1
   cloudflare:
     accountId: "your-account-id"
     credentialsRef:
@@ -149,20 +387,22 @@ metadata:
 spec:
   projectRef:
     name: my-app
-  action: create
-  directUpload:
-    source:
-      s3:
-        bucket: my-ci-artifacts
-        key: builds/my-app/v1.2.3/dist.tar.gz
-        region: us-east-1
-        credentialsSecretRef:
-          name: aws-credentials
-    checksum:
-      algorithm: sha256
-      value: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    archive:
-      type: tar.gz
+  environment: production
+  source:
+    type: directUpload
+    directUpload:
+      source:
+        s3:
+          bucket: my-ci-artifacts
+          key: builds/my-app/v1.2.3/dist.tar.gz
+          region: us-east-1
+          credentialsSecretRef:
+            name: aws-credentials
+      checksum:
+        algorithm: sha256
+        value: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      archive:
+        type: tar.gz
   cloudflare:
     accountId: "your-account-id"
     credentialsRef:
@@ -199,30 +439,34 @@ stringData:
 #### Cloudflare R2
 
 ```yaml
-directUpload:
-  source:
-    s3:
-      bucket: my-build-artifacts
-      key: dist.tar.gz
-      endpoint: "https://YOUR_ACCOUNT_ID.r2.cloudflarestorage.com"
-      credentialsSecretRef:
-        name: r2-credentials
-      usePathStyle: true  # Required for R2
+source:
+  type: directUpload
+  directUpload:
+    source:
+      s3:
+        bucket: my-build-artifacts
+        key: dist.tar.gz
+        endpoint: "https://YOUR_ACCOUNT_ID.r2.cloudflarestorage.com"
+        credentialsSecretRef:
+          name: r2-credentials
+        usePathStyle: true  # Required for R2
 ```
 
 #### MinIO
 
 ```yaml
-directUpload:
-  source:
-    s3:
-      bucket: builds
-      key: my-app/dist.tar.gz
-      endpoint: "https://minio.internal.example.com"
-      region: us-east-1  # Required even for MinIO
-      credentialsSecretRef:
-        name: minio-credentials
-      usePathStyle: true
+source:
+  type: directUpload
+  directUpload:
+    source:
+      s3:
+        bucket: builds
+        key: my-app/dist.tar.gz
+        endpoint: "https://minio.internal.example.com"
+        region: us-east-1  # Required even for MinIO
+        credentialsSecretRef:
+          name: minio-credentials
+        usePathStyle: true
 ```
 
 ### OCI Source
@@ -237,15 +481,17 @@ metadata:
 spec:
   projectRef:
     name: my-app
-  action: create
-  directUpload:
-    source:
-      oci:
-        image: "ghcr.io/my-org/my-app-dist:v1.2.3"
-        credentialsSecretRef:
-          name: ghcr-credentials
-    archive:
-      type: tar.gz
+  environment: production
+  source:
+    type: directUpload
+    directUpload:
+      source:
+        oci:
+          image: "ghcr.io/my-org/my-app-dist:v1.2.3"
+          credentialsSecretRef:
+            name: ghcr-credentials
+      archive:
+        type: tar.gz
   cloudflare:
     accountId: "your-account-id"
     credentialsRef:
@@ -283,13 +529,15 @@ stringData:
 Verify file integrity before deployment:
 
 ```yaml
-directUpload:
-  source:
-    http:
-      url: "https://example.com/dist.tar.gz"
-  checksum:
-    algorithm: sha256  # sha256 (default), sha512, md5
-    value: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+source:
+  type: directUpload
+  directUpload:
+    source:
+      http:
+        url: "https://example.com/dist.tar.gz"
+    checksum:
+      algorithm: sha256  # sha256 (default), sha512, md5
+      value: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 ```
 
 If the checksum doesn't match, the deployment will fail with an error.
@@ -299,11 +547,13 @@ If the checksum doesn't match, the deployment will fail with an error.
 Configure how to extract the downloaded archive:
 
 ```yaml
-directUpload:
-  archive:
-    type: tar.gz      # tar.gz, tar, zip, none
-    stripComponents: 1  # Remove top-level directory
-    subPath: "dist"     # Extract only this subdirectory
+source:
+  type: directUpload
+  directUpload:
+    archive:
+      type: tar.gz      # tar.gz, tar, zip, none
+      stripComponents: 1  # Remove top-level directory
+      subPath: "dist"     # Extract only this subdirectory
 ```
 
 #### Archive Options
@@ -352,17 +602,19 @@ metadata:
 spec:
   projectRef:
     name: my-app
-  action: create
-  directUpload:
-    source:
-      s3:
-        bucket: my-artifacts
-        key: builds/latest/dist.tar.gz
-        region: us-east-1
-        credentialsSecretRef:
-          name: aws-credentials
-    archive:
-      type: tar.gz
+  environment: production
+  source:
+    type: directUpload
+    directUpload:
+      source:
+        s3:
+          bucket: my-artifacts
+          key: builds/latest/dist.tar.gz
+          region: us-east-1
+          credentialsSecretRef:
+            name: aws-credentials
+      archive:
+        type: tar.gz
   cloudflare:
     accountId: "your-account-id"
     credentialsRef:
@@ -390,6 +642,8 @@ Smart Rollback provides intelligent deployment rollback with three strategies:
 | `LastSuccessful` | Roll back to the last successful deployment | Quick recovery |
 | `ByVersion` | Roll back to a specific version number | Precise control |
 | `ExactDeploymentID` | Roll back to a specific Cloudflare deployment | Maximum precision |
+
+> **Note**: The rollback feature uses legacy fields (`action: rollback`). For new deployments, consider creating a new PagesDeployment pointing to the desired source instead.
 
 ### Rollback Strategies
 
@@ -533,6 +787,72 @@ kubectl get pagesproject my-app -o jsonpath='{.status.lastSuccessfulDeploymentId
 # View latest deployment info
 kubectl get pagesproject my-app -o jsonpath='{.status.latestDeployment}' | jq
 ```
+
+---
+
+## Migration from Legacy Format
+
+### Legacy Format (Deprecated)
+
+```yaml
+# OLD - Deprecated
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDeployment
+metadata:
+  name: my-app-deploy
+spec:
+  projectRef:
+    name: my-app
+  action: create           # DEPRECATED
+  branch: main             # DEPRECATED
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+### New Format (Recommended)
+
+```yaml
+# NEW - Recommended
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDeployment
+metadata:
+  name: my-app-prod
+spec:
+  projectRef:
+    name: my-app
+  environment: production  # NEW: explicit environment
+  source:                  # NEW: unified source config
+    type: git
+    git:
+      branch: main
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+### Automatic Conversion
+
+The controller automatically converts legacy format to new format:
+
+| Legacy Field | Converted To |
+|--------------|--------------|
+| `action: create` + `branch` | `environment: preview` + `source.type: git` |
+| `action: create` + `directUpload` | `environment: preview` + `source.type: directUpload` |
+| `action: retry` | (handled as legacy) |
+| `action: rollback` | (handled as legacy) |
+
+A deprecation warning event is recorded when legacy fields are used.
+
+### Migration Checklist
+
+1. Replace `action: create` with explicit `environment` field
+2. Move `branch` to `source.git.branch`
+3. Move `directUpload` to `source.directUpload`
+4. Set appropriate `environment` (production or preview)
+5. Ensure only one production deployment per project
 
 ---
 
@@ -771,20 +1091,22 @@ jobs:
           spec:
             projectRef:
               name: my-app
-            action: create
-            directUpload:
-              source:
-                s3:
-                  bucket: my-artifacts
-                  key: builds/${{ github.sha }}/dist.tar.gz
-                  region: us-east-1
-                  credentialsSecretRef:
-                    name: aws-credentials
-              checksum:
-                algorithm: sha256
-                value: "${{ needs.build.outputs.sha256 }}"
-              archive:
-                type: tar.gz
+            environment: production
+            source:
+              type: directUpload
+              directUpload:
+                source:
+                  s3:
+                    bucket: my-artifacts
+                    key: builds/${{ github.sha }}/dist.tar.gz
+                    region: us-east-1
+                    credentialsSecretRef:
+                      name: aws-credentials
+                checksum:
+                  algorithm: sha256
+                  value: "${{ needs.build.outputs.sha256 }}"
+                archive:
+                  type: tar.gz
             cloudflare:
               accountId: "${{ secrets.CF_ACCOUNT_ID }}"
               credentialsRef:
@@ -797,6 +1119,29 @@ jobs:
 ## Troubleshooting
 
 ### Common Issues
+
+#### Production Uniqueness Error
+
+```
+Error: production environment already exists for project "my-app": default/my-app-prod
+```
+
+**Cause**: Attempting to create a second production PagesDeployment.
+
+**Solution**: Each project can only have one production deployment. Either:
+- Delete the existing production deployment first
+- Use `environment: preview` for the new deployment
+- Update the existing production deployment instead
+
+#### Production Deletion Blocked
+
+```
+Error: cannot delete the only production deployment, create a new production deployment first
+```
+
+**Cause**: Attempting to delete the only production PagesDeployment.
+
+**Solution**: Create a new production deployment before deleting the existing one.
 
 #### Checksum Mismatch
 
@@ -852,6 +1197,9 @@ kubectl logs -n cloudflare-operator-system deployment/cloudflare-operator-contro
 
 # View project status
 kubectl get pagesproject my-app -o yaml
+
+# List all deployments for a project
+kubectl get pagesdeployment -l cloudflare-operator.io/project=my-app
 ```
 
 ---

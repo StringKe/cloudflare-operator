@@ -34,6 +34,7 @@ const (
 )
 
 // PagesDeploymentAction defines the action to perform
+// Deprecated: Use Environment and Source instead. Action will be removed in v1alpha3.
 // +kubebuilder:validation:Enum=create;retry;rollback
 type PagesDeploymentAction string
 
@@ -45,6 +46,81 @@ const (
 	// PagesDeploymentActionRollback rolls back to a previous deployment
 	PagesDeploymentActionRollback PagesDeploymentAction = "rollback"
 )
+
+// PagesDeploymentEnvironment defines the deployment environment.
+// +kubebuilder:validation:Enum=production;preview
+type PagesDeploymentEnvironment string
+
+const (
+	// PagesDeploymentEnvironmentProduction is the production environment.
+	// Only one PagesDeployment can be the production deployment for a given PagesProject.
+	PagesDeploymentEnvironmentProduction PagesDeploymentEnvironment = "production"
+	// PagesDeploymentEnvironmentPreview is the preview environment.
+	// Multiple preview deployments can exist for a given PagesProject.
+	PagesDeploymentEnvironmentPreview PagesDeploymentEnvironment = "preview"
+)
+
+// PagesDeploymentSourceType defines the type of deployment source.
+// +kubebuilder:validation:Enum=git;directUpload
+type PagesDeploymentSourceType string
+
+const (
+	// PagesDeploymentSourceTypeGit deploys from a git repository branch.
+	PagesDeploymentSourceTypeGit PagesDeploymentSourceType = "git"
+	// PagesDeploymentSourceTypeDirectUpload deploys static files via direct upload.
+	PagesDeploymentSourceTypeDirectUpload PagesDeploymentSourceType = "directUpload"
+)
+
+// PagesDeploymentSourceSpec defines the source configuration for a deployment.
+// Only one source type should be specified.
+type PagesDeploymentSourceSpec struct {
+	// Type is the source type (git or directUpload).
+	// +kubebuilder:validation:Required
+	Type PagesDeploymentSourceType `json:"type"`
+
+	// Git contains git-based deployment configuration.
+	// Required when type is "git".
+	// +kubebuilder:validation:Optional
+	Git *PagesGitSourceSpec `json:"git,omitempty"`
+
+	// DirectUpload contains direct upload deployment configuration.
+	// Required when type is "directUpload".
+	// +kubebuilder:validation:Optional
+	DirectUpload *PagesDirectUploadSourceSpec `json:"directUpload,omitempty"`
+}
+
+// PagesGitSourceSpec defines git-based deployment source.
+type PagesGitSourceSpec struct {
+	// Branch is the branch to deploy from.
+	// If not specified, uses the project's production branch.
+	// +kubebuilder:validation:Optional
+	Branch string `json:"branch,omitempty"`
+
+	// CommitSha is the specific commit SHA to deploy.
+	// If specified, overrides the branch's HEAD.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Pattern=`^[a-f0-9]{7,40}$`
+	CommitSha string `json:"commitSha,omitempty"`
+}
+
+// PagesDirectUploadSourceSpec defines direct upload deployment source.
+// This reuses the existing PagesDirectUpload structure for backwards compatibility.
+type PagesDirectUploadSourceSpec struct {
+	// Source defines where to fetch the deployment files from.
+	// Supports HTTP/HTTPS URLs, S3-compatible storage, and OCI registries.
+	// +kubebuilder:validation:Required
+	Source *DirectUploadSource `json:"source"`
+
+	// Checksum for file integrity verification.
+	// When specified, the downloaded file will be verified before extraction.
+	// +kubebuilder:validation:Optional
+	Checksum *ChecksumConfig `json:"checksum,omitempty"`
+
+	// Archive configuration for compressed files.
+	// Specifies how to extract the downloaded archive.
+	// +kubebuilder:validation:Optional
+	Archive *ArchiveConfig `json:"archive,omitempty"`
+}
 
 // PagesDirectUpload configures direct upload deployment.
 type PagesDirectUpload struct {
@@ -262,43 +338,56 @@ type PagesDeploymentSpec struct {
 	// +kubebuilder:validation:Required
 	ProjectRef PagesProjectRef `json:"projectRef"`
 
-	// Branch is the branch to deploy from (for git-based deployments).
-	// If not specified, uses the project's production branch.
+	// Environment specifies the deployment environment.
+	// - production: The production deployment (only one per project)
+	// - preview: Preview deployments (multiple allowed)
 	// +kubebuilder:validation:Optional
-	Branch string `json:"branch,omitempty"`
+	// +kubebuilder:validation:Enum=production;preview
+	Environment PagesDeploymentEnvironment `json:"environment,omitempty"`
 
-	// Action is the deployment action to perform.
-	// - create: Create a new deployment (default)
-	// - retry: Retry a failed deployment
-	// - rollback: Rollback to a previous deployment
-	// +kubebuilder:validation:Enum=create;retry;rollback
-	// +kubebuilder:default=create
-	Action PagesDeploymentAction `json:"action,omitempty"`
-
-	// TargetDeploymentID is the deployment ID to retry or rollback to.
-	// Required when action is "retry" or "rollback".
+	// Source defines the deployment source configuration.
+	// When specified, uses the new declarative deployment model.
 	// +kubebuilder:validation:Optional
-	TargetDeploymentID string `json:"targetDeploymentId,omitempty"`
+	Source *PagesDeploymentSourceSpec `json:"source,omitempty"`
 
 	// PurgeBuildCache purges the build cache before deployment.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default=false
 	PurgeBuildCache bool `json:"purgeBuildCache,omitempty"`
 
+	// Cloudflare contains Cloudflare-specific configuration.
+	// +kubebuilder:validation:Required
+	Cloudflare CloudflareDetails `json:"cloudflare"`
+
+	// ========== DEPRECATED FIELDS (for backward compatibility) ==========
+	// These fields will be removed in v1alpha3. Use Environment and Source instead.
+
+	// Branch is the branch to deploy from (for git-based deployments).
+	// Deprecated: Use Source.Git.Branch instead.
+	// +kubebuilder:validation:Optional
+	Branch string `json:"branch,omitempty"`
+
+	// Action is the deployment action to perform.
+	// Deprecated: Use Environment and Source instead. Rollback should be done by
+	// creating a new deployment with the same source as the target.
+	// +kubebuilder:validation:Enum=create;retry;rollback
+	// +kubebuilder:default=create
+	Action PagesDeploymentAction `json:"action,omitempty"`
+
+	// TargetDeploymentID is the deployment ID to retry or rollback to.
+	// Deprecated: Use Rollback.DeploymentID or create a new deployment instead.
+	// +kubebuilder:validation:Optional
+	TargetDeploymentID string `json:"targetDeploymentId,omitempty"`
+
 	// DirectUpload configures direct upload deployment.
-	// Use this for deploying static files without a git repository.
+	// Deprecated: Use Source.DirectUpload instead.
 	// +kubebuilder:validation:Optional
 	DirectUpload *PagesDirectUpload `json:"directUpload,omitempty"`
 
 	// Rollback configuration for intelligent deployment rollback.
-	// Use this when action is "rollback" and you want smart rollback selection.
-	// If not specified with rollback action, TargetDeploymentID must be set.
+	// Deprecated: Create a new PagesDeployment with the desired source instead.
 	// +kubebuilder:validation:Optional
 	Rollback *RollbackConfig `json:"rollback,omitempty"`
-
-	// Cloudflare contains Cloudflare-specific configuration.
-	// +kubebuilder:validation:Required
-	Cloudflare CloudflareDetails `json:"cloudflare"`
 }
 
 // PagesDeploymentStatus defines the observed state of PagesDeployment
@@ -315,13 +404,37 @@ type PagesDeploymentStatus struct {
 	// +kubebuilder:validation:Optional
 	AccountID string `json:"accountId,omitempty"`
 
-	// URL is the deployment URL.
+	// URL is the primary deployment URL.
+	// For production: <project>.pages.dev
+	// For preview: <hash>.<project>.pages.dev
 	// +kubebuilder:validation:Optional
 	URL string `json:"url,omitempty"`
+
+	// HashURL is the unique hash-based URL for this deployment.
+	// Format: <hash>.<project>.pages.dev
+	// This URL is immutable and always points to this specific deployment.
+	// +kubebuilder:validation:Optional
+	HashURL string `json:"hashUrl,omitempty"`
+
+	// BranchURL is the branch-based URL for this deployment (if applicable).
+	// Format: <branch>.<project>.pages.dev
+	// This URL points to the latest deployment for this branch.
+	// +kubebuilder:validation:Optional
+	BranchURL string `json:"branchUrl,omitempty"`
 
 	// Environment is the deployment environment (production or preview).
 	// +kubebuilder:validation:Optional
 	Environment string `json:"environment,omitempty"`
+
+	// IsCurrentProduction indicates if this is the current production deployment.
+	// Only relevant when Environment is "production".
+	// +kubebuilder:validation:Optional
+	IsCurrentProduction bool `json:"isCurrentProduction,omitempty"`
+
+	// Version is the sequential version number within the project.
+	// Increments with each new deployment.
+	// +kubebuilder:validation:Optional
+	Version int `json:"version,omitempty"`
 
 	// ProductionBranch is the production branch used.
 	// +kubebuilder:validation:Optional
@@ -342,6 +455,11 @@ type PagesDeploymentStatus struct {
 	// Source is the deployment source info.
 	// +kubebuilder:validation:Optional
 	Source *PagesDeploymentSource `json:"source,omitempty"`
+
+	// SourceDescription is a human-readable description of the deployment source.
+	// Examples: "git:main", "git:feature-branch@abc123", "directUpload:http"
+	// +kubebuilder:validation:Optional
+	SourceDescription string `json:"sourceDescription,omitempty"`
 
 	// State is the current state of the deployment.
 	// +kubebuilder:validation:Optional

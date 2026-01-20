@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -198,6 +199,20 @@ type DeploymentSyncStatus struct {
 	URL string
 	// SyncStateID is the name of the SyncState resource
 	SyncStateID string
+
+	// New fields for enhanced status reporting
+	// HashURL is the unique hash-based URL for this deployment
+	HashURL string
+	// BranchURL is the branch-based URL for this deployment
+	BranchURL string
+	// Environment is the deployment environment (production or preview)
+	Environment string
+	// IsCurrentProduction indicates if this is the current production deployment
+	IsCurrentProduction bool
+	// Version is the sequential version number within the project
+	Version int
+	// SourceDescription describes the deployment source
+	SourceDescription string
 }
 
 // GetSyncStatus returns the sync status for a Pages deployment.
@@ -245,15 +260,18 @@ func (s *DeploymentService) GetSyncStatus(ctx context.Context, source service.So
 			deploymentID = ""
 		}
 
-		// Read Stage and URL from ResultData (stored by Sync Controller)
-		stage := ""
-		url := ""
+		// Read status fields from ResultData (stored by Sync Controller)
+		status := &DeploymentSyncStatus{
+			IsSynced:    isSynced,
+			SyncStateID: syncState.Name,
+		}
+
 		if syncState.Status.ResultData != nil {
 			if v, ok := syncState.Status.ResultData["stage"]; ok {
-				stage = v
+				status.Stage = v
 			}
 			if v, ok := syncState.Status.ResultData["url"]; ok {
-				url = v
+				status.URL = v
 			}
 			// Also try to get deploymentId from ResultData as fallback
 			if deploymentID == "" {
@@ -261,15 +279,31 @@ func (s *DeploymentService) GetSyncStatus(ctx context.Context, source service.So
 					deploymentID = v
 				}
 			}
+			// Read new fields
+			if v, ok := syncState.Status.ResultData["hashUrl"]; ok {
+				status.HashURL = v
+			}
+			if v, ok := syncState.Status.ResultData["branchUrl"]; ok {
+				status.BranchURL = v
+			}
+			if v, ok := syncState.Status.ResultData["environment"]; ok {
+				status.Environment = v
+			}
+			if v, ok := syncState.Status.ResultData["isCurrentProduction"]; ok && v == "true" {
+				status.IsCurrentProduction = true
+			}
+			if v, ok := syncState.Status.ResultData["version"]; ok {
+				if version, err := strconv.Atoi(v); err == nil {
+					status.Version = version
+				}
+			}
+			if v, ok := syncState.Status.ResultData["sourceDescription"]; ok {
+				status.SourceDescription = v
+			}
 		}
 
-		return &DeploymentSyncStatus{
-			IsSynced:     isSynced,
-			DeploymentID: deploymentID,
-			Stage:        stage,
-			URL:          url,
-			SyncStateID:  syncState.Name,
-		}, nil
+		status.DeploymentID = deploymentID
+		return status, nil
 	}
 
 	return nil, nil

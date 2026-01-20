@@ -25,6 +25,18 @@ import (
 const (
 	// DeploymentFinalizerName is the finalizer for Pages Deployment SyncState resources.
 	DeploymentFinalizerName = "pages-deployment.sync.cloudflare-operator.io/finalizer"
+
+	// Source type constants
+	sourceTypeGit          = "git"
+	sourceTypeDirectUpload = "directUpload"
+
+	// Stage constants
+	stageActive  = "active"
+	stageSuccess = "success"
+	stageDeploy  = "deploy"
+
+	// Environment constants
+	envProduction = "production"
 )
 
 // DeploymentSyncController is the Sync Controller for Pages Deployment Configuration.
@@ -194,8 +206,8 @@ func (r *DeploymentSyncController) Reconcile(ctx context.Context, req ctrl.Reque
 }
 
 // extractConfig extracts Pages deployment configuration from SyncState sources.
-func (*DeploymentSyncController) extractConfig(syncState *v1alpha2.CloudflareSyncState) (*pagessvc.PagesDeploymentActionConfig, error) {
-	return common.ExtractFirstSourceConfig[pagessvc.PagesDeploymentActionConfig](syncState)
+func (*DeploymentSyncController) extractConfig(syncState *v1alpha2.CloudflareSyncState) (*pagessvc.PagesDeploymentConfig, error) {
+	return common.ExtractFirstSourceConfig[pagessvc.PagesDeploymentConfig](syncState)
 }
 
 // DeploymentResult contains the result of a deployment action.
@@ -203,6 +215,18 @@ type DeploymentResult struct {
 	DeploymentID string
 	URL          string
 	Stage        string
+	// HashURL is the unique hash-based URL for this deployment.
+	// Format: <hash>.<project>.pages.dev
+	HashURL string
+	// BranchURL is the branch-based URL for this deployment.
+	// Format: <branch>.<project>.pages.dev
+	BranchURL string
+	// Environment is the deployment environment (production or preview)
+	Environment string
+	// IsCurrentProduction indicates if this is the current active production deployment
+	IsCurrentProduction bool
+	// Version is the sequential version number within the project
+	Version int
 	// SourceHash is the SHA-256 hash of the source package (for direct upload).
 	SourceHash string
 	// SourceURL is the URL where source was fetched from (for direct upload).
@@ -216,13 +240,16 @@ type DeploymentResult struct {
 }
 
 // syncToCloudflare syncs the Pages deployment configuration to Cloudflare API.
+// It supports both new (Environment/Source) and legacy (Action) configuration formats.
 //
 //nolint:revive // cognitive complexity is acceptable for API sync logic with multiple action types
 func (r *DeploymentSyncController) syncToCloudflare(
 	ctx context.Context,
 	syncState *v1alpha2.CloudflareSyncState,
-	config *pagessvc.PagesDeploymentActionConfig,
+	config *pagessvc.PagesDeploymentConfig,
 ) (*DeploymentResult, error) {
+	logger := log.FromContext(ctx)
+
 	// Create API client using common helper
 	apiClient, err := common.CreateAPIClient(ctx, r.Client, syncState)
 	if err != nil {
@@ -234,7 +261,15 @@ func (r *DeploymentSyncController) syncToCloudflare(
 		return nil, err
 	}
 
-	// Handle different actions
+	// Check if using new Source-based configuration
+	if config.Source != nil {
+		logger.V(1).Info("Using new Source-based deployment configuration",
+			"sourceType", config.Source.Type,
+			"environment", config.Environment)
+		return r.handleSourceBasedDeployment(ctx, apiClient, syncState, config)
+	}
+
+	// Legacy: Handle different actions
 	switch config.Action {
 	case "create", "":
 		return r.handleCreateDeployment(ctx, apiClient, syncState, config)
@@ -247,14 +282,14 @@ func (r *DeploymentSyncController) syncToCloudflare(
 	}
 }
 
-// handleCreateDeployment creates a new deployment.
+// handleSourceBasedDeployment handles deployments using the new Source configuration.
 //
-//nolint:revive // cognitive complexity is acceptable for create logic
-func (r *DeploymentSyncController) handleCreateDeployment(
+//nolint:revive // cognitive complexity is acceptable for source-based deployment logic
+func (r *DeploymentSyncController) handleSourceBasedDeployment(
 	ctx context.Context,
 	apiClient *cf.API,
 	syncState *v1alpha2.CloudflareSyncState,
-	config *pagessvc.PagesDeploymentActionConfig,
+	config *pagessvc.PagesDeploymentConfig,
 ) (*DeploymentResult, error) {
 	logger := log.FromContext(ctx)
 
@@ -269,9 +304,207 @@ func (r *DeploymentSyncController) handleCreateDeployment(
 		}
 
 		return &DeploymentResult{
-			DeploymentID: deployment.ID,
-			URL:          deployment.URL,
-			Stage:        deployment.Stage,
+			DeploymentID:        deployment.ID,
+			URL:                 deployment.URL,
+			Stage:               deployment.Stage,
+			Environment:         config.Environment,
+			IsCurrentProduction: config.Environment == envProduction && deployment.Stage == stageActive,
+		}, nil
+	}
+
+	// Optionally purge build cache before deployment
+	if config.PurgeBuildCache {
+		logger.Info("Purging build cache", "projectName", config.ProjectName)
+		if err := apiClient.PurgePagesProjectBuildCache(ctx, config.ProjectName); err != nil {
+			logger.Error(err, "Failed to purge build cache, continuing with deployment")
+		}
+	}
+
+	// Handle based on source type
+	switch config.Source.Type {
+	case sourceTypeGit:
+		return r.handleGitSourceDeployment(ctx, apiClient, syncState, config)
+	case sourceTypeDirectUpload:
+		return r.handleDirectUploadSourceDeployment(ctx, apiClient, syncState, config)
+	default:
+		return nil, fmt.Errorf("unsupported source type: %s", config.Source.Type)
+	}
+}
+
+// handleGitSourceDeployment handles git-based deployments using the new Source config.
+//
+//nolint:revive // cognitive complexity is acceptable for git deployment logic
+func (r *DeploymentSyncController) handleGitSourceDeployment(
+	ctx context.Context,
+	apiClient *cf.API,
+	syncState *v1alpha2.CloudflareSyncState,
+	config *pagessvc.PagesDeploymentConfig,
+) (*DeploymentResult, error) {
+	logger := log.FromContext(ctx)
+
+	branch := ""
+	if config.Source.Git != nil {
+		branch = config.Source.Git.Branch
+	}
+
+	logger.Info("Creating new git-based Pages deployment",
+		"projectName", config.ProjectName,
+		"branch", branch,
+		"environment", config.Environment)
+
+	result, err := apiClient.CreatePagesDeployment(ctx, config.ProjectName, branch)
+	if err != nil {
+		return nil, fmt.Errorf("create Pages deployment: %w", err)
+	}
+
+	// Update SyncState with actual deployment ID
+	if err := common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID); err != nil {
+		return nil, err
+	}
+
+	// Extract K8s resource info
+	k8sResource := ""
+	if len(syncState.Spec.Sources) > 0 {
+		src := syncState.Spec.Sources[0]
+		k8sResource = fmt.Sprintf("%s/%s", src.Ref.Namespace, src.Ref.Name)
+	}
+
+	// Build source description
+	sourceDesc := "git"
+	if branch != "" {
+		sourceDesc = fmt.Sprintf("git:%s", branch)
+		if config.Source.Git != nil && config.Source.Git.CommitSha != "" {
+			sourceDesc = fmt.Sprintf("git:%s@%s", branch, config.Source.Git.CommitSha[:7])
+		}
+	}
+
+	// Extract hash from URL for HashURL
+	hashURL := result.URL // Cloudflare returns the hash URL
+
+	logger.Info("Created git-based Pages deployment",
+		"deploymentId", result.ID,
+		"url", result.URL,
+		"environment", config.Environment)
+
+	return &DeploymentResult{
+		DeploymentID:        result.ID,
+		URL:                 result.URL,
+		Stage:               result.Stage,
+		HashURL:             hashURL,
+		Environment:         config.Environment,
+		IsCurrentProduction: config.Environment == envProduction,
+		K8sResource:         k8sResource,
+		Source:              sourceDesc,
+	}, nil
+}
+
+// handleDirectUploadSourceDeployment handles direct upload deployments using the new Source config.
+func (r *DeploymentSyncController) handleDirectUploadSourceDeployment(
+	ctx context.Context,
+	apiClient *cf.API,
+	syncState *v1alpha2.CloudflareSyncState,
+	config *pagessvc.PagesDeploymentConfig,
+) (*DeploymentResult, error) {
+	logger := log.FromContext(ctx)
+
+	if config.Source.DirectUpload == nil || config.Source.DirectUpload.Source == nil {
+		return nil, errors.New("direct upload source not configured")
+	}
+
+	// Get namespace for Secret resolution
+	namespace := syncState.Namespace
+	if namespace == "" {
+		namespace = common.OperatorNamespace
+	}
+
+	logger.Info("Processing direct upload source",
+		"projectName", config.ProjectName,
+		"namespace", namespace,
+		"environment", config.Environment)
+
+	// Process source: download, verify checksum, extract archive
+	manifest, err := uploader.ProcessSource(
+		ctx,
+		r.Client,
+		namespace,
+		config.Source.DirectUpload.Source,
+		config.Source.DirectUpload.Checksum,
+		config.Source.DirectUpload.Archive,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("process source: %w", err)
+	}
+
+	logger.Info("Extracted files from source",
+		"fileCount", manifest.FileCount,
+		"totalSize", manifest.TotalSize)
+
+	// Call Cloudflare Direct Upload API
+	result, err := apiClient.CreatePagesDirectUploadDeployment(ctx, config.ProjectName, manifest.Files)
+	if err != nil {
+		return nil, fmt.Errorf("create direct upload deployment: %w", err)
+	}
+
+	// Update SyncState with actual deployment ID
+	if err := common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID); err != nil {
+		return nil, err
+	}
+
+	// Extract K8s resource info
+	k8sResource := ""
+	if len(syncState.Spec.Sources) > 0 {
+		src := syncState.Spec.Sources[0]
+		k8sResource = fmt.Sprintf("%s/%s", src.Ref.Namespace, src.Ref.Name)
+	}
+
+	logger.Info("Created direct upload deployment",
+		"deploymentId", result.ID,
+		"url", result.URL,
+		"sourceHash", manifest.SourceHash,
+		"environment", config.Environment)
+
+	return &DeploymentResult{
+		DeploymentID:        result.ID,
+		URL:                 result.URL,
+		Stage:               result.Stage,
+		HashURL:             result.URL,
+		Environment:         config.Environment,
+		IsCurrentProduction: config.Environment == envProduction,
+		SourceHash:          manifest.SourceHash,
+		SourceURL:           manifest.SourceURL,
+		K8sResource:         k8sResource,
+		Source:              "directUpload",
+	}, nil
+}
+
+// handleCreateDeployment creates a new deployment using legacy configuration.
+// This is for backward compatibility with Action-based deployments.
+//
+//nolint:revive // cognitive complexity is acceptable for create logic
+func (r *DeploymentSyncController) handleCreateDeployment(
+	ctx context.Context,
+	apiClient *cf.API,
+	syncState *v1alpha2.CloudflareSyncState,
+	config *pagessvc.PagesDeploymentConfig,
+) (*DeploymentResult, error) {
+	logger := log.FromContext(ctx)
+
+	cloudflareID := syncState.Spec.CloudflareID
+
+	// If we already have a deployment ID (not pending), we're just monitoring it
+	if !common.IsPendingID(cloudflareID) && cloudflareID != "" {
+		// Get existing deployment status
+		deployment, err := apiClient.GetPagesDeployment(ctx, config.ProjectName, cloudflareID)
+		if err != nil {
+			return nil, fmt.Errorf("get deployment status: %w", err)
+		}
+
+		return &DeploymentResult{
+			DeploymentID:        deployment.ID,
+			URL:                 deployment.URL,
+			Stage:               deployment.Stage,
+			Environment:         config.Environment,
+			IsCurrentProduction: config.Environment == envProduction && deployment.Stage == stageActive,
 		}, nil
 	}
 
@@ -285,17 +518,22 @@ func (r *DeploymentSyncController) handleCreateDeployment(
 		}
 	}
 
-	// Check if this is a direct upload deployment
-	if config.DirectUpload != nil && config.DirectUpload.Source != nil {
+	// Check if this is a direct upload deployment (using legacy LegacyDirectUpload field)
+	if config.LegacyDirectUpload != nil && config.LegacyDirectUpload.Source != nil {
 		return r.handleDirectUploadDeployment(ctx, apiClient, syncState, config)
 	}
 
-	// Create new git-based deployment
-	logger.Info("Creating new Pages deployment",
-		"projectName", config.ProjectName,
-		"branch", config.Branch)
+	// Create new git-based deployment (legacy: uses Branch field from Action config)
+	branch := ""
+	if config.Source != nil && config.Source.Git != nil {
+		branch = config.Source.Git.Branch
+	}
 
-	result, err := apiClient.CreatePagesDeployment(ctx, config.ProjectName, config.Branch)
+	logger.Info("Creating new Pages deployment (legacy mode)",
+		"projectName", config.ProjectName,
+		"branch", branch)
+
+	result, err := apiClient.CreatePagesDeployment(ctx, config.ProjectName, branch)
 	if err != nil {
 		return nil, fmt.Errorf("create Pages deployment: %w", err)
 	}
@@ -313,36 +551,41 @@ func (r *DeploymentSyncController) handleCreateDeployment(
 	}
 
 	// Determine source description
-	branch := config.Branch
-	if branch == "" {
-		branch = "main"
+	sourceDesc := "git"
+	if branch != "" {
+		sourceDesc = fmt.Sprintf("git:%s", branch)
 	}
 
 	logger.Info("Created Pages deployment",
 		"deploymentId", result.ID,
-		"url", result.URL)
+		"url", result.URL,
+		"environment", config.Environment)
 
 	return &DeploymentResult{
-		DeploymentID: result.ID,
-		URL:          result.URL,
-		Stage:        result.Stage,
-		K8sResource:  k8sResource,
-		Source:       fmt.Sprintf("git:%s", branch),
+		DeploymentID:        result.ID,
+		URL:                 result.URL,
+		Stage:               result.Stage,
+		HashURL:             result.URL,
+		Environment:         config.Environment,
+		IsCurrentProduction: config.Environment == envProduction,
+		K8sResource:         k8sResource,
+		Source:              sourceDesc,
 	}, nil
 }
 
-// handleDirectUploadDeployment handles direct upload deployments from external sources.
+// handleDirectUploadDeployment handles direct upload deployments from external sources (legacy mode).
+// This uses the LegacyDirectUpload field for backward compatibility.
 //
 //nolint:revive // cognitive complexity is acceptable for multi-step upload process
 func (r *DeploymentSyncController) handleDirectUploadDeployment(
 	ctx context.Context,
 	apiClient *cf.API,
 	syncState *v1alpha2.CloudflareSyncState,
-	config *pagessvc.PagesDeploymentActionConfig,
+	config *pagessvc.PagesDeploymentConfig,
 ) (*DeploymentResult, error) {
 	logger := log.FromContext(ctx)
 
-	directUpload := config.DirectUpload
+	directUpload := config.LegacyDirectUpload
 	if directUpload == nil || directUpload.Source == nil {
 		return nil, fmt.Errorf("direct upload source not configured")
 	}
@@ -353,9 +596,10 @@ func (r *DeploymentSyncController) handleDirectUploadDeployment(
 		namespace = common.OperatorNamespace
 	}
 
-	logger.Info("Processing direct upload source",
+	logger.Info("Processing direct upload source (legacy mode)",
 		"projectName", config.ProjectName,
-		"namespace", namespace)
+		"namespace", namespace,
+		"environment", config.Environment)
 
 	// Process source: download, verify checksum, extract archive
 	manifest, err := uploader.ProcessSource(
@@ -395,16 +639,20 @@ func (r *DeploymentSyncController) handleDirectUploadDeployment(
 	logger.Info("Created direct upload deployment",
 		"deploymentId", result.ID,
 		"url", result.URL,
-		"sourceHash", manifest.SourceHash)
+		"sourceHash", manifest.SourceHash,
+		"environment", config.Environment)
 
 	return &DeploymentResult{
-		DeploymentID: result.ID,
-		URL:          result.URL,
-		Stage:        result.Stage,
-		SourceHash:   manifest.SourceHash,
-		SourceURL:    manifest.SourceURL,
-		K8sResource:  k8sResource,
-		Source:       "direct-upload",
+		DeploymentID:        result.ID,
+		URL:                 result.URL,
+		Stage:               result.Stage,
+		HashURL:             result.URL,
+		Environment:         config.Environment,
+		IsCurrentProduction: config.Environment == envProduction,
+		SourceHash:          manifest.SourceHash,
+		SourceURL:           manifest.SourceURL,
+		K8sResource:         k8sResource,
+		Source:              "directUpload",
 	}, nil
 }
 
@@ -413,7 +661,7 @@ func (*DeploymentSyncController) handleRetryDeployment(
 	ctx context.Context,
 	apiClient *cf.API,
 	syncState *v1alpha2.CloudflareSyncState,
-	config *pagessvc.PagesDeploymentActionConfig,
+	config *pagessvc.PagesDeploymentConfig,
 ) (*DeploymentResult, error) {
 	logger := log.FromContext(ctx)
 
@@ -423,7 +671,8 @@ func (*DeploymentSyncController) handleRetryDeployment(
 
 	logger.Info("Retrying Pages deployment",
 		"projectName", config.ProjectName,
-		"targetDeploymentId", config.TargetDeploymentID)
+		"targetDeploymentId", config.TargetDeploymentID,
+		"environment", config.Environment)
 
 	result, err := apiClient.RetryPagesDeployment(ctx, config.ProjectName, config.TargetDeploymentID)
 	if err != nil {
@@ -439,14 +688,18 @@ func (*DeploymentSyncController) handleRetryDeployment(
 
 	logger.Info("Retried Pages deployment",
 		"deploymentId", result.ID,
-		"url", result.URL)
+		"url", result.URL,
+		"environment", config.Environment)
 
 	return &DeploymentResult{
-		DeploymentID: result.ID,
-		URL:          result.URL,
-		Stage:        result.Stage,
-		K8sResource:  k8sResource,
-		Source:       fmt.Sprintf("retry:%s", config.TargetDeploymentID),
+		DeploymentID:        result.ID,
+		URL:                 result.URL,
+		Stage:               result.Stage,
+		HashURL:             result.URL,
+		Environment:         config.Environment,
+		IsCurrentProduction: config.Environment == envProduction,
+		K8sResource:         k8sResource,
+		Source:              fmt.Sprintf("retry:%s", config.TargetDeploymentID),
 	}, nil
 }
 
@@ -457,7 +710,7 @@ func (r *DeploymentSyncController) handleRollbackDeployment(
 	ctx context.Context,
 	apiClient *cf.API,
 	syncState *v1alpha2.CloudflareSyncState,
-	config *pagessvc.PagesDeploymentActionConfig,
+	config *pagessvc.PagesDeploymentConfig,
 ) (*DeploymentResult, error) {
 	logger := log.FromContext(ctx)
 
@@ -481,7 +734,8 @@ func (r *DeploymentSyncController) handleRollbackDeployment(
 	logger.Info("Rolling back to Pages deployment",
 		"projectName", config.ProjectName,
 		"targetDeploymentId", targetDeploymentID,
-		"strategy", config.Rollback)
+		"strategy", config.Rollback,
+		"environment", config.Environment)
 
 	result, err := apiClient.RollbackPagesDeployment(ctx, config.ProjectName, targetDeploymentID)
 	if err != nil {
@@ -497,21 +751,25 @@ func (r *DeploymentSyncController) handleRollbackDeployment(
 
 	logger.Info("Rolled back to Pages deployment",
 		"deploymentId", result.ID,
-		"url", result.URL)
+		"url", result.URL,
+		"environment", config.Environment)
 
 	return &DeploymentResult{
-		DeploymentID: result.ID,
-		URL:          result.URL,
-		Stage:        result.Stage,
-		K8sResource:  k8sResource,
-		Source:       fmt.Sprintf("rollback:%s", targetDeploymentID),
+		DeploymentID:        result.ID,
+		URL:                 result.URL,
+		Stage:               result.Stage,
+		HashURL:             result.URL,
+		Environment:         config.Environment,
+		IsCurrentProduction: config.Environment == envProduction,
+		K8sResource:         k8sResource,
+		Source:              fmt.Sprintf("rollback:%s", targetDeploymentID),
 	}, nil
 }
 
 // resolveRollbackTarget resolves the target deployment ID based on rollback strategy.
 func (r *DeploymentSyncController) resolveRollbackTarget(
 	ctx context.Context,
-	config *pagessvc.PagesDeploymentActionConfig,
+	config *pagessvc.PagesDeploymentConfig,
 ) (string, error) {
 	rollback := config.Rollback
 	if rollback == nil {
@@ -656,7 +914,7 @@ func (r *DeploymentSyncController) updatePagesProjectHistory(
 			K8sResource:  deployment.K8sResource,
 			CreatedAt:    now,
 			Status:       deployment.Stage,
-			IsProduction: deployment.Stage == "active" || deployment.Stage == "success",
+			IsProduction: deployment.Stage == stageActive || deployment.Stage == stageSuccess,
 		}
 
 		// Add new entry at the beginning (newest first)
@@ -679,7 +937,7 @@ func (r *DeploymentSyncController) updatePagesProjectHistory(
 		pagesProject.Status.DeploymentHistory = history
 
 		// Update last successful deployment ID if this is a successful deployment
-		if deployment.Stage == "active" || deployment.Stage == "success" || deployment.Stage == "deploy" {
+		if deployment.Stage == stageActive || deployment.Stage == stageSuccess || deployment.Stage == stageDeploy {
 			pagesProject.Status.LastSuccessfulDeploymentID = deployment.DeploymentID
 		}
 
@@ -795,7 +1053,7 @@ func (r *DeploymentSyncController) handleDeletion(
 	return ctrl.Result{}, nil
 }
 
-// storeDeploymentResultData stores the deployment result (Stage, URL, DeploymentID) in SyncState.ResultData.
+// storeDeploymentResultData stores the deployment result in SyncState.ResultData.
 // This enables the L2 Controller to retrieve deployment status without querying Cloudflare API.
 func (r *DeploymentSyncController) storeDeploymentResultData(
 	ctx context.Context,
@@ -817,12 +1075,32 @@ func (r *DeploymentSyncController) storeDeploymentResultData(
 			syncState.Status.ResultData = make(map[string]string)
 		}
 
-		// Store deployment result
+		// Store deployment result - basic fields
 		syncState.Status.ResultData["deploymentId"] = result.DeploymentID
 		syncState.Status.ResultData["stage"] = result.Stage
 		syncState.Status.ResultData["url"] = result.URL
+
+		// Store new fields for enhanced status reporting
+		if result.HashURL != "" {
+			syncState.Status.ResultData["hashUrl"] = result.HashURL
+		}
+		if result.BranchURL != "" {
+			syncState.Status.ResultData["branchUrl"] = result.BranchURL
+		}
+		if result.Environment != "" {
+			syncState.Status.ResultData["environment"] = result.Environment
+		}
+		if result.IsCurrentProduction {
+			syncState.Status.ResultData["isCurrentProduction"] = "true"
+		}
+		if result.Version > 0 {
+			syncState.Status.ResultData["version"] = fmt.Sprintf("%d", result.Version)
+		}
 		if result.SourceHash != "" {
 			syncState.Status.ResultData["sourceHash"] = result.SourceHash
+		}
+		if result.Source != "" {
+			syncState.Status.ResultData["sourceDescription"] = result.Source
 		}
 
 		return r.Client.Status().Update(ctx, syncState)

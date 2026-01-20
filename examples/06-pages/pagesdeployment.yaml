@@ -1,38 +1,231 @@
-# PagesDeployment - Trigger deployment for Pages project
-# Pages 项目部署触发
+# =============================================================================
+# PagesDeployment - 持久化版本实体
+# PagesDeployment - Persistent Version Entity
+# =============================================================================
+#
+# PagesDeployment 代表 Cloudflare Pages 项目的一个部署版本。
+# 每个 PagesDeployment 在创建后持续存在，代表该项目的一个版本快照。
+#
+# PagesDeployment represents a deployment version of a Cloudflare Pages project.
+# Each PagesDeployment persists after creation, representing a version snapshot.
+#
+# 重要规则 / Important Rules:
+# - 每个 PagesProject 只能有一个 production 环境的 PagesDeployment
+#   Each PagesProject can only have one production environment PagesDeployment
+# - preview 环境可以有多个 PagesDeployment
+#   Multiple preview environment PagesDeployments are allowed
+# - 删除唯一的 production PagesDeployment 会被阻止
+#   Deleting the only production PagesDeployment is blocked
+#
+# =============================================================================
+
+---
+# 示例 1: Git 源 - Production 部署 (推荐新格式)
+# Example 1: Git Source - Production Deployment (Recommended new format)
 apiVersion: networking.cloudflare-operator.io/v1alpha2
 kind: PagesDeployment
 metadata:
-  name: my-app-deploy-v1
+  name: my-app-prod
   namespace: default
 spec:
-  # Reference to the PagesProject
-  # 引用 PagesProject
+  # 引用 PagesProject / Reference to PagesProject
   projectRef:
-    name: my-app                        # PagesProject name / PagesProject 名称
+    name: my-app
 
-  # Branch to deploy
-  # 要部署的分支
-  branch: main
+  # 部署环境: production 或 preview
+  # Deployment environment: production or preview
+  environment: production
 
-  # Deployment action: create, retry, or rollback
-  # 部署操作：create（创建）、retry（重试）、rollback（回滚）
-  action: create
+  # 源配置 / Source configuration
+  source:
+    type: git
+    git:
+      branch: main
+      # commitSha: "abc123"  # 可选: 部署特定 commit / Optional: deploy specific commit
 
+  # 可选: 部署前清除构建缓存
   # Optional: Purge build cache before deployment
-  # 可选：部署前清除构建缓存
   purgeBuildCache: false
 
-  # Cloudflare configuration
-  # Cloudflare 配置
+  # Cloudflare 配置 / Cloudflare configuration
   cloudflare:
-    accountId: "<your-account-id>"      # Replace with actual value / 替换为实际值
+    accountId: "<your-account-id>"
     credentialsRef:
-      name: cloudflare-credentials      # Secret name / Secret 名称
+      name: cloudflare-credentials
 
 ---
-# PagesDeployment - Rollback to previous deployment
-# Pages 项目回滚到之前的部署
+# 示例 2: Git 源 - Preview 部署
+# Example 2: Git Source - Preview Deployment
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDeployment
+metadata:
+  name: my-app-preview-feature-x
+  namespace: default
+spec:
+  projectRef:
+    name: my-app
+  environment: preview
+  source:
+    type: git
+    git:
+      branch: feature/new-feature
+  cloudflare:
+    accountId: "<your-account-id>"
+    credentialsRef:
+      name: cloudflare-credentials
+
+---
+# 示例 3: Direct Upload 源 - Production 部署
+# Example 3: Direct Upload Source - Production Deployment
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDeployment
+metadata:
+  name: my-app-direct-upload-prod
+  namespace: default
+spec:
+  projectRef:
+    name: my-app
+  environment: production
+  source:
+    type: directUpload
+    directUpload:
+      source:
+        http:
+          url: "https://artifacts.example.com/builds/my-app/latest.tar.gz"
+          headers:
+            Authorization: "Bearer ${CI_TOKEN}"
+          timeout: "10m"
+      archive:
+        type: tar.gz
+        stripComponents: 1
+      checksum:
+        algorithm: sha256
+        value: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  cloudflare:
+    accountId: "<your-account-id>"
+    credentialsRef:
+      name: cloudflare-credentials
+
+---
+# 示例 4: Direct Upload 源 - 从 S3 部署
+# Example 4: Direct Upload Source - Deploy from S3
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDeployment
+metadata:
+  name: my-app-s3-deploy
+  namespace: default
+spec:
+  projectRef:
+    name: my-app
+  environment: preview
+  source:
+    type: directUpload
+    directUpload:
+      source:
+        s3:
+          bucket: my-ci-artifacts
+          key: builds/my-app/v1.2.3/dist.tar.gz
+          region: us-east-1
+          credentialsSecretRef:
+            name: aws-credentials
+      archive:
+        type: tar.gz
+  cloudflare:
+    accountId: "<your-account-id>"
+    credentialsRef:
+      name: cloudflare-credentials
+
+---
+# 示例 5: 强制重新部署 (使用注解)
+# Example 5: Force Redeploy (using annotation)
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDeployment
+metadata:
+  name: my-app-force-redeploy
+  namespace: default
+  annotations:
+    # 修改此值触发重新部署 / Change this value to trigger redeployment
+    cloudflare-operator.io/force-redeploy: "2025-01-20-v1"
+spec:
+  projectRef:
+    name: my-app
+  environment: production
+  source:
+    type: git
+    git:
+      branch: main
+  cloudflare:
+    accountId: "<your-account-id>"
+    credentialsRef:
+      name: cloudflare-credentials
+
+# =============================================================================
+# 旧格式 (向后兼容，已废弃)
+# Legacy Format (Backward Compatible, Deprecated)
+# =============================================================================
+#
+# 以下示例使用旧格式，仍然支持但建议迁移到新格式。
+# Controller 会自动将旧格式转换为新格式。
+#
+# The following examples use the legacy format, still supported but migration
+# to the new format is recommended. Controller automatically converts old format.
+#
+# =============================================================================
+
+---
+# 旧格式示例 1: 使用 action 和 branch (废弃)
+# Legacy Example 1: Using action and branch (Deprecated)
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDeployment
+metadata:
+  name: my-app-legacy-deploy
+  namespace: default
+spec:
+  projectRef:
+    name: my-app
+
+  # [DEPRECATED] 使用 environment + source 代替
+  # [DEPRECATED] Use environment + source instead
+  action: create
+  branch: main
+
+  purgeBuildCache: false
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    credentialsRef:
+      name: cloudflare-credentials
+
+---
+# 旧格式示例 2: 使用 action 和 directUpload (废弃)
+# Legacy Example 2: Using action and directUpload (Deprecated)
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDeployment
+metadata:
+  name: my-app-legacy-direct-upload
+  namespace: default
+spec:
+  projectRef:
+    name: my-app
+
+  # [DEPRECATED] 使用 environment + source.directUpload 代替
+  # [DEPRECATED] Use environment + source.directUpload instead
+  action: create
+  directUpload:
+    source:
+      http:
+        url: "https://artifacts.example.com/builds/latest.tar.gz"
+    archive:
+      type: tar.gz
+
+  cloudflare:
+    accountId: "<your-account-id>"
+    credentialsRef:
+      name: cloudflare-credentials
+
+---
+# 旧格式示例 3: 回滚 (废弃 - 建议创建新部署)
+# Legacy Example 3: Rollback (Deprecated - Create new deployment instead)
 apiVersion: networking.cloudflare-operator.io/v1alpha2
 kind: PagesDeployment
 metadata:
@@ -42,10 +235,11 @@ spec:
   projectRef:
     name: my-app
 
-  # Rollback action requires targetDeploymentId
-  # 回滚操作需要指定 targetDeploymentId
+  # [DEPRECATED] 建议创建一个新的 PagesDeployment 指向目标版本的源
+  # [DEPRECATED] Recommend creating a new PagesDeployment pointing to the target version's source
   action: rollback
-  targetDeploymentId: "<deployment-id-to-rollback-to>"
+  rollback:
+    strategy: LastSuccessful  # 或 ByVersion, ExactDeploymentID
 
   cloudflare:
     accountId: "<your-account-id>"

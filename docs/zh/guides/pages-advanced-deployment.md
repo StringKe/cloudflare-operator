@@ -1,8 +1,8 @@
 # Pages 高级部署指南
 
-本指南介绍 Cloudflare Pages 的高级部署功能，包括直接上传、智能回滚、项目导入和 Web Analytics 集成。
+本指南介绍 Cloudflare Pages 的高级部署功能，包括全新的持久化版本实体模式、直接上传、智能回滚、项目导入和 Web Analytics 集成。
 
-> **版本**: v0.27.13+
+> **版本**: v0.28.0+
 
 ## 概述
 
@@ -10,11 +10,52 @@ Cloudflare Operator 提供强大的 Pages 部署管理功能：
 
 | 功能 | 说明 | 使用场景 |
 |------|------|----------|
+| **持久化版本实体** | 部署作为持久化 K8s 资源 | GitOps 版本管理 |
+| **环境控制** | 显式声明 production/preview 环境 | 多环境工作流 |
+| **Git 源** | 从 Git 分支/提交部署 | 标准 CI/CD 集成 |
 | **Direct Upload** | 从外部源部署静态文件 | CI/CD 流水线、构建产物存储 |
 | **Smart Rollback** | 支持多种策略的智能回滚 | 快速从失败部署中恢复 |
 | **Project Adoption** | 导入已存在的 Cloudflare Pages 项目 | 将现有项目迁移到 GitOps |
 | **Web Analytics** | 自动 Web Analytics 集成 | 监控站点性能 |
 | **Force Redeploy** | 无需配置变更触发新部署 | 重新部署相同源 |
+
+---
+
+## 持久化版本实体模式
+
+> **v0.28.0 新特性**
+
+PagesDeployment 已从"一次性操作"模式重新设计为"持久化版本实体"模式。
+
+### 核心概念
+
+| 方面 | 旧设计 | 新设计 |
+|------|--------|--------|
+| **模式** | 一次性操作 (Action: create/retry/rollback) | 持久化版本实体 |
+| **状态** | 执行后变成死状态 | 持续存在，代表一个部署版本 |
+| **数量** | 每次操作一个 | 每个 Project 可有多个 |
+| **环境** | 仅在 Status 中 | 在 Spec 中声明 (production/preview) |
+| **源** | 混合的 Branch + DirectUpload | 统一的 source 结构 (git/directUpload) |
+
+### Production 唯一性
+
+**重要**：每个 PagesProject 同一时间只能有**一个** production 环境的 PagesDeployment。
+
+```
+my-app-project/
+├── my-app-prod           # environment: production ✓
+├── my-app-preview-v1     # environment: preview ✓
+├── my-app-preview-v2     # environment: preview ✓
+└── my-app-prod-v2        # environment: production ✗ (拒绝 - 已有 production)
+```
+
+### Production 删除保护
+
+删除唯一的 production PagesDeployment 会被阻止，以防止意外的生产中断。你必须：
+- 先创建新的 production 部署
+- 或者删除整个 PagesProject
+
+---
 
 ## 架构
 
@@ -24,7 +65,8 @@ config:
   layout: elk
 ---
 flowchart TB
-    subgraph Sources["外部源"]
+    subgraph Sources["部署源"]
+        GIT["Git 分支/提交"]
         HTTP["HTTP/HTTPS URL"]
         S3["S3/R2/MinIO"]
         OCI["OCI 镜像仓库"]
@@ -38,7 +80,8 @@ flowchart TB
         MD5["MD5 哈希生成"]
     end
 
-    subgraph CloudflareAPI["Cloudflare Pages API (4步流程)"]
+    subgraph CloudflareAPI["Cloudflare Pages API"]
+        GITDEP["Git 部署 API"]
         JWT["1. 获取上传令牌 (JWT)"]
         CHK["2. 检查缺失资源"]
         UPL["3. 上传缺失文件"]
@@ -51,10 +94,12 @@ flowchart TB
         DEPLOY["部署"]
     end
 
+    GIT --> PD
     HTTP --> UP
     S3 --> UP
     OCI --> UP
 
+    PD --> GITDEP
     UP --> CS
     CS --> AR
     AR --> MD5
@@ -64,9 +109,209 @@ flowchart TB
     CHK --> UPL
     UPL --> UPS
     UPS --> DEP
+    GITDEP --> PP
     DEP --> PP
     PP --> DEPLOY
 ```
+
+---
+
+## PagesDeployment Spec
+
+### 新格式（推荐）
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDeployment
+metadata:
+  name: my-app-prod
+spec:
+  projectRef:
+    name: my-pages-project
+
+  # 新字段：部署环境（必需）
+  environment: production  # 或 "preview"
+
+  # 新字段：统一的源配置（必需）
+  source:
+    type: git  # 或 "directUpload"
+    git:
+      branch: main
+      commitSha: "abc123def456"  # 可选：指定提交
+
+  purgeBuildCache: false
+
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+### Spec 字段
+
+| 字段 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `projectRef` | object | 是 | 引用 PagesProject |
+| `environment` | string | 是* | `production` 或 `preview` |
+| `source` | object | 是* | 部署源配置 |
+| `purgeBuildCache` | bool | 否 | 部署前清除构建缓存 |
+| `cloudflare` | object | 是 | Cloudflare 账户和凭证 |
+
+*新格式必需。旧字段仍然支持以保持向后兼容。
+
+### 源类型
+
+#### Git 源
+
+```yaml
+source:
+  type: git
+  git:
+    branch: main           # 要部署的分支
+    commitSha: "abc123"    # 可选：指定提交 SHA
+```
+
+#### Direct Upload 源
+
+```yaml
+source:
+  type: directUpload
+  directUpload:
+    source:
+      http:
+        url: "https://example.com/dist.tar.gz"
+    archive:
+      type: tar.gz
+    checksum:
+      algorithm: sha256
+      value: "e3b0c44..."
+```
+
+---
+
+## Status 字段
+
+PagesDeployment status 现在包含丰富的部署信息：
+
+```yaml
+status:
+  # 核心字段
+  deploymentId: "abc123def456"
+  projectName: "my-pages-project"
+  state: Succeeded        # Pending, Building, Succeeded, Failed
+
+  # URL 字段
+  url: "my-pages-project.pages.dev"
+  hashUrl: "abc123def.my-pages-project.pages.dev"
+  branchUrl: "main.my-pages-project.pages.dev"
+
+  # 环境字段
+  environment: production
+  isCurrentProduction: true
+
+  # 版本追踪
+  version: 5
+  sourceDescription: "git:main@abc123"
+
+  # 阶段追踪
+  stage: deploy          # queued, initialize, clone_repo, build, deploy
+
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: DeploymentSucceeded
+```
+
+### Status 字段说明
+
+| 字段 | 说明 |
+|------|------|
+| `deploymentId` | Cloudflare 部署 ID |
+| `hashUrl` | 基于哈希的唯一 URL（如 `<hash>.project.pages.dev`） |
+| `branchUrl` | 基于分支的 URL（如 `<branch>.project.pages.dev`） |
+| `environment` | 部署环境（production/preview） |
+| `isCurrentProduction` | 是否为当前活跃的生产部署 |
+| `version` | 项目内的顺序版本号 |
+| `sourceDescription` | 人类可读的源描述 |
+
+---
+
+## Git 源部署
+
+直接从 Git 分支或提交部署：
+
+### 基本 Git 部署
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDeployment
+metadata:
+  name: my-app-prod
+spec:
+  projectRef:
+    name: my-app
+  environment: production
+  source:
+    type: git
+    git:
+      branch: main
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+### 部署特定提交
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDeployment
+metadata:
+  name: my-app-hotfix
+spec:
+  projectRef:
+    name: my-app
+  environment: preview
+  source:
+    type: git
+    git:
+      branch: main
+      commitSha: "abc123def456789"  # 部署此特定提交
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+### 从特性分支部署预览
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDeployment
+metadata:
+  name: my-app-feature-x
+spec:
+  projectRef:
+    name: my-app
+  environment: preview
+  source:
+    type: git
+    git:
+      branch: feature/new-feature
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+---
+
+## 直接上传 (Direct Upload)
+
+直接上传允许无需 Git 仓库即可部署静态文件。适用于：
+- 单独构建产物的 CI/CD 流水线
+- 存储在对象存储中的预构建静态站点
+- 无法访问 Git 的隔离环境
 
 ### Direct Upload API 流程
 
@@ -83,15 +328,6 @@ Operator 使用 Cloudflare 的 Direct Upload API，采用 4 步流程：
 - Pages 特殊配置文件（`_headers`、`_redirects`、`_worker.js`、`_routes.json`）不包含在清单中
 - 文件以每批 100 个的方式上传以提高效率
 - 同时支持 API Token 和 Global API Key 两种认证方式
-
----
-
-## 直接上传 (Direct Upload)
-
-直接上传允许无需 Git 仓库即可部署静态文件。适用于：
-- 单独构建产物的 CI/CD 流水线
-- 存储在对象存储中的预构建静态站点
-- 无法访问 Git 的隔离环境
 
 ### 支持的源类型
 
@@ -111,18 +347,20 @@ metadata:
 spec:
   projectRef:
     name: my-app
-  action: create
-  directUpload:
-    source:
-      http:
-        url: "https://artifacts.example.com/builds/my-app/latest.tar.gz"
-        headers:
-          Authorization: "Bearer ${CI_TOKEN}"
-        timeout: "10m"
-        insecureSkipVerify: false  # 仅用于测试
-    archive:
-      type: tar.gz
-      stripComponents: 1
+  environment: production
+  source:
+    type: directUpload
+    directUpload:
+      source:
+        http:
+          url: "https://artifacts.example.com/builds/my-app/latest.tar.gz"
+          headers:
+            Authorization: "Bearer ${CI_TOKEN}"
+          timeout: "10m"
+          insecureSkipVerify: false  # 仅用于测试
+      archive:
+        type: tar.gz
+        stripComponents: 1
   cloudflare:
     accountId: "your-account-id"
     credentialsRef:
@@ -149,20 +387,22 @@ metadata:
 spec:
   projectRef:
     name: my-app
-  action: create
-  directUpload:
-    source:
-      s3:
-        bucket: my-ci-artifacts
-        key: builds/my-app/v1.2.3/dist.tar.gz
-        region: us-east-1
-        credentialsSecretRef:
-          name: aws-credentials
-    checksum:
-      algorithm: sha256
-      value: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    archive:
-      type: tar.gz
+  environment: production
+  source:
+    type: directUpload
+    directUpload:
+      source:
+        s3:
+          bucket: my-ci-artifacts
+          key: builds/my-app/v1.2.3/dist.tar.gz
+          region: us-east-1
+          credentialsSecretRef:
+            name: aws-credentials
+      checksum:
+        algorithm: sha256
+        value: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      archive:
+        type: tar.gz
   cloudflare:
     accountId: "your-account-id"
     credentialsRef:
@@ -199,30 +439,34 @@ stringData:
 #### Cloudflare R2
 
 ```yaml
-directUpload:
-  source:
-    s3:
-      bucket: my-build-artifacts
-      key: dist.tar.gz
-      endpoint: "https://YOUR_ACCOUNT_ID.r2.cloudflarestorage.com"
-      credentialsSecretRef:
-        name: r2-credentials
-      usePathStyle: true  # R2 必需
+source:
+  type: directUpload
+  directUpload:
+    source:
+      s3:
+        bucket: my-build-artifacts
+        key: dist.tar.gz
+        endpoint: "https://YOUR_ACCOUNT_ID.r2.cloudflarestorage.com"
+        credentialsSecretRef:
+          name: r2-credentials
+        usePathStyle: true  # R2 必需
 ```
 
 #### MinIO
 
 ```yaml
-directUpload:
-  source:
-    s3:
-      bucket: builds
-      key: my-app/dist.tar.gz
-      endpoint: "https://minio.internal.example.com"
-      region: us-east-1  # MinIO 也需要
-      credentialsSecretRef:
-        name: minio-credentials
-      usePathStyle: true
+source:
+  type: directUpload
+  directUpload:
+    source:
+      s3:
+        bucket: builds
+        key: my-app/dist.tar.gz
+        endpoint: "https://minio.internal.example.com"
+        region: us-east-1  # MinIO 也需要
+        credentialsSecretRef:
+          name: minio-credentials
+        usePathStyle: true
 ```
 
 ### OCI 源
@@ -237,15 +481,17 @@ metadata:
 spec:
   projectRef:
     name: my-app
-  action: create
-  directUpload:
-    source:
-      oci:
-        image: "ghcr.io/my-org/my-app-dist:v1.2.3"
-        credentialsSecretRef:
-          name: ghcr-credentials
-    archive:
-      type: tar.gz
+  environment: production
+  source:
+    type: directUpload
+    directUpload:
+      source:
+        oci:
+          image: "ghcr.io/my-org/my-app-dist:v1.2.3"
+          credentialsSecretRef:
+            name: ghcr-credentials
+      archive:
+        type: tar.gz
   cloudflare:
     accountId: "your-account-id"
     credentialsRef:
@@ -283,13 +529,15 @@ stringData:
 在部署前验证文件完整性：
 
 ```yaml
-directUpload:
-  source:
-    http:
-      url: "https://example.com/dist.tar.gz"
-  checksum:
-    algorithm: sha256  # sha256（默认）、sha512、md5
-    value: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+source:
+  type: directUpload
+  directUpload:
+    source:
+      http:
+        url: "https://example.com/dist.tar.gz"
+    checksum:
+      algorithm: sha256  # sha256（默认）、sha512、md5
+      value: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 ```
 
 如果校验和不匹配，部署将失败并报错。
@@ -299,11 +547,13 @@ directUpload:
 配置如何解压下载的归档：
 
 ```yaml
-directUpload:
-  archive:
-    type: tar.gz        # tar.gz、tar、zip、none
-    stripComponents: 1  # 移除顶层目录
-    subPath: "dist"     # 仅解压此子目录
+source:
+  type: directUpload
+  directUpload:
+    archive:
+      type: tar.gz        # tar.gz、tar、zip、none
+      stripComponents: 1  # 移除顶层目录
+      subPath: "dist"     # 仅解压此子目录
 ```
 
 #### 归档选项
@@ -352,17 +602,19 @@ metadata:
 spec:
   projectRef:
     name: my-app
-  action: create
-  directUpload:
-    source:
-      s3:
-        bucket: my-artifacts
-        key: builds/latest/dist.tar.gz
-        region: us-east-1
-        credentialsSecretRef:
-          name: aws-credentials
-    archive:
-      type: tar.gz
+  environment: production
+  source:
+    type: directUpload
+    directUpload:
+      source:
+        s3:
+          bucket: my-artifacts
+          key: builds/latest/dist.tar.gz
+          region: us-east-1
+          credentialsSecretRef:
+            name: aws-credentials
+      archive:
+        type: tar.gz
   cloudflare:
     accountId: "your-account-id"
     credentialsRef:
@@ -390,6 +642,8 @@ spec:
 | `LastSuccessful` | 回滚到最后一次成功的部署 | 快速恢复 |
 | `ByVersion` | 回滚到特定版本号 | 精确控制 |
 | `ExactDeploymentID` | 回滚到特定的 Cloudflare 部署 | 最大精度 |
+
+> **注意**：回滚功能使用旧字段（`action: rollback`）。对于新部署，建议创建一个指向目标源的新 PagesDeployment。
 
 ### 回滚策略
 
@@ -533,6 +787,72 @@ kubectl get pagesproject my-app -o jsonpath='{.status.lastSuccessfulDeploymentId
 # 查看最新部署信息
 kubectl get pagesproject my-app -o jsonpath='{.status.latestDeployment}' | jq
 ```
+
+---
+
+## 从旧格式迁移
+
+### 旧格式（已废弃）
+
+```yaml
+# 旧格式 - 已废弃
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDeployment
+metadata:
+  name: my-app-deploy
+spec:
+  projectRef:
+    name: my-app
+  action: create           # 已废弃
+  branch: main             # 已废弃
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+### 新格式（推荐）
+
+```yaml
+# 新格式 - 推荐
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesDeployment
+metadata:
+  name: my-app-prod
+spec:
+  projectRef:
+    name: my-app
+  environment: production  # 新字段：显式环境
+  source:                  # 新字段：统一源配置
+    type: git
+    git:
+      branch: main
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+### 自动转换
+
+控制器会自动将旧格式转换为新格式：
+
+| 旧字段 | 转换为 |
+|--------|--------|
+| `action: create` + `branch` | `environment: preview` + `source.type: git` |
+| `action: create` + `directUpload` | `environment: preview` + `source.type: directUpload` |
+| `action: retry` | （作为旧格式处理） |
+| `action: rollback` | （作为旧格式处理） |
+
+使用旧字段时会记录废弃警告事件。
+
+### 迁移检查清单
+
+1. 将 `action: create` 替换为显式 `environment` 字段
+2. 将 `branch` 移动到 `source.git.branch`
+3. 将 `directUpload` 移动到 `source.directUpload`
+4. 设置适当的 `environment`（production 或 preview）
+5. 确保每个项目只有一个 production 部署
 
 ---
 
@@ -771,20 +1091,22 @@ jobs:
           spec:
             projectRef:
               name: my-app
-            action: create
-            directUpload:
-              source:
-                s3:
-                  bucket: my-artifacts
-                  key: builds/${{ github.sha }}/dist.tar.gz
-                  region: us-east-1
-                  credentialsSecretRef:
-                    name: aws-credentials
-              checksum:
-                algorithm: sha256
-                value: "${{ needs.build.outputs.sha256 }}"
-              archive:
-                type: tar.gz
+            environment: production
+            source:
+              type: directUpload
+              directUpload:
+                source:
+                  s3:
+                    bucket: my-artifacts
+                    key: builds/${{ github.sha }}/dist.tar.gz
+                    region: us-east-1
+                    credentialsSecretRef:
+                      name: aws-credentials
+                checksum:
+                  algorithm: sha256
+                  value: "${{ needs.build.outputs.sha256 }}"
+                archive:
+                  type: tar.gz
             cloudflare:
               accountId: "${{ secrets.CF_ACCOUNT_ID }}"
               credentialsRef:
@@ -797,6 +1119,29 @@ jobs:
 ## 故障排除
 
 ### 常见问题
+
+#### Production 唯一性错误
+
+```
+Error: production environment already exists for project "my-app": default/my-app-prod
+```
+
+**原因**：尝试创建第二个 production PagesDeployment。
+
+**解决方案**：每个项目只能有一个 production 部署。可以：
+- 先删除现有 production 部署
+- 新部署使用 `environment: preview`
+- 更新现有 production 部署
+
+#### Production 删除被阻止
+
+```
+Error: cannot delete the only production deployment, create a new production deployment first
+```
+
+**原因**：尝试删除唯一的 production PagesDeployment。
+
+**解决方案**：先创建新的 production 部署再删除现有的。
 
 #### 校验和不匹配
 
@@ -852,6 +1197,9 @@ kubectl logs -n cloudflare-operator-system deployment/cloudflare-operator-contro
 
 # 查看项目状态
 kubectl get pagesproject my-app -o yaml
+
+# 列出项目的所有部署
+kubectl get pagesdeployment -l cloudflare-operator.io/project=my-app
 ```
 
 ---

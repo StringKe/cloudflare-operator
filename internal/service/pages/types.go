@@ -215,26 +215,65 @@ type PagesDomainConfig struct {
 	AutoConfigureDNS *bool `json:"autoConfigureDNS,omitempty"`
 }
 
-// PagesDeploymentActionConfig represents a Pages deployment action configuration.
-type PagesDeploymentActionConfig struct {
+// PagesDeploymentConfig represents a Pages deployment configuration.
+// This is the unified config structure that supports both new (Environment/Source)
+// and legacy (Action/Branch/DirectUpload) fields.
+type PagesDeploymentConfig struct {
 	// ProjectName is the Cloudflare project name
 	ProjectName string `json:"projectName"`
-	// Branch is the branch to deploy (for git-based deployments)
-	Branch string `json:"branch,omitempty"`
-	// Action is the deployment action (create, retry, rollback)
-	Action string `json:"action"`
-	// TargetDeploymentID is the deployment ID to retry or rollback to
-	TargetDeploymentID string `json:"targetDeploymentId,omitempty"`
+
+	// ========== NEW FIELDS (preferred) ==========
+
+	// Environment is the deployment environment (production or preview)
+	Environment string `json:"environment,omitempty"`
+	// Source contains the deployment source configuration
+	Source *DeploymentSourceConfig `json:"source,omitempty"`
+
+	// ========== COMMON FIELDS ==========
+
 	// PurgeBuildCache purges the build cache before deployment
 	PurgeBuildCache bool `json:"purgeBuildCache,omitempty"`
-	// DirectUpload contains configuration for direct upload deployments
-	DirectUpload *DirectUploadConfig `json:"directUpload,omitempty"`
-	// Rollback contains configuration for intelligent rollback
-	Rollback *RollbackConfig `json:"rollback,omitempty"`
 	// ForceRedeploy is a value that, when changed, forces a new deployment
 	// even if other configuration hasn't changed. This is typically set from
 	// the cloudflare-operator.io/force-redeploy annotation.
 	ForceRedeploy string `json:"forceRedeploy,omitempty"`
+
+	// ========== LEGACY FIELDS (deprecated, for backward compatibility) ==========
+
+	// Action is the deployment action (create, retry, rollback)
+	// Deprecated: Use Environment and Source instead
+	Action string `json:"action,omitempty"`
+	// TargetDeploymentID is the deployment ID to retry or rollback to
+	// Deprecated: Use Rollback.DeploymentID or create a new deployment
+	TargetDeploymentID string `json:"targetDeploymentId,omitempty"`
+	// Rollback contains configuration for intelligent rollback
+	// Deprecated: Create a new deployment with desired source instead
+	Rollback *RollbackConfig `json:"rollback,omitempty"`
+	// LegacyDirectUpload contains legacy direct upload configuration
+	// Deprecated: Use Source.DirectUpload instead
+	LegacyDirectUpload *DirectUploadConfig `json:"legacyDirectUpload,omitempty"`
+}
+
+// PagesDeploymentActionConfig is an alias for backward compatibility.
+// Deprecated: Use PagesDeploymentConfig instead.
+type PagesDeploymentActionConfig = PagesDeploymentConfig
+
+// DeploymentSourceConfig defines the source configuration for a deployment.
+type DeploymentSourceConfig struct {
+	// Type is the source type (git or directUpload)
+	Type string `json:"type"`
+	// Git contains git-based deployment configuration
+	Git *GitSourceConfig `json:"git,omitempty"`
+	// DirectUpload contains direct upload deployment configuration
+	DirectUpload *DirectUploadConfig `json:"directUpload,omitempty"`
+}
+
+// GitSourceConfig defines git-based deployment source.
+type GitSourceConfig struct {
+	// Branch is the branch to deploy from
+	Branch string `json:"branch,omitempty"`
+	// CommitSha is the specific commit SHA to deploy
+	CommitSha string `json:"commitSha,omitempty"`
 }
 
 // DirectUploadConfig contains configuration for direct upload deployments.
