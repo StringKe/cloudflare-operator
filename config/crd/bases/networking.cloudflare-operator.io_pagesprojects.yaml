@@ -654,6 +654,14 @@ spec:
                 maximum: 100
                 minimum: 0
                 type: integer
+              enableWebAnalytics:
+                default: true
+                description: |-
+                  EnableWebAnalytics enables Cloudflare Web Analytics for this project.
+                  When true (default), Web Analytics will be automatically enabled with auto-install
+                  for the *.pages.dev domain. For custom domains, Web Analytics needs to be enabled
+                  separately or through PagesDomain resources.
+                type: boolean
               name:
                 description: |-
                   Name is the project name in Cloudflare Pages.

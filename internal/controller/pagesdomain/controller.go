@@ -210,8 +210,9 @@ func (r *PagesDomainReconciler) registerPagesDomain(
 
 	// Build Pages domain configuration
 	config := pagessvc.PagesDomainConfig{
-		Domain:      domain.Spec.Domain,
-		ProjectName: projectName,
+		Domain:           domain.Spec.Domain,
+		ProjectName:      projectName,
+		AutoConfigureDNS: domain.Spec.AutoConfigureDNS,
 	}
 
 	// Register to SyncState

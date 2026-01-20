@@ -464,6 +464,14 @@ type PagesProjectSpec struct {
 	// +kubebuilder:validation:Optional
 	DeploymentHistoryLimit *int `json:"deploymentHistoryLimit,omitempty"`
 
+	// EnableWebAnalytics enables Cloudflare Web Analytics for this project.
+	// When true (default), Web Analytics will be automatically enabled with auto-install
+	// for the *.pages.dev domain. For custom domains, Web Analytics needs to be enabled
+	// separately or through PagesDomain resources.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=true
+	EnableWebAnalytics *bool `json:"enableWebAnalytics,omitempty"`
+
 	// DeletionPolicy specifies what happens when the Kubernetes resource is deleted.
 	// Delete: The Pages project will be deleted from Cloudflare.
 	// Orphan: The Pages project will be left in Cloudflare.

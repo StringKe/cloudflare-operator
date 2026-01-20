@@ -520,6 +520,35 @@ func (mr *MockCloudflareClientMockRecorder) DeleteWARPConnector(ctx, connectorID
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteWARPConnector", reflect.TypeOf((*MockCloudflareClient)(nil).DeleteWARPConnector), ctx, connectorID)
 }
 
+// DisableWebAnalytics mocks base method.
+func (m *MockCloudflareClient) DisableWebAnalytics(ctx context.Context, siteTag string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DisableWebAnalytics", ctx, siteTag)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// DisableWebAnalytics indicates an expected call of DisableWebAnalytics.
+func (mr *MockCloudflareClientMockRecorder) DisableWebAnalytics(ctx, siteTag any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DisableWebAnalytics", reflect.TypeOf((*MockCloudflareClient)(nil).DisableWebAnalytics), ctx, siteTag)
+}
+
+// EnableWebAnalytics mocks base method.
+func (m *MockCloudflareClient) EnableWebAnalytics(ctx context.Context, hostname string) (*cf.RUMSite, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "EnableWebAnalytics", ctx, hostname)
+	ret0, _ := ret[0].(*cf.RUMSite)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// EnableWebAnalytics indicates an expected call of EnableWebAnalytics.
+func (mr *MockCloudflareClientMockRecorder) EnableWebAnalytics(ctx, hostname any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EnableWebAnalytics", reflect.TypeOf((*MockCloudflareClient)(nil).EnableWebAnalytics), ctx, hostname)
+}
+
 // GetAccessApplication mocks base method.
 func (m *MockCloudflareClient) GetAccessApplication(ctx context.Context, applicationID string) (*cf.AccessApplicationResult, error) {
 	m.ctrl.T.Helper()
@@ -925,6 +954,21 @@ func (m *MockCloudflareClient) GetWARPConnectorToken(ctx context.Context, connec
 func (mr *MockCloudflareClientMockRecorder) GetWARPConnectorToken(ctx, connectorID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetWARPConnectorToken", reflect.TypeOf((*MockCloudflareClient)(nil).GetWARPConnectorToken), ctx, connectorID)
+}
+
+// GetWebAnalyticsSite mocks base method.
+func (m *MockCloudflareClient) GetWebAnalyticsSite(ctx context.Context, hostname string) (*cf.RUMSite, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetWebAnalyticsSite", ctx, hostname)
+	ret0, _ := ret[0].(*cf.RUMSite)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetWebAnalyticsSite indicates an expected call of GetWebAnalyticsSite.
+func (mr *MockCloudflareClientMockRecorder) GetWebAnalyticsSite(ctx, hostname any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetWebAnalyticsSite", reflect.TypeOf((*MockCloudflareClient)(nil).GetWebAnalyticsSite), ctx, hostname)
 }
 
 // GetZoneId mocks base method.
@@ -1460,6 +1504,21 @@ func (m *MockCloudflareClient) UpdateVirtualNetwork(ctx context.Context, virtual
 func (mr *MockCloudflareClientMockRecorder) UpdateVirtualNetwork(ctx, virtualNetworkID, params any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateVirtualNetwork", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateVirtualNetwork), ctx, virtualNetworkID, params)
+}
+
+// UpdateWebAnalyticsSite mocks base method.
+func (m *MockCloudflareClient) UpdateWebAnalyticsSite(ctx context.Context, siteTag string, autoInstall bool) (*cf.RUMSite, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateWebAnalyticsSite", ctx, siteTag, autoInstall)
+	ret0, _ := ret[0].(*cf.RUMSite)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UpdateWebAnalyticsSite indicates an expected call of UpdateWebAnalyticsSite.
+func (mr *MockCloudflareClientMockRecorder) UpdateWebAnalyticsSite(ctx, siteTag, autoInstall any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateWebAnalyticsSite", reflect.TypeOf((*MockCloudflareClient)(nil).UpdateWebAnalyticsSite), ctx, siteTag, autoInstall)
 }
 
 // ValidateAll mocks base method.

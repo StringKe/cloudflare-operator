@@ -151,6 +151,12 @@ type CloudflareClient interface {
 	RetryPagesDeployment(ctx context.Context, projectName, deploymentID string) (*PagesDeploymentResult, error)
 	RollbackPagesDeployment(ctx context.Context, projectName, deploymentID string) (*PagesDeploymentResult, error)
 	GetPagesDeploymentLogs(ctx context.Context, projectName, deploymentID string) (*PagesDeploymentLogsResult, error)
+
+	// Web Analytics (RUM) operations
+	EnableWebAnalytics(ctx context.Context, hostname string) (*RUMSite, error)
+	GetWebAnalyticsSite(ctx context.Context, hostname string) (*RUMSite, error)
+	UpdateWebAnalyticsSite(ctx context.Context, siteTag string, autoInstall bool) (*RUMSite, error)
+	DisableWebAnalytics(ctx context.Context, siteTag string) error
 }
 
 // Ensure API implements CloudflareClient

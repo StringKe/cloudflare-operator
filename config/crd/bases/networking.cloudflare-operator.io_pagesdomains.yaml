@@ -64,6 +64,16 @@ spec:
           spec:
             description: PagesDomainSpec defines the desired state of PagesDomain
             properties:
+              autoConfigureDNS:
+                default: true
+                description: |-
+                  AutoConfigureDNS controls whether to automatically configure DNS records
+                  when the domain's zone is in the same Cloudflare account.
+                  When true (default), Cloudflare will automatically create CNAME records
+                  pointing to the Pages project.
+                  When false, DNS must be configured manually (useful for external DNS providers
+                  or when you want more control over DNS configuration).
+                type: boolean
               cloudflare:
                 description: Cloudflare contains Cloudflare-specific configuration.
                 properties:

@@ -266,6 +266,15 @@ func (r *PagesProjectReconciler) buildProjectConfig(project *networkingv1alpha2.
 		}
 	}
 
+	// Set adoption policy and deployment history limit
+	config.AdoptionPolicy = project.Spec.AdoptionPolicy
+	if project.Spec.DeploymentHistoryLimit != nil {
+		config.DeploymentHistoryLimit = *project.Spec.DeploymentHistoryLimit
+	}
+
+	// Enable Web Analytics (default true)
+	config.EnableWebAnalytics = project.Spec.EnableWebAnalytics
+
 	return config
 }
 

@@ -60,6 +60,16 @@ type PagesDomainSpec struct {
 	// +kubebuilder:validation:Required
 	Cloudflare CloudflareDetails `json:"cloudflare"`
 
+	// AutoConfigureDNS controls whether to automatically configure DNS records
+	// when the domain's zone is in the same Cloudflare account.
+	// When true (default), Cloudflare will automatically create CNAME records
+	// pointing to the Pages project.
+	// When false, DNS must be configured manually (useful for external DNS providers
+	// or when you want more control over DNS configuration).
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=true
+	AutoConfigureDNS *bool `json:"autoConfigureDNS,omitempty"`
+
 	// DeletionPolicy specifies what happens when the Kubernetes resource is deleted.
 	// Delete: The custom domain will be removed from the Pages project.
 	// Orphan: The custom domain will be left in Cloudflare.

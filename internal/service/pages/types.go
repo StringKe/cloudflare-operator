@@ -48,6 +48,8 @@ type PagesProjectConfig struct {
 	AdoptionPolicy string `json:"adoptionPolicy,omitempty"`
 	// DeploymentHistoryLimit is the number of history entries to keep
 	DeploymentHistoryLimit int `json:"deploymentHistoryLimit,omitempty"`
+	// EnableWebAnalytics enables Cloudflare Web Analytics for this project
+	EnableWebAnalytics *bool `json:"enableWebAnalytics,omitempty"`
 }
 
 // PagesSourceConfig defines the source repository configuration.
@@ -198,6 +200,8 @@ type PagesDomainConfig struct {
 	Domain string `json:"domain"`
 	// ProjectName is the Cloudflare project name
 	ProjectName string `json:"projectName"`
+	// AutoConfigureDNS controls automatic DNS configuration
+	AutoConfigureDNS *bool `json:"autoConfigureDNS,omitempty"`
 }
 
 // PagesDeploymentActionConfig represents a Pages deployment action configuration.
