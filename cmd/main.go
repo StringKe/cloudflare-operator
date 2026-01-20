@@ -754,6 +754,10 @@ func main() {
 			setupLog.Error(err, "unable to create webhook", "webhook", "ClusterTunnel")
 			os.Exit(1)
 		}
+		if err = webhooknetworkingv1alpha2.SetupPagesProjectWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "PagesProject")
+			os.Exit(1)
+		}
 	}
 	// +kubebuilder:scaffold:builder
 

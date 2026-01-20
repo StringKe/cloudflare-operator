@@ -34,6 +34,11 @@ This section contains detailed documentation for all Custom Resource Definitions
 ### DNS & Connectivity
 - [DNSRecord](dnsrecord.md) - DNS record management
 
+### Pages & Workers
+- [PagesProject](pagesproject.md) - Cloudflare Pages project management
+- [PagesDeployment](pagesdeployment.md) - Deploy versions to Pages
+- [PagesDomain](pagesdomain.md) - Custom domain for Pages
+
 ### Kubernetes Integration
 - [TunnelIngressClassConfig](tunnelingressclassconfig.md) - Ingress integration
 - [TunnelGatewayClassConfig](tunnelgatewayclassconfig.md) - Gateway API integration

@@ -34,6 +34,11 @@
 ### DNS 与连接
 - [DNSRecord](dnsrecord.md) - DNS 记录管理
 
+### Pages 与 Workers
+- [PagesProject](pagesproject.md) - Cloudflare Pages 项目管理
+- [PagesDeployment](pagesdeployment.md) - 部署版本到 Pages
+- [PagesDomain](pagesdomain.md) - Pages 自定义域名
+
 ### Kubernetes 集成
 - [TunnelIngressClassConfig](tunnelingressclassconfig.md) - Ingress 集成
 - [TunnelGatewayClassConfig](tunnelgatewayclassconfig.md) - Gateway API 集成

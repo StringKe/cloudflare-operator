@@ -203,6 +203,8 @@ func (r *PagesDeploymentReconciler) applyBackwardCompatibilityAdapter(
 }
 
 // validateProductionUniqueness ensures only one production deployment exists per project.
+// Allows temporary coexistence of managed deployments (by PagesProject), as the PagesProject
+// controller will reconcile them to ensure eventual consistency.
 //
 //nolint:revive // cognitive complexity is acceptable for validation logic
 func (r *PagesDeploymentReconciler) validateProductionUniqueness(
@@ -210,6 +212,8 @@ func (r *PagesDeploymentReconciler) validateProductionUniqueness(
 	deployment *networkingv1alpha2.PagesDeployment,
 	projectName string,
 ) error {
+	logger := log.FromContext(ctx)
+
 	// List all PagesDeployments in the same namespace
 	deploymentList := &networkingv1alpha2.PagesDeploymentList{}
 	if err := r.List(ctx, deploymentList, client.InNamespace(deployment.Namespace)); err != nil {
@@ -234,11 +238,22 @@ func (r *PagesDeploymentReconciler) validateProductionUniqueness(
 		}
 
 		if otherProjectName == projectName {
+			// Check if the other deployment is managed by PagesProject
+			// Managed deployments are allowed to temporarily coexist during reconciliation
+			const ManagedByLabel = "networking.cloudflare-operator.io/managed-by"
+			const ManagedByValue = "pagesproject"
+			if other.Labels[ManagedByLabel] == ManagedByValue {
+				logger.Info("Found managed production deployment, allowing temporary coexistence",
+					"existing", other.Name, "managed", true)
+				// PagesProject controller will handle reconciliation
+				continue
+			}
+
 			// Check if the other deployment is in a terminal state (failed/succeeded)
 			// Only block if the other production deployment is active
 			if other.Status.State != networkingv1alpha2.PagesDeploymentStateFailed &&
 				other.Status.State != networkingv1alpha2.PagesDeploymentStateCancelled {
-				return fmt.Errorf("production deployment '%s' already exists for project '%s'. "+
+				return fmt.Errorf("production deployment '%s' already exists for project '%s' (user-created). "+
 					"Only one production deployment is allowed per project. "+
 					"Delete the existing production deployment or use environment: preview",
 					other.Name, projectName)

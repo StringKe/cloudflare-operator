@@ -384,6 +384,83 @@ type PagesPlacement struct {
 	Mode string `json:"mode,omitempty"`
 }
 
+// ProjectVersion defines a single deployment version for declarative version management.
+type ProjectVersion struct {
+	// Name is the version identifier (e.g., "v1.2.3", "2025-01-20").
+	// Must be unique within the versions list.
+	// Used to construct the PagesDeployment name as "<project-name>-<version-name>".
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Name string `json:"name"`
+
+	// Source defines where to fetch the deployment files from.
+	// Supports HTTP/HTTPS URLs, S3-compatible storage, and OCI registries.
+	// This field already includes Archive and Checksum configuration.
+	// +kubebuilder:validation:Optional
+	Source *PagesDirectUploadSourceSpec `json:"source,omitempty"`
+
+	// Metadata contains optional metadata for this version.
+	// Examples: gitCommit, buildTime, author, releaseNotes.
+	// +kubebuilder:validation:Optional
+	Metadata map[string]string `json:"metadata,omitempty"`
+}
+
+// ProductionDeploymentInfo contains information about the current production deployment.
+type ProductionDeploymentInfo struct {
+	// Version is the version name (from ProjectVersion).
+	// +kubebuilder:validation:Required
+	Version string `json:"version"`
+
+	// DeploymentID is the Cloudflare deployment ID.
+	// +kubebuilder:validation:Optional
+	DeploymentID string `json:"deploymentId,omitempty"`
+
+	// DeploymentName is the PagesDeployment resource name.
+	// +kubebuilder:validation:Required
+	DeploymentName string `json:"deploymentName"`
+
+	// URL is the production deployment URL.
+	// +kubebuilder:validation:Optional
+	URL string `json:"url,omitempty"`
+
+	// HashURL is the deployment-specific URL (e.g., abc123.my-app.pages.dev).
+	// +kubebuilder:validation:Optional
+	HashURL string `json:"hashUrl,omitempty"`
+
+	// DeployedAt is when this version became production.
+	// +kubebuilder:validation:Optional
+	DeployedAt *metav1.Time `json:"deployedAt,omitempty"`
+}
+
+// ManagedVersionStatus represents the status of a managed version deployment.
+type ManagedVersionStatus struct {
+	// Name is the version name.
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+
+	// DeploymentName is the PagesDeployment resource name.
+	// +kubebuilder:validation:Required
+	DeploymentName string `json:"deploymentName"`
+
+	// State is the deployment state (Pending, Building, Succeeded, Failed, etc.).
+	// +kubebuilder:validation:Optional
+	State string `json:"state,omitempty"`
+
+	// IsProduction indicates if this is the current production deployment.
+	// +kubebuilder:validation:Optional
+	IsProduction bool `json:"isProduction"`
+
+	// DeploymentID is the Cloudflare deployment ID.
+	// +kubebuilder:validation:Optional
+	DeploymentID string `json:"deploymentId,omitempty"`
+
+	// LastTransitionTime is when the state last changed.
+	// +kubebuilder:validation:Optional
+	LastTransitionTime *metav1.Time `json:"lastTransitionTime,omitempty"`
+}
+
 // PagesDeploymentInfo contains information about a deployment.
 type PagesDeploymentInfo struct {
 	// ID is the deployment ID.
@@ -479,6 +556,30 @@ type PagesProjectSpec struct {
 	// +kubebuilder:validation:Enum=Delete;Orphan
 	// +kubebuilder:default=Delete
 	DeletionPolicy string `json:"deletionPolicy,omitempty"`
+
+	// Versions defines a declarative list of deployment versions.
+	// The controller automatically creates a PagesDeployment for each version.
+	// Managed deployments have ownerReference and special labels for tracking.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=100
+	Versions []ProjectVersion `json:"versions,omitempty"`
+
+	// ProductionTarget specifies which version to promote to production.
+	// - "latest": Use versions[0] (the first/newest version in the list)
+	// - "vX.Y.Z": Use a specific version by name
+	// - "": Do not automatically promote to production
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Pattern=`^(latest|v.+)?$`
+	ProductionTarget string `json:"productionTarget,omitempty"`
+
+	// RevisionHistoryLimit limits the number of managed PagesDeployment resources to keep.
+	// When exceeded, oldest non-production deployments are automatically deleted.
+	// Production deployments are never deleted by pruning.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	// +kubebuilder:default=10
+	RevisionHistoryLimit *int32 `json:"revisionHistoryLimit,omitempty"`
 }
 
 // PagesProjectStatus defines the observed state of PagesProject
@@ -543,6 +644,21 @@ type PagesProjectStatus struct {
 	// Used for LastSuccessful rollback strategy.
 	// +kubebuilder:validation:Optional
 	LastSuccessfulDeploymentID string `json:"lastSuccessfulDeploymentId,omitempty"`
+
+	// CurrentProduction contains information about the current production deployment.
+	// Only populated when using declarative version management (Spec.Versions).
+	// +kubebuilder:validation:Optional
+	CurrentProduction *ProductionDeploymentInfo `json:"currentProduction,omitempty"`
+
+	// ManagedDeployments is the count of PagesDeployment resources managed by this PagesProject.
+	// Only counts deployments created from Spec.Versions.
+	// +kubebuilder:validation:Optional
+	ManagedDeployments int32 `json:"managedDeployments,omitempty"`
+
+	// ManagedVersions contains status summary for each managed version.
+	// Provides quick overview of all declarative versions without querying child resources.
+	// +kubebuilder:validation:Optional
+	ManagedVersions []ManagedVersionStatus `json:"managedVersions,omitempty"`
 }
 
 // PagesProjectOriginalConfig stores the original Cloudflare configuration before adoption.

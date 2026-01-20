@@ -1,0 +1,130 @@
+# Example: PagesProject with declarative version management
+#
+# This example demonstrates how to use PagesProject with declarative versions
+# for managing multiple deployment versions and automatic production promotion.
+#
+# Features demonstrated:
+# - Declarative version list (spec.versions[])
+# - Automatic PagesDeployment creation for each version
+# - Production target control (spec.productionTarget)
+# - Revision history limiting (spec.revisionHistoryLimit)
+#
+# How it works:
+# 1. The PagesProject controller creates a PagesDeployment for each version
+# 2. Deployments are labeled as managed (managed-by: pagesproject)
+# 3. The productionTarget controls which version is promoted to production
+# 4. Old deployments are pruned based on revisionHistoryLimit
+
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesProject
+metadata:
+  name: my-app
+  namespace: default
+spec:
+  # Project configuration
+  name: "my-app"
+  productionBranch: "main"
+
+  # Declarative version list
+  # Controller automatically creates PagesDeployment for each version
+  versions:
+    # Latest version - will be deployed first
+    - name: "v1.2.3"
+      source:
+        source:
+          http:
+            url: "https://artifacts.example.com/my-app/v1.2.3/dist.tar.gz"
+        archive:
+          type: tar.gz
+          stripComponents: 1
+        checksum:
+          algorithm: sha256
+          value: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      metadata:
+        gitCommit: "abc123def456"
+        buildTime: "2025-01-20T10:00:00Z"
+        author: "deploy-bot"
+
+    # Previous version - kept for rollback
+    - name: "v1.2.2"
+      source:
+        source:
+          http:
+            url: "https://artifacts.example.com/my-app/v1.2.2/dist.tar.gz"
+        archive:
+          type: tar.gz
+          stripComponents: 1
+        checksum:
+          algorithm: sha256
+          value: "a1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+
+    # Older stable version
+    - name: "v1.2.1"
+      source:
+        source:
+          http:
+            url: "https://artifacts.example.com/my-app/v1.2.1/dist.tar.gz"
+        archive:
+          type: tar.gz
+          stripComponents: 1
+
+  # Production target control
+  # - "latest": Automatically deploy versions[0] to production
+  # - "v1.2.2": Lock to specific version for rollback
+  # - "": No automatic production promotion
+  productionTarget: "latest"
+
+  # Revision history limit
+  # Keeps only the 10 most recent deployments
+  # Older non-production deployments are automatically deleted
+  revisionHistoryLimit: 10
+
+  # Deployment history limit (for rollback feature)
+  deploymentHistoryLimit: 10
+
+  # Enable Web Analytics
+  enableWebAnalytics: true
+
+  # Cloudflare credentials
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials
+
+---
+# Example: PagesProject with version pinning for rollback
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesProject
+metadata:
+  name: my-app-rollback-example
+  namespace: default
+spec:
+  name: "my-app-rollback"
+  productionBranch: "main"
+
+  versions:
+    - name: "v1.2.3"
+      source:
+        source:
+          http:
+            url: "https://artifacts.example.com/my-app/v1.2.3/dist.tar.gz"
+        archive:
+          type: tar.gz
+
+    - name: "v1.2.2"
+      source:
+        source:
+          http:
+            url: "https://artifacts.example.com/my-app/v1.2.2/dist.tar.gz"
+        archive:
+          type: tar.gz
+
+  # Pin to v1.2.2 for rollback (instead of "latest")
+  productionTarget: "v1.2.2"
+
+  revisionHistoryLimit: 5
+
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials

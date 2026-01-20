@@ -28,21 +28,19 @@ import (
 	pagessvc "github.com/StringKe/cloudflare-operator/internal/service/pages"
 )
 
-const (
-	FinalizerName = "pagesproject.networking.cloudflare-operator.io/finalizer"
-)
-
 // PagesProjectReconciler reconciles a PagesProject object
 type PagesProjectReconciler struct {
 	client.Client
 	Scheme         *runtime.Scheme
 	Recorder       record.EventRecorder
 	projectService *pagessvc.ProjectService
+	versionManager *VersionManager
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=pagesprojects,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=pagesprojects/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=pagesprojects/finalizers,verbs=update
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=pagesdeployments,verbs=get;list;watch;create;update;patch;delete
 
 //nolint:revive // cognitive complexity is acceptable for this reconcile loop
 func (r *PagesProjectReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -78,7 +76,41 @@ func (r *PagesProjectReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	// Register Pages project configuration to SyncState
-	return r.registerPagesProject(ctx, project, credInfo)
+	result, err := r.registerPagesProject(ctx, project, credInfo)
+	if err != nil {
+		return result, err
+	}
+
+	// Handle declarative version management if versions are specified
+	if len(project.Spec.Versions) > 0 {
+		// Reconcile versions - create/update PagesDeployment resources
+		if err := r.versionManager.Reconcile(ctx, project); err != nil {
+			logger.Error(err, "Failed to reconcile versions")
+			controller.RecordErrorEventAndCondition(r.Recorder, project,
+				&project.Status.Conditions, "VersionReconcileFailed", err)
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+		}
+
+		// Reconcile production target - promote/demote deployments
+		if err := r.reconcileProductionTarget(ctx, project); err != nil {
+			logger.Error(err, "Failed to reconcile production target")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, err
+		}
+
+		// Prune old versions based on revisionHistoryLimit
+		if err := r.pruneOldVersions(ctx, project); err != nil {
+			logger.Error(err, "Failed to prune old versions")
+			// Pruning errors are non-fatal, continue
+		}
+
+		// Aggregate status from managed deployments
+		if err := r.aggregateVersionStatus(ctx, project); err != nil {
+			logger.Error(err, "Failed to aggregate version status")
+			// Status aggregation errors are non-fatal, continue
+		}
+	}
+
+	return result, err
 }
 
 // resolveCredentials resolves the credentials for the Pages project.
@@ -503,7 +535,15 @@ func (r *PagesProjectReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Initialize ProjectService
 	r.projectService = pagessvc.NewProjectService(mgr.GetClient())
 
+	// Initialize VersionManager
+	r.versionManager = NewVersionManager(
+		mgr.GetClient(),
+		mgr.GetScheme(),
+		ctrl.Log.WithName("pagesproject").WithName("versionmanager"),
+	)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.PagesProject{}).
+		Owns(&networkingv1alpha2.PagesDeployment{}). // Watch managed PagesDeployment resources
 		Complete(r)
 }

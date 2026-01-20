@@ -84,12 +84,14 @@ spec:
                 default: create
                 description: |-
                   Action is the deployment action to perform.
+
                   Deprecated: Use Environment and Source instead. Rollback should be done by
                   creating a new deployment with the same source as the target.
                 type: string
               branch:
                 description: |-
                   Branch is the branch to deploy from (for git-based deployments).
+
                   Deprecated: Use Source.Git.Branch instead.
                 type: string
               cloudflare:
