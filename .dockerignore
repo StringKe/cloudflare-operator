@@ -1,4 +1,49 @@
 # More info: https://docs.docker.com/engine/reference/builder/#dockerignore-file
-# Ignore build and test binaries.
+
+# Build artifacts
 bin/
 testbin/
+dist/
+
+# Git
+.git/
+.gitignore
+
+# GitHub
+.github/
+
+# Documentation
+docs/
+examples/
+*.md
+!go.mod
+!go.sum
+
+# IDE/Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Test files
+*_test.go
+test/
+e2e/
+hack/
+
+# Local development
+.env
+.env.*
+*.local
+
+# macOS
+.DS_Store
+
+# Kubernetes configs (not needed in image)
+config/samples/
+config/scorecard/
+
+# Claude/AI
+.claude/
+CLAUDE.md
