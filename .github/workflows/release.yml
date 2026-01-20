@@ -187,6 +187,16 @@ jobs:
       - name: Build installer manifests
         run: make build-installer VERSION=${{ steps.version.outputs.VERSION }}
 
+      - name: Generate release notes with git-cliff
+        id: changelog
+        uses: orhun/git-cliff-action@4a4a951bc43fafe41cd2348d181853f52356bee7 # v4.4.2
+        with:
+          config: .github/cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: CHANGELOG-release.md
+          GITHUB_REPO: ${{ github.repository }}
+
       - name: Install cosign
         uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
 
@@ -207,7 +217,7 @@ jobs:
           gh release create "${TAG_NAME}" \
             --repo ${{ github.repository }} \
             --title "${TAG_NAME}" \
-            --generate-notes \
+            --notes-file CHANGELOG-release.md \
             dist/cloudflare-operator*.yaml \
             dist/cloudflare-operator*.sig \
             dist/cloudflare-operator*.pem
