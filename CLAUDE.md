@@ -37,12 +37,12 @@
 | **服务层**   | TunnelBinding            | Namespaced | ⚠️ 废弃 (请迁移到 DNSRecord/Ingress)        |
 |              | PrivateService           | Namespaced | ✅ 完成                                      |
 |              | DNSRecord                | Namespaced | ✅ 完成                                      |
-| **身份层**   | AccessApplication        | Namespaced | ✅ 完成 (内联策略规则)                       |
+| **身份层**   | AccessApplication        | Namespaced | ✅ 完成 (内联策略规则, Watch AccessPolicy)   |
 |              | AccessGroup              | Cluster    | ✅ 完成                                      |
-|              | AccessPolicy             | Cluster    | ⚠️ L5 缺失 (可复用策略)                     |
+|              | AccessPolicy             | Cluster    | ✅ 完成 (可复用策略)                         |
 |              | AccessServiceToken       | Namespaced | ✅ 完成                                      |
 |              | AccessIdentityProvider   | Cluster    | ✅ 完成                                      |
-|              | AccessTunnel             | Namespaced | ⚠️ 废弃 (v1alpha1 遗留)                     |
+|              | AccessTunnel             | Namespaced | ⚠️ 废弃 (v1alpha1 遗留, 请使用 WARPConnector)|
 | **设备层**   | DevicePostureRule        | Cluster    | ✅ 完成                                      |
 |              | DeviceSettingsPolicy     | Cluster    | ✅ 完成                                      |
 | **网关层**   | GatewayRule              | Cluster    | ✅ 完成                                      |
@@ -60,7 +60,7 @@
 |              | PagesDeployment          | Namespaced | ✅ 完成 (直接上传、智能回滚)                 |
 | **域名注册** | DomainRegistration       | Cluster    | ✅ 完成 (Enterprise)                         |
 | **K8s 集成** | TunnelIngressClassConfig | Cluster    | ✅ 嵌入式 (Ingress 控制器配置)               |
-|              | TunnelGatewayClassConfig | Cluster    | ❌ 未实现 (仅类型定义)                       |
+|              | TunnelGatewayClassConfig | Cluster    | ✅ 嵌入式 (Gateway DNS 管理)                 |
 
 **图例**:
 - ✅ 完成: 完整六层架构实现
@@ -900,9 +900,9 @@ if err = (&myresourcesync.SyncController{
 | **NetworkRoute**             |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | 跨 VNet 采用                      |
 | **PrivateService**           |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
 | **WARPConnector**            |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | 站点间连接                        |
-| **AccessApplication**        |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | 内联策略规则                      |
+| **AccessApplication**        |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | 内联策略规则, Watch AccessPolicy  |
 | **AccessGroup**              |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
-| **AccessPolicy**             |      ✅       |     ✅     |      ✅      |      ❌      |  80%   | 缺少 L5 Sync Controller           |
+| **AccessPolicy**             |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | 可复用策略                        |
 | **AccessServiceToken**       |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
 | **AccessIdentityProvider**   |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
 | **AccessTunnel**             |   ⚠️ 废弃    |     ❌     |      ❌      |      ❌      |  33%   | v1alpha1 遗留，直接创建 Deployment|
@@ -926,7 +926,7 @@ if err = (&myresourcesync.SyncController{
 | **Ingress**                  |      ✅       |     ✅     |      ✅      |      ✅      |  100%  | DNS Automatic 已迁移              |
 | **Gateway**                  |      ✅       |     ✅     |      ✅      |      ✅      |  100%  |                                   |
 | **TunnelIngressClassConfig** |      -        |     -      |      -       |      -       |   -    | 嵌入式配置 (Ingress 控制器)       |
-| **TunnelGatewayClassConfig** |      ❌       |     ❌     |      ❌      |      ❌      |   0%   | 仅类型定义，未实现                |
+| **TunnelGatewayClassConfig** |      -        |     -      |      -       |      -       |   -    | 嵌入式配置 (Gateway DNS 管理)     |
 
 **图例**:
 
@@ -949,11 +949,6 @@ TunnelBinding 的 DNS TXT 管理模式 (`createDNSLogic`/`deleteDNSLogic`) 是�
 AccessTunnel 直接创建 K8s Deployment 而非通过六层架构，违反统一同步模式。
 WARPConnector 提供完整的六层架构实现和更好的站点间连接功能。
 
-**待实现资源**:
-
-**TunnelGatewayClassConfig**: 计划用于 Gateway API 集成配置，目前仅有类型定义。
-如需 Gateway API 支持，请使用现有的 TunnelIngressClassConfig 配合 Gateway API 的 HTTPRoute/TCPRoute。
-
 **已完成迁移**:
 
 - ✅ GatewayRule: 删除操作从 L2 移至 L5 Sync Controller (含 Finalizer)
@@ -973,6 +968,8 @@ WARPConnector 提供完整的六层架构实现和更好的站点间连接功能
 - ✅ Tunnel/ClusterTunnel: cfAPI 仅用于元数据，核心操作通过 LifecycleService
 - ✅ DNSRecord: 完整六层架构
 - ✅ Gateway: 完整六层架构
+- ✅ AccessApplication: 添加 Watch AccessPolicy 触发器
+- ✅ TunnelGatewayClassConfig: 嵌入 Gateway 控制器实现 DNS 自动管理
 
 ---
 

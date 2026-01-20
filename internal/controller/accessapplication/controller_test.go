@@ -11,10 +11,12 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	accesssvc "github.com/StringKe/cloudflare-operator/internal/service/access"
@@ -872,6 +874,264 @@ func TestAccessPolicyConfigMethods(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.wantHasInline, tt.config.HasInlineRules(), "HasInlineRules mismatch")
 			assert.Equal(t, tt.wantHasGroupRef, tt.config.HasGroupReference(), "HasGroupReference mismatch")
+		})
+	}
+}
+
+// TestAppReferencesAccessPolicy tests the helper function that checks if an AccessApplication
+// references a given AccessPolicy via ReusablePolicyRefs.
+func TestAppReferencesAccessPolicy(t *testing.T) {
+	tests := []struct {
+		name       string
+		app        *networkingv1alpha2.AccessApplication
+		policyName string
+		want       bool
+	}{
+		{
+			name: "app references the policy",
+			app: &networkingv1alpha2.AccessApplication{
+				Spec: networkingv1alpha2.AccessApplicationSpec{
+					ReusablePolicyRefs: []networkingv1alpha2.ReusablePolicyRef{
+						{Name: "policy-a"},
+						{Name: "policy-b"},
+					},
+				},
+			},
+			policyName: "policy-a",
+			want:       true,
+		},
+		{
+			name: "app does not reference the policy",
+			app: &networkingv1alpha2.AccessApplication{
+				Spec: networkingv1alpha2.AccessApplicationSpec{
+					ReusablePolicyRefs: []networkingv1alpha2.ReusablePolicyRef{
+						{Name: "policy-a"},
+						{Name: "policy-b"},
+					},
+				},
+			},
+			policyName: "policy-c",
+			want:       false,
+		},
+		{
+			name: "app has no reusable policy refs",
+			app: &networkingv1alpha2.AccessApplication{
+				Spec: networkingv1alpha2.AccessApplicationSpec{
+					ReusablePolicyRefs: nil,
+				},
+			},
+			policyName: "any-policy",
+			want:       false,
+		},
+		{
+			name: "app has empty reusable policy refs",
+			app: &networkingv1alpha2.AccessApplication{
+				Spec: networkingv1alpha2.AccessApplicationSpec{
+					ReusablePolicyRefs: []networkingv1alpha2.ReusablePolicyRef{},
+				},
+			},
+			policyName: "any-policy",
+			want:       false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := appReferencesAccessPolicy(tt.app, tt.policyName)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestFindAccessApplicationsForAccessPolicy tests that when an AccessPolicy changes,
+// the watch handler correctly identifies which AccessApplications need to be reconciled.
+func TestFindAccessApplicationsForAccessPolicy(t *testing.T) {
+	tests := []struct {
+		name         string
+		policy       *networkingv1alpha2.AccessPolicy
+		apps         []*networkingv1alpha2.AccessApplication
+		wantRequests []reconcile.Request
+	}{
+		{
+			name: "single app references the policy",
+			policy: &networkingv1alpha2.AccessPolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "shared-policy",
+				},
+			},
+			apps: []*networkingv1alpha2.AccessApplication{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "app-1",
+						Namespace: "default",
+					},
+					Spec: networkingv1alpha2.AccessApplicationSpec{
+						ReusablePolicyRefs: []networkingv1alpha2.ReusablePolicyRef{
+							{Name: "shared-policy"},
+						},
+					},
+				},
+			},
+			wantRequests: []reconcile.Request{
+				{NamespacedName: types.NamespacedName{Name: "app-1", Namespace: "default"}},
+			},
+		},
+		{
+			name: "multiple apps reference the policy",
+			policy: &networkingv1alpha2.AccessPolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "shared-policy",
+				},
+			},
+			apps: []*networkingv1alpha2.AccessApplication{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "app-1",
+						Namespace: "default",
+					},
+					Spec: networkingv1alpha2.AccessApplicationSpec{
+						ReusablePolicyRefs: []networkingv1alpha2.ReusablePolicyRef{
+							{Name: "shared-policy"},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "app-2",
+						Namespace: "production",
+					},
+					Spec: networkingv1alpha2.AccessApplicationSpec{
+						ReusablePolicyRefs: []networkingv1alpha2.ReusablePolicyRef{
+							{Name: "shared-policy"},
+							{Name: "another-policy"},
+						},
+					},
+				},
+			},
+			wantRequests: []reconcile.Request{
+				{NamespacedName: types.NamespacedName{Name: "app-1", Namespace: "default"}},
+				{NamespacedName: types.NamespacedName{Name: "app-2", Namespace: "production"}},
+			},
+		},
+		{
+			name: "no apps reference the policy",
+			policy: &networkingv1alpha2.AccessPolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "unused-policy",
+				},
+			},
+			apps: []*networkingv1alpha2.AccessApplication{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "app-1",
+						Namespace: "default",
+					},
+					Spec: networkingv1alpha2.AccessApplicationSpec{
+						ReusablePolicyRefs: []networkingv1alpha2.ReusablePolicyRef{
+							{Name: "other-policy"},
+						},
+					},
+				},
+			},
+			wantRequests: nil,
+		},
+		{
+			name: "mixed - some apps reference, some don't",
+			policy: &networkingv1alpha2.AccessPolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "some-policy",
+				},
+			},
+			apps: []*networkingv1alpha2.AccessApplication{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "app-1",
+						Namespace: "default",
+					},
+					Spec: networkingv1alpha2.AccessApplicationSpec{
+						ReusablePolicyRefs: []networkingv1alpha2.ReusablePolicyRef{
+							{Name: "some-policy"},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "app-2",
+						Namespace: "default",
+					},
+					Spec: networkingv1alpha2.AccessApplicationSpec{
+						ReusablePolicyRefs: []networkingv1alpha2.ReusablePolicyRef{
+							{Name: "different-policy"},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "app-3",
+						Namespace: "staging",
+					},
+					Spec: networkingv1alpha2.AccessApplicationSpec{
+						ReusablePolicyRefs: []networkingv1alpha2.ReusablePolicyRef{
+							{Name: "some-policy"},
+						},
+					},
+				},
+			},
+			wantRequests: []reconcile.Request{
+				{NamespacedName: types.NamespacedName{Name: "app-1", Namespace: "default"}},
+				{NamespacedName: types.NamespacedName{Name: "app-3", Namespace: "staging"}},
+			},
+		},
+		{
+			name: "app with no reusable policy refs",
+			policy: &networkingv1alpha2.AccessPolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "some-policy",
+				},
+			},
+			apps: []*networkingv1alpha2.AccessApplication{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "app-without-refs",
+						Namespace: "default",
+					},
+					Spec: networkingv1alpha2.AccessApplicationSpec{
+						// No ReusablePolicyRefs
+					},
+				},
+			},
+			wantRequests: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Prepare runtime objects
+			objs := make([]runtime.Object, 0, len(tt.apps)+1)
+			objs = append(objs, tt.policy)
+			for _, app := range tt.apps {
+				objs = append(objs, app)
+			}
+
+			r := setupReconciler(t, objs...)
+			ctx := context.Background()
+
+			requests := r.findAccessApplicationsForAccessPolicy(ctx, tt.policy)
+
+			// Sort for comparison (order may vary)
+			assert.Len(t, requests, len(tt.wantRequests), "number of reconcile requests mismatch")
+
+			// Check each expected request is present
+			for _, wantReq := range tt.wantRequests {
+				found := false
+				for _, gotReq := range requests {
+					if gotReq.NamespacedName == wantReq.NamespacedName {
+						found = true
+						break
+					}
+				}
+				assert.True(t, found, "expected reconcile request not found: %v", wantReq.NamespacedName)
+			}
 		})
 	}
 }

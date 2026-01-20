@@ -472,6 +472,17 @@ func appReferencesAccessGroup(app *networkingv1alpha2.AccessApplication, groupNa
 	return false
 }
 
+// appReferencesAccessPolicy checks if an AccessApplication references the given AccessPolicy
+// via the ReusablePolicyRefs field.
+func appReferencesAccessPolicy(app *networkingv1alpha2.AccessApplication, policyName string) bool {
+	for _, ref := range app.Spec.ReusablePolicyRefs {
+		if ref.Name == policyName {
+			return true
+		}
+	}
+	return false
+}
+
 // findAccessApplicationsForIdentityProvider returns a list of reconcile requests for AccessApplications
 // that reference the given AccessIdentityProvider.
 func (r *Reconciler) findAccessApplicationsForIdentityProvider(ctx context.Context, obj client.Object) []reconcile.Request {
@@ -533,6 +544,45 @@ func (r *Reconciler) findAccessApplicationsForAccessGroup(ctx context.Context, o
 		requests = append(requests, reconcile.Request{
 			NamespacedName: apitypes.NamespacedName{Name: app.Name},
 		})
+	}
+
+	return requests
+}
+
+// findAccessApplicationsForAccessPolicy returns a list of reconcile requests for AccessApplications
+// that reference the given AccessPolicy via the ReusablePolicyRefs field.
+func (r *Reconciler) findAccessApplicationsForAccessPolicy(ctx context.Context, obj client.Object) []reconcile.Request {
+	policy, ok := obj.(*networkingv1alpha2.AccessPolicy)
+	if !ok {
+		return nil
+	}
+	logger := ctrllog.FromContext(ctx)
+
+	appList := &networkingv1alpha2.AccessApplicationList{}
+	if err := r.List(ctx, appList); err != nil {
+		logger.Error(err, "Failed to list AccessApplications for AccessPolicy watch")
+		return nil
+	}
+
+	requests := make([]reconcile.Request, 0)
+	for i := range appList.Items {
+		app := &appList.Items[i]
+		if !appReferencesAccessPolicy(app, policy.Name) {
+			continue
+		}
+
+		logger.Info("AccessPolicy changed, triggering AccessApplication reconcile",
+			"accesspolicy", policy.Name,
+			"accessapplication", app.Name,
+			"namespace", app.Namespace)
+		requests = append(requests, reconcile.Request{
+			NamespacedName: apitypes.NamespacedName{Name: app.Name, Namespace: app.Namespace},
+		})
+	}
+
+	if len(requests) > 0 {
+		logger.V(1).Info("AccessPolicy changed, affected AccessApplications found",
+			"policy", policy.Name, "affectedApps", len(requests))
 	}
 
 	return requests
@@ -724,10 +774,15 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&networkingv1alpha2.AccessIdentityProvider{},
 			handler.EnqueueRequestsFromMapFunc(r.findAccessApplicationsForIdentityProvider),
 		).
-		// Watch AccessGroup changes for policy reference updates
+		// Watch AccessGroup changes for inline policy reference updates
 		Watches(
 			&networkingv1alpha2.AccessGroup{},
 			handler.EnqueueRequestsFromMapFunc(r.findAccessApplicationsForAccessGroup),
+		).
+		// Watch AccessPolicy changes for reusable policy reference updates
+		Watches(
+			&networkingv1alpha2.AccessPolicy{},
+			handler.EnqueueRequestsFromMapFunc(r.findAccessApplicationsForAccessPolicy),
 		).
 		// Watch Ingress changes - when an Ingress is created/updated, its domains
 		// become available in the tunnel, allowing AccessApplications to be created
