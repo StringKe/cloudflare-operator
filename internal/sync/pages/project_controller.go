@@ -281,6 +281,12 @@ func (r *ProjectSyncController) handleNewProject(
 		// Mark as adopted in annotations
 		r.markAsAdopted(ctx, syncState)
 
+		// Enable Web Analytics if configured
+		if err := r.enableWebAnalyticsIfNeeded(ctx, apiClient, config, existingProject.Subdomain); err != nil {
+			logger.Error(err, "Failed to enable Web Analytics for adopted project")
+			// Non-fatal error, continue
+		}
+
 		logger.Info("Adopted Pages project",
 			"projectName", config.Name,
 			"subdomain", existingProject.Subdomain)
@@ -303,9 +309,68 @@ func (r *ProjectSyncController) handleNewProject(
 		return err
 	}
 
+	// Enable Web Analytics if configured
+	if err := r.enableWebAnalyticsIfNeeded(ctx, apiClient, config, result.Subdomain); err != nil {
+		logger.Error(err, "Failed to enable Web Analytics for new project")
+		// Non-fatal error, continue
+	}
+
 	logger.Info("Created Pages project",
 		"projectName", result.Name,
 		"subdomain", result.Subdomain)
+
+	return nil
+}
+
+// enableWebAnalyticsIfNeeded enables Web Analytics for the Pages project if configured.
+func (*ProjectSyncController) enableWebAnalyticsIfNeeded(
+	ctx context.Context,
+	apiClient *cf.API,
+	config *pagessvc.PagesProjectConfig,
+	subdomain string,
+) error {
+	logger := log.FromContext(ctx)
+
+	// Check if Web Analytics should be enabled (default: true)
+	enableWebAnalytics := config.EnableWebAnalytics == nil || *config.EnableWebAnalytics
+
+	if !enableWebAnalytics {
+		logger.V(1).Info("Web Analytics disabled for project", "projectName", config.Name)
+		return nil
+	}
+
+	// The hostname for Pages is the subdomain (e.g., "myproject.pages.dev")
+	hostname := subdomain
+	if hostname == "" {
+		hostname = fmt.Sprintf("%s.pages.dev", config.Name)
+	}
+
+	// Check if Web Analytics is already enabled
+	existingSite, err := apiClient.GetWebAnalyticsSite(ctx, hostname)
+	if err != nil {
+		logger.V(1).Info("Failed to check existing Web Analytics site", "error", err)
+		// Continue to try enabling
+	}
+
+	if existingSite != nil {
+		logger.V(1).Info("Web Analytics already enabled for project",
+			"projectName", config.Name,
+			"hostname", hostname,
+			"siteTag", existingSite.SiteTag)
+		return nil
+	}
+
+	// Enable Web Analytics
+	site, err := apiClient.EnableWebAnalytics(ctx, hostname)
+	if err != nil {
+		return fmt.Errorf("enable Web Analytics for %s: %w", hostname, err)
+	}
+
+	logger.Info("Enabled Web Analytics for Pages project",
+		"projectName", config.Name,
+		"hostname", hostname,
+		"siteTag", site.SiteTag,
+		"siteToken", site.SiteToken)
 
 	return nil
 }
