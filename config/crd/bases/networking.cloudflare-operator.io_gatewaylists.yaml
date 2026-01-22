@@ -61,25 +61,26 @@ spec:
                 description: Cloudflare contains the Cloudflare API credentials.
                 properties:
                   CLOUDFLARE_API_KEY:
-                    default: CLOUDFLARE_API_KEY
                     description: |-
-                      Key in the secret to use for Cloudflare API Key, defaults to CLOUDFLARE_API_KEY. Needs Email also to be provided.
-                      For Delete operations for new tunnels only, or as an alternate to API Token
+                      Key in the secret to use for Cloudflare API Key.
+                      If not specified, defaults to "CLOUDFLARE_API_KEY" at runtime.
+                      Needs Email also to be provided.
+                      For Delete operations for new tunnels only, or as an alternate to API Token.
                     type: string
                   CLOUDFLARE_API_TOKEN:
-                    default: CLOUDFLARE_API_TOKEN
-                    description: Key in the secret to use for Cloudflare API token,
-                      defaults to CLOUDFLARE_API_TOKEN
+                    description: |-
+                      Key in the secret to use for Cloudflare API token.
+                      If not specified, defaults to "CLOUDFLARE_API_TOKEN" at runtime.
                     type: string
                   CLOUDFLARE_TUNNEL_CREDENTIAL_FILE:
-                    default: CLOUDFLARE_TUNNEL_CREDENTIAL_FILE
-                    description: Key in the secret to use as credentials.json for
-                      an existing tunnel, defaults to CLOUDFLARE_TUNNEL_CREDENTIAL_FILE
+                    description: |-
+                      Key in the secret to use as credentials.json for an existing tunnel.
+                      If not specified, defaults to "CLOUDFLARE_TUNNEL_CREDENTIAL_FILE" at runtime.
                     type: string
                   CLOUDFLARE_TUNNEL_CREDENTIAL_SECRET:
-                    default: CLOUDFLARE_TUNNEL_CREDENTIAL_SECRET
-                    description: Key in the secret to use as tunnel secret for an
-                      existing tunnel, defaults to CLOUDFLARE_TUNNEL_CREDENTIAL_SECRET
+                    description: |-
+                      Key in the secret to use as tunnel secret for an existing tunnel.
+                      If not specified, defaults to "CLOUDFLARE_TUNNEL_CREDENTIAL_SECRET" at runtime.
                     type: string
                   accountId:
                     description: Account ID in Cloudflare. AccountId and AccountName

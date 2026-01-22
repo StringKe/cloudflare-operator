@@ -23,15 +23,22 @@ func (r *PagesProjectReconciler) reconcileProductionTarget(
 ) error {
 	logger := log.FromContext(ctx)
 
-	if project.Spec.ProductionTarget == "" {
+	// Resolve versions to get production target
+	resolved, err := r.versionManager.ResolveVersions(project)
+	if err != nil {
+		logger.Error(err, "Failed to resolve versions")
+		return err
+	}
+
+	if resolved.ProductionTarget == "" {
 		logger.V(1).Info("No production target specified, skipping production reconciliation")
 		return nil
 	}
 
 	// 1. Resolve and find target deployment
-	targetVersion := r.resolveTargetVersion(project)
+	targetVersion := r.resolveTargetVersionFromResolved(resolved)
 	if targetVersion == "" {
-		err := fmt.Errorf("failed to resolve production target %q", project.Spec.ProductionTarget)
+		err := fmt.Errorf("failed to resolve production target %q", resolved.ProductionTarget)
 		r.Recorder.Event(project, corev1.EventTypeWarning, "ProductionTargetInvalid", err.Error())
 		return err
 	}
@@ -126,15 +133,15 @@ func (r *PagesProjectReconciler) demoteIfNeeded(
 	return nil
 }
 
-// resolveTargetVersion resolves the production target to a specific version name.
-func (*PagesProjectReconciler) resolveTargetVersion(project *networkingv1alpha2.PagesProject) string {
-	if project.Spec.ProductionTarget == "latest" {
-		if len(project.Spec.Versions) > 0 {
-			return project.Spec.Versions[0].Name
+// resolveTargetVersionFromResolved resolves the production target from resolved versions.
+func (*PagesProjectReconciler) resolveTargetVersionFromResolved(resolved *ResolvedVersions) string {
+	if resolved.ProductionTarget == "latest" {
+		if len(resolved.Versions) > 0 {
+			return resolved.Versions[0].Name
 		}
 		return ""
 	}
-	return project.Spec.ProductionTarget
+	return resolved.ProductionTarget
 }
 
 // findDeploymentForVersion finds the PagesDeployment for a specific version.

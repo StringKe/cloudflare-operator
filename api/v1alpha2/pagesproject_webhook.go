@@ -39,21 +39,30 @@ func (v *PagesProjectValidator) ValidateCreate(ctx context.Context, obj runtime.
 	}
 
 	var allErrs field.ErrorList
+	var warnings admission.Warnings
 
-	if err := v.validateProductionTarget(project); err != nil {
-		allErrs = append(allErrs, err)
-	}
+	// Validate version management
+	errs, warns := v.validateVersionManagement(project)
+	allErrs = append(allErrs, errs...)
+	warnings = append(warnings, warns...)
 
-	if err := v.validateVersionUniqueness(project); err != nil {
-		allErrs = append(allErrs, err)
+	// Legacy validation (if using old fields)
+	if project.Spec.VersionManagement == nil {
+		if err := v.validateProductionTarget(project); err != nil {
+			allErrs = append(allErrs, err)
+		}
+
+		if err := v.validateVersionUniqueness(project); err != nil {
+			allErrs = append(allErrs, err)
+		}
 	}
 
 	if len(allErrs) > 0 {
-		return nil, apierrors.NewInvalid(
+		return warnings, apierrors.NewInvalid(
 			schema.GroupKind{Group: GroupVersion.Group, Kind: "PagesProject"},
 			project.Name, allErrs)
 	}
-	return nil, nil
+	return warnings, nil
 }
 
 // ValidateUpdate implements webhook.CustomValidator.
@@ -98,4 +107,209 @@ func (v *PagesProjectValidator) validateVersionUniqueness(project *PagesProject)
 		seen[ver.Name] = true
 	}
 	return nil
+}
+
+// validateVersionManagement validates the versionManagement configuration.
+func (v *PagesProjectValidator) validateVersionManagement(project *PagesProject) (field.ErrorList, admission.Warnings) {
+	var errs field.ErrorList
+	var warnings admission.Warnings
+	vm := project.Spec.VersionManagement
+
+	// Check for mutual exclusivity with legacy fields
+	if vm != nil && (len(project.Spec.Versions) > 0 || project.Spec.ProductionTarget != "") {
+		warnings = append(warnings,
+			"Both versionManagement and deprecated fields (versions/productionTarget) are specified. "+
+				"versionManagement will take precedence. Consider removing the deprecated fields.")
+	}
+
+	if vm == nil {
+		return errs, warnings
+	}
+
+	path := field.NewPath("spec", "versionManagement")
+
+	// Validate type and corresponding configuration
+	switch vm.Type {
+	case TargetVersionMode:
+		if vm.TargetVersion == nil {
+			errs = append(errs, field.Required(path.Child("targetVersion"),
+				"targetVersion is required when type is targetVersion"))
+		} else {
+			errs = append(errs, v.validateSourceTemplate(
+				path.Child("targetVersion", "sourceTemplate"),
+				&vm.TargetVersion.SourceTemplate)...)
+		}
+		if vm.DeclarativeVersions != nil {
+			errs = append(errs, field.Forbidden(path.Child("declarativeVersions"),
+				"declarativeVersions must not be set when type is targetVersion"))
+		}
+		if vm.FullVersions != nil {
+			errs = append(errs, field.Forbidden(path.Child("fullVersions"),
+				"fullVersions must not be set when type is targetVersion"))
+		}
+
+	case DeclarativeVersionsMode:
+		if vm.DeclarativeVersions == nil {
+			errs = append(errs, field.Required(path.Child("declarativeVersions"),
+				"declarativeVersions is required when type is declarativeVersions"))
+		} else {
+			errs = append(errs, v.validateDeclarativeVersions(
+				path.Child("declarativeVersions"), vm.DeclarativeVersions)...)
+			errs = append(errs, v.validateSourceTemplate(
+				path.Child("declarativeVersions", "sourceTemplate"),
+				&vm.DeclarativeVersions.SourceTemplate)...)
+		}
+		if vm.TargetVersion != nil {
+			errs = append(errs, field.Forbidden(path.Child("targetVersion"),
+				"targetVersion must not be set when type is declarativeVersions"))
+		}
+		if vm.FullVersions != nil {
+			errs = append(errs, field.Forbidden(path.Child("fullVersions"),
+				"fullVersions must not be set when type is declarativeVersions"))
+		}
+
+	case FullVersionsMode:
+		if vm.FullVersions == nil {
+			errs = append(errs, field.Required(path.Child("fullVersions"),
+				"fullVersions is required when type is fullVersions"))
+		} else {
+			errs = append(errs, v.validateFullVersions(
+				path.Child("fullVersions"), vm.FullVersions)...)
+		}
+		if vm.TargetVersion != nil {
+			errs = append(errs, field.Forbidden(path.Child("targetVersion"),
+				"targetVersion must not be set when type is fullVersions"))
+		}
+		if vm.DeclarativeVersions != nil {
+			errs = append(errs, field.Forbidden(path.Child("declarativeVersions"),
+				"declarativeVersions must not be set when type is fullVersions"))
+		}
+
+	default:
+		errs = append(errs, field.Invalid(path.Child("type"), vm.Type,
+			"must be one of: targetVersion, declarativeVersions, fullVersions"))
+	}
+
+	return errs, warnings
+}
+
+// validateSourceTemplate validates a source template configuration.
+func (v *PagesProjectValidator) validateSourceTemplate(path *field.Path, st *SourceTemplate) field.ErrorList {
+	var errs field.ErrorList
+
+	switch st.Type {
+	case S3SourceTemplateType:
+		if st.S3 == nil {
+			errs = append(errs, field.Required(path.Child("s3"),
+				"s3 is required when type is s3"))
+		}
+		if st.HTTP != nil {
+			errs = append(errs, field.Forbidden(path.Child("http"),
+				"http must not be set when type is s3"))
+		}
+		if st.OCI != nil {
+			errs = append(errs, field.Forbidden(path.Child("oci"),
+				"oci must not be set when type is s3"))
+		}
+
+	case HTTPSourceTemplateType:
+		if st.HTTP == nil {
+			errs = append(errs, field.Required(path.Child("http"),
+				"http is required when type is http"))
+		}
+		if st.S3 != nil {
+			errs = append(errs, field.Forbidden(path.Child("s3"),
+				"s3 must not be set when type is http"))
+		}
+		if st.OCI != nil {
+			errs = append(errs, field.Forbidden(path.Child("oci"),
+				"oci must not be set when type is http"))
+		}
+
+	case OCISourceTemplateType:
+		if st.OCI == nil {
+			errs = append(errs, field.Required(path.Child("oci"),
+				"oci is required when type is oci"))
+		}
+		if st.S3 != nil {
+			errs = append(errs, field.Forbidden(path.Child("s3"),
+				"s3 must not be set when type is oci"))
+		}
+		if st.HTTP != nil {
+			errs = append(errs, field.Forbidden(path.Child("http"),
+				"http must not be set when type is oci"))
+		}
+
+	default:
+		errs = append(errs, field.Invalid(path.Child("type"), st.Type,
+			"must be one of: s3, http, oci"))
+	}
+
+	return errs
+}
+
+// validateDeclarativeVersions validates declarative versions configuration.
+func (v *PagesProjectValidator) validateDeclarativeVersions(path *field.Path, dv *DeclarativeVersionsSpec) field.ErrorList {
+	var errs field.ErrorList
+
+	// Check version uniqueness
+	seen := make(map[string]bool)
+	for i, ver := range dv.Versions {
+		if seen[ver] {
+			errs = append(errs, field.Duplicate(
+				path.Child("versions").Index(i), ver))
+		}
+		seen[ver] = true
+	}
+
+	// Validate production target if specified
+	if dv.ProductionTarget != "" && dv.ProductionTarget != "latest" {
+		found := false
+		for _, ver := range dv.Versions {
+			if ver == dv.ProductionTarget {
+				found = true
+				break
+			}
+		}
+		if !found {
+			errs = append(errs, field.Invalid(
+				path.Child("productionTarget"), dv.ProductionTarget,
+				fmt.Sprintf("version %q not found in versions list", dv.ProductionTarget)))
+		}
+	}
+
+	return errs
+}
+
+// validateFullVersions validates full versions configuration.
+func (v *PagesProjectValidator) validateFullVersions(path *field.Path, fv *FullVersionsSpec) field.ErrorList {
+	var errs field.ErrorList
+
+	// Check version uniqueness
+	seen := make(map[string]bool)
+	for i, ver := range fv.Versions {
+		if seen[ver.Name] {
+			errs = append(errs, field.Duplicate(
+				path.Child("versions").Index(i).Child("name"), ver.Name))
+		}
+		seen[ver.Name] = true
+	}
+
+	// Validate production target if specified
+	if fv.ProductionTarget != "" && fv.ProductionTarget != "latest" {
+		found := false
+		for _, ver := range fv.Versions {
+			if ver.Name == fv.ProductionTarget {
+				found = true
+				break
+			}
+		}
+		if !found {
+			errs = append(errs, field.Invalid(
+				path.Child("productionTarget"), fv.ProductionTarget,
+				fmt.Sprintf("version %q not found in versions list", fv.ProductionTarget)))
+		}
+	}
+
+	return errs
 }

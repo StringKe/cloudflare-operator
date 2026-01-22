@@ -5,6 +5,7 @@ package pagesproject
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 
@@ -16,6 +17,12 @@ import (
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 )
+
+// ResolvedVersions contains the resolved versions and production target.
+type ResolvedVersions struct {
+	Versions         []networkingv1alpha2.ProjectVersion
+	ProductionTarget string
+}
 
 // VersionManager manages declarative versions for PagesProject.
 type VersionManager struct {
@@ -33,19 +40,124 @@ func NewVersionManager(k8sClient client.Client, scheme *runtime.Scheme, log logr
 	}
 }
 
+// ResolveVersions resolves versions based on the version management configuration.
+// This supports three modes: targetVersion, declarativeVersions, and fullVersions.
+// For backward compatibility, it also supports the legacy spec.versions field.
+func (vm *VersionManager) ResolveVersions(project *networkingv1alpha2.PagesProject) (*ResolvedVersions, error) {
+	mgmt := project.Spec.VersionManagement
+
+	// Backward compatibility: use legacy fields if VersionManagement is not set
+	if mgmt == nil {
+		//nolint:staticcheck // Intentionally using deprecated fields for backward compatibility
+		return &ResolvedVersions{
+			Versions:         project.Spec.Versions,
+			ProductionTarget: project.Spec.ProductionTarget,
+		}, nil
+	}
+
+	switch mgmt.Type {
+	case networkingv1alpha2.TargetVersionMode:
+		return vm.resolveTargetVersion(mgmt.TargetVersion)
+
+	case networkingv1alpha2.DeclarativeVersionsMode:
+		return vm.resolveDeclarativeVersions(mgmt.DeclarativeVersions)
+
+	case networkingv1alpha2.FullVersionsMode:
+		return vm.resolveFullVersions(mgmt.FullVersions)
+
+	default:
+		return nil, fmt.Errorf("unknown version management type: %s", mgmt.Type)
+	}
+}
+
+// resolveTargetVersion resolves a single target version using the source template.
+func (*VersionManager) resolveTargetVersion(spec *networkingv1alpha2.TargetVersionSpec) (*ResolvedVersions, error) {
+	if spec == nil {
+		return nil, errors.New("targetVersion spec is nil")
+	}
+
+	version, err := resolveFromTemplate(spec.Version, &spec.SourceTemplate)
+	if err != nil {
+		return nil, fmt.Errorf("resolve version %s: %w", spec.Version, err)
+	}
+
+	return &ResolvedVersions{
+		Versions:         []networkingv1alpha2.ProjectVersion{version},
+		ProductionTarget: spec.Version, // Single version is always the production target
+	}, nil
+}
+
+// resolveDeclarativeVersions resolves versions from a version name list and template.
+func (*VersionManager) resolveDeclarativeVersions(spec *networkingv1alpha2.DeclarativeVersionsSpec) (*ResolvedVersions, error) {
+	if spec == nil {
+		return nil, errors.New("declarativeVersions spec is nil")
+	}
+
+	versions := make([]networkingv1alpha2.ProjectVersion, 0, len(spec.Versions))
+	for _, vName := range spec.Versions {
+		version, err := resolveFromTemplate(vName, &spec.SourceTemplate)
+		if err != nil {
+			return nil, fmt.Errorf("resolve version %s: %w", vName, err)
+		}
+		versions = append(versions, version)
+	}
+
+	return &ResolvedVersions{
+		Versions:         versions,
+		ProductionTarget: spec.ProductionTarget,
+	}, nil
+}
+
+// resolveFullVersions returns full versions directly (already complete).
+func (*VersionManager) resolveFullVersions(spec *networkingv1alpha2.FullVersionsSpec) (*ResolvedVersions, error) {
+	if spec == nil {
+		return nil, errors.New("fullVersions spec is nil")
+	}
+
+	return &ResolvedVersions{
+		Versions:         spec.Versions,
+		ProductionTarget: spec.ProductionTarget,
+	}, nil
+}
+
+// HasVersions checks if the project has any versions configured.
+func (*VersionManager) HasVersions(project *networkingv1alpha2.PagesProject) bool {
+	if project.Spec.VersionManagement != nil {
+		switch project.Spec.VersionManagement.Type {
+		case networkingv1alpha2.TargetVersionMode:
+			return project.Spec.VersionManagement.TargetVersion != nil
+		case networkingv1alpha2.DeclarativeVersionsMode:
+			return project.Spec.VersionManagement.DeclarativeVersions != nil &&
+				len(project.Spec.VersionManagement.DeclarativeVersions.Versions) > 0
+		case networkingv1alpha2.FullVersionsMode:
+			return project.Spec.VersionManagement.FullVersions != nil &&
+				len(project.Spec.VersionManagement.FullVersions.Versions) > 0
+		}
+	}
+	// Legacy mode - intentionally using deprecated field for backward compatibility
+	//nolint:staticcheck
+	return len(project.Spec.Versions) > 0
+}
+
 // Reconcile synchronizes the desired versions with actual PagesDeployment resources.
 func (vm *VersionManager) Reconcile(ctx context.Context, project *networkingv1alpha2.PagesProject) error {
-	// 1. Get existing managed deployments
+	// 1. Resolve versions based on configuration mode
+	resolved, err := vm.ResolveVersions(project)
+	if err != nil {
+		return fmt.Errorf("resolve versions: %w", err)
+	}
+
+	// 2. Get existing managed deployments
 	existingDeployments, err := vm.listManagedDeployments(ctx, project)
 	if err != nil {
 		return fmt.Errorf("list managed deployments: %w", err)
 	}
 
-	// 2. Build desired and existing maps
-	desired := vm.buildDesiredMap(project)
+	// 3. Build desired and existing maps
+	desired := vm.buildDesiredMapFromResolved(resolved.Versions)
 	existingMap := vm.buildExistingMap(existingDeployments)
 
-	// 3. Reconcile deployments
+	// 4. Reconcile deployments
 	if err := vm.reconcileDeployments(ctx, project, desired, existingMap); err != nil {
 		return err
 	}
@@ -57,10 +169,10 @@ func (vm *VersionManager) Reconcile(ctx context.Context, project *networkingv1al
 	return nil
 }
 
-// buildDesiredMap builds a map of desired versions.
-func (*VersionManager) buildDesiredMap(project *networkingv1alpha2.PagesProject) map[string]networkingv1alpha2.ProjectVersion {
+// buildDesiredMapFromResolved builds a map of desired versions from resolved versions.
+func (*VersionManager) buildDesiredMapFromResolved(versions []networkingv1alpha2.ProjectVersion) map[string]networkingv1alpha2.ProjectVersion {
 	desired := make(map[string]networkingv1alpha2.ProjectVersion)
-	for _, v := range project.Spec.Versions {
+	for _, v := range versions {
 		desired[v.Name] = v
 	}
 	return desired

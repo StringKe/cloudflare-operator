@@ -7,6 +7,192 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// VersionManagementType defines the mode for version management.
+// +kubebuilder:validation:Enum=targetVersion;declarativeVersions;fullVersions
+type VersionManagementType string
+
+const (
+	// TargetVersionMode - simplest mode: specify only target version
+	TargetVersionMode VersionManagementType = "targetVersion"
+	// DeclarativeVersionsMode - declarative mode: version name list + template
+	DeclarativeVersionsMode VersionManagementType = "declarativeVersions"
+	// FullVersionsMode - full mode: complete version configurations (backward compatible)
+	FullVersionsMode VersionManagementType = "fullVersions"
+)
+
+// SourceTemplateType defines the type of source template.
+// +kubebuilder:validation:Enum=s3;http;oci
+type SourceTemplateType string
+
+const (
+	// S3SourceTemplateType fetches from S3-compatible storage
+	S3SourceTemplateType SourceTemplateType = "s3"
+	// HTTPSourceTemplateType fetches from HTTP/HTTPS URL
+	HTTPSourceTemplateType SourceTemplateType = "http"
+	// OCISourceTemplateType fetches from OCI registry
+	OCISourceTemplateType SourceTemplateType = "oci"
+)
+
+// VersionManagement defines version management configuration.
+// Only one mode should be used at a time.
+type VersionManagement struct {
+	// Type specifies the version management mode.
+	// +kubebuilder:validation:Required
+	Type VersionManagementType `json:"type"`
+
+	// TargetVersion configuration (used when type=targetVersion).
+	// +kubebuilder:validation:Optional
+	TargetVersion *TargetVersionSpec `json:"targetVersion,omitempty"`
+
+	// DeclarativeVersions configuration (used when type=declarativeVersions).
+	// +kubebuilder:validation:Optional
+	DeclarativeVersions *DeclarativeVersionsSpec `json:"declarativeVersions,omitempty"`
+
+	// FullVersions configuration (used when type=fullVersions).
+	// +kubebuilder:validation:Optional
+	FullVersions *FullVersionsSpec `json:"fullVersions,omitempty"`
+}
+
+// TargetVersionSpec defines the simplest mode configuration - just a single target version.
+type TargetVersionSpec struct {
+	// Version is the target version name (e.g., "sha-abc123").
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Version string `json:"version"`
+
+	// SourceTemplate defines how to construct the source URL from version.
+	// +kubebuilder:validation:Required
+	SourceTemplate SourceTemplate `json:"sourceTemplate"`
+}
+
+// DeclarativeVersionsSpec defines declarative mode configuration - version list + template.
+type DeclarativeVersionsSpec struct {
+	// Versions is a list of version names (sorted by priority, first is latest).
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=100
+	Versions []string `json:"versions"`
+
+	// SourceTemplate defines how to construct the source URL from version.
+	// +kubebuilder:validation:Required
+	SourceTemplate SourceTemplate `json:"sourceTemplate"`
+
+	// ProductionTarget specifies which version to promote to production.
+	// - "latest": Use versions[0] (the first/newest version in the list)
+	// - "<version-name>": Use a specific version by name
+	// - "": Do not automatically promote to production
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default="latest"
+	ProductionTarget string `json:"productionTarget,omitempty"`
+}
+
+// FullVersionsSpec defines full mode configuration - complete version objects (backward compatible).
+type FullVersionsSpec struct {
+	// Versions is a list of complete version configurations.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=100
+	Versions []ProjectVersion `json:"versions"`
+
+	// ProductionTarget specifies which version to promote to production.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default="latest"
+	ProductionTarget string `json:"productionTarget,omitempty"`
+}
+
+// SourceTemplate defines how to construct source URLs from version names.
+// Only one source type should be specified.
+type SourceTemplate struct {
+	// Type specifies the template type.
+	// +kubebuilder:validation:Required
+	Type SourceTemplateType `json:"type"`
+
+	// S3 configuration (used when type=s3).
+	// +kubebuilder:validation:Optional
+	S3 *S3SourceTemplate `json:"s3,omitempty"`
+
+	// HTTP configuration (used when type=http).
+	// +kubebuilder:validation:Optional
+	HTTP *HTTPSourceTemplate `json:"http,omitempty"`
+
+	// OCI configuration (used when type=oci).
+	// +kubebuilder:validation:Optional
+	OCI *OCISourceTemplate `json:"oci,omitempty"`
+}
+
+// S3SourceTemplate defines S3 source template configuration.
+type S3SourceTemplate struct {
+	// Bucket is the S3 bucket name.
+	// +kubebuilder:validation:Required
+	Bucket string `json:"bucket"`
+
+	// KeyTemplate is the object key template with {{.Version}} placeholder.
+	// Example: "pages-artifacts/my-app/{{.Version}}.tar.gz"
+	// +kubebuilder:validation:Required
+	KeyTemplate string `json:"keyTemplate"`
+
+	// Region is the AWS region.
+	// +kubebuilder:validation:Required
+	Region string `json:"region"`
+
+	// Endpoint is the S3 endpoint URL (optional, for S3-compatible services).
+	// +kubebuilder:validation:Optional
+	Endpoint string `json:"endpoint,omitempty"`
+
+	// CredentialsSecretRef references a Secret containing AWS credentials.
+	// +kubebuilder:validation:Optional
+	CredentialsSecretRef string `json:"credentialsSecretRef,omitempty"`
+
+	// ArchiveType is the archive type (default: "tar.gz").
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=tar.gz;tar;zip;none
+	// +kubebuilder:default="tar.gz"
+	ArchiveType string `json:"archiveType,omitempty"`
+
+	// UsePathStyle forces path-style addressing instead of virtual hosted-style.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=false
+	UsePathStyle bool `json:"usePathStyle,omitempty"`
+}
+
+// HTTPSourceTemplate defines HTTP source template configuration.
+type HTTPSourceTemplate struct {
+	// URLTemplate is the URL template with {{.Version}} placeholder.
+	// Example: "https://releases.example.com/{{.Version}}/dist.tar.gz"
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^https?://`
+	URLTemplate string `json:"urlTemplate"`
+
+	// ArchiveType is the archive type (default: "tar.gz").
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=tar.gz;tar;zip;none
+	// +kubebuilder:default="tar.gz"
+	ArchiveType string `json:"archiveType,omitempty"`
+
+	// HeadersSecretRef references a Secret containing HTTP headers.
+	// +kubebuilder:validation:Optional
+	HeadersSecretRef string `json:"headersSecretRef,omitempty"`
+}
+
+// OCISourceTemplate defines OCI registry source template configuration.
+type OCISourceTemplate struct {
+	// Repository is the OCI repository address.
+	// Example: "registry.example.com/my-app"
+	// +kubebuilder:validation:Required
+	Repository string `json:"repository"`
+
+	// TagTemplate is the tag template with {{.Version}} placeholder.
+	// Example: "{{.Version}}" or "v{{.Version}}"
+	// +kubebuilder:validation:Required
+	TagTemplate string `json:"tagTemplate"`
+
+	// CredentialsSecretRef references a Secret containing registry credentials.
+	// +kubebuilder:validation:Optional
+	CredentialsSecretRef string `json:"credentialsSecretRef,omitempty"`
+}
+
 // PagesProjectState represents the state of the Pages project
 // +kubebuilder:validation:Enum=Pending;Creating;Ready;Updating;Deleting;Error
 type PagesProjectState string
@@ -589,20 +775,11 @@ type PagesProjectSpec struct {
 	// +kubebuilder:default=Delete
 	DeletionPolicy string `json:"deletionPolicy,omitempty"`
 
-	// Versions defines a declarative list of deployment versions.
-	// The controller automatically creates a PagesDeployment for each version.
-	// Managed deployments have ownerReference and special labels for tracking.
+	// VersionManagement defines the version management configuration.
+	// This is the recommended way to manage deployment versions.
+	// When specified, the controller uses this instead of the deprecated Versions field.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:MaxItems=100
-	Versions []ProjectVersion `json:"versions,omitempty"`
-
-	// ProductionTarget specifies which version to promote to production.
-	// - "latest": Use versions[0] (the first/newest version in the list)
-	// - "<version-name>": Use a specific version by name (e.g., "v1.2.3", "sha-abc123")
-	// - "": Do not automatically promote to production
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Pattern=`^(latest|[a-z0-9]([-a-z0-9]*[a-z0-9])?)?$`
-	ProductionTarget string `json:"productionTarget,omitempty"`
+	VersionManagement *VersionManagement `json:"versionManagement,omitempty"`
 
 	// RevisionHistoryLimit limits the number of managed PagesDeployment resources to keep.
 	// When exceeded, oldest non-production deployments are automatically deleted.
@@ -612,6 +789,28 @@ type PagesProjectSpec struct {
 	// +kubebuilder:validation:Maximum=100
 	// +kubebuilder:default=10
 	RevisionHistoryLimit *int32 `json:"revisionHistoryLimit,omitempty"`
+
+	// ===== DEPRECATED FIELDS (for backward compatibility) =====
+	// These fields will be removed in v1alpha3. Use VersionManagement instead.
+
+	// Versions defines a declarative list of deployment versions.
+	//
+	// Deprecated: Use VersionManagement.FullVersions instead.
+	// The controller automatically creates a PagesDeployment for each version.
+	// Managed deployments have ownerReference and special labels for tracking.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=100
+	Versions []ProjectVersion `json:"versions,omitempty"`
+
+	// ProductionTarget specifies which version to promote to production.
+	//
+	// Deprecated: Use VersionManagement.*.ProductionTarget instead.
+	// - "latest": Use versions[0] (the first/newest version in the list)
+	// - "<version-name>": Use a specific version by name (e.g., "v1.2.3", "sha-abc123")
+	// - "": Do not automatically promote to production
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Pattern=`^(latest|[a-z0-9]([-a-z0-9]*[a-z0-9])?)?$`
+	ProductionTarget string `json:"productionTarget,omitempty"`
 }
 
 // PagesProjectStatus defines the observed state of PagesProject

@@ -82,7 +82,7 @@ func (r *PagesProjectReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	// Handle declarative version management if versions are specified
-	if len(project.Spec.Versions) > 0 {
+	if r.versionManager.HasVersions(project) {
 		// Reconcile versions - create/update PagesDeployment resources
 		if err := r.versionManager.Reconcile(ctx, project); err != nil {
 			logger.Error(err, "Failed to reconcile versions")

@@ -49,24 +49,25 @@ type CloudflareDetails struct {
 	Email string `json:"email,omitempty"`
 
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:default:=CLOUDFLARE_API_KEY
-	// Key in the secret to use for Cloudflare API Key, defaults to CLOUDFLARE_API_KEY. Needs Email also to be provided.
-	// For Delete operations for new tunnels only, or as an alternate to API Token
+	// Key in the secret to use for Cloudflare API Key.
+	// If not specified, defaults to "CLOUDFLARE_API_KEY" at runtime.
+	// Needs Email also to be provided.
+	// For Delete operations for new tunnels only, or as an alternate to API Token.
 	CLOUDFLARE_API_KEY string `json:"CLOUDFLARE_API_KEY,omitempty"`
 
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:default:=CLOUDFLARE_API_TOKEN
-	// Key in the secret to use for Cloudflare API token, defaults to CLOUDFLARE_API_TOKEN
+	// Key in the secret to use for Cloudflare API token.
+	// If not specified, defaults to "CLOUDFLARE_API_TOKEN" at runtime.
 	CLOUDFLARE_API_TOKEN string `json:"CLOUDFLARE_API_TOKEN,omitempty"`
 
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:default:=CLOUDFLARE_TUNNEL_CREDENTIAL_FILE
-	// Key in the secret to use as credentials.json for an existing tunnel, defaults to CLOUDFLARE_TUNNEL_CREDENTIAL_FILE
+	// Key in the secret to use as credentials.json for an existing tunnel.
+	// If not specified, defaults to "CLOUDFLARE_TUNNEL_CREDENTIAL_FILE" at runtime.
 	CLOUDFLARE_TUNNEL_CREDENTIAL_FILE string `json:"CLOUDFLARE_TUNNEL_CREDENTIAL_FILE,omitempty"`
 
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:default:=CLOUDFLARE_TUNNEL_CREDENTIAL_SECRET
-	// Key in the secret to use as tunnel secret for an existing tunnel, defaults to CLOUDFLARE_TUNNEL_CREDENTIAL_SECRET
+	// Key in the secret to use as tunnel secret for an existing tunnel.
+	// If not specified, defaults to "CLOUDFLARE_TUNNEL_CREDENTIAL_SECRET" at runtime.
 	CLOUDFLARE_TUNNEL_CREDENTIAL_SECRET string `json:"CLOUDFLARE_TUNNEL_CREDENTIAL_SECRET,omitempty"`
 }
 
