@@ -1,5 +1,11 @@
 # NOTE: Namespace is defined separately in config/namespace/
 # Use cloudflare-operator-namespace.yaml or cloudflare-operator-full.yaml
+#
+# Logging Configuration:
+# - --zap-encoder=json: Output structured JSON logs for log aggregation systems (Datadog, ELK, Loki)
+# - --zap-devel=false: Disable development mode for production
+# - --zap-log-level=info: Set log level (debug/info/error). Use 'debug' for troubleshooting only
+# - --zap-stacktrace-level=error: Print stack traces only for error level
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -45,6 +51,10 @@ spec:
           args:
             - --leader-elect
             - --health-probe-bind-address=:8081
+            - --zap-encoder=json
+            - --zap-devel=false
+            - --zap-log-level=info
+            - --zap-stacktrace-level=error
           env:
             - name: POD_NAMESPACE
               valueFrom:
