@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -104,18 +106,41 @@ func UpdateCloudflareID(
 ) error {
 	logger := log.FromContext(ctx)
 
-	syncState.Spec.CloudflareID = newID
-	if err := c.Update(ctx, syncState); err != nil {
-		logger.Error(err, "Failed to update SyncState with Cloudflare ID",
-			"name", syncState.Name,
-			"cloudflareId", newID)
-		return fmt.Errorf("update SyncState CloudflareID to %s: %w", newID, err)
+	var lastErr error
+	for i := 0; i < MaxConflictRetries; i++ {
+		if i > 0 {
+			// Re-fetch the object to get the latest ResourceVersion
+			if err := c.Get(ctx, client.ObjectKeyFromObject(syncState), syncState); err != nil {
+				return fmt.Errorf("failed to get latest SyncState version: %w", err)
+			}
+			time.Sleep(ConflictRetryDelay)
+		}
+
+		syncState.Spec.CloudflareID = newID
+		err := c.Update(ctx, syncState)
+		if err == nil {
+			// Re-fetch after successful update to get the latest resourceVersion
+			if fetchErr := c.Get(ctx, client.ObjectKeyFromObject(syncState), syncState); fetchErr != nil {
+				logger.V(1).Info("Warning: failed to re-fetch after CloudflareID update",
+					"error", fetchErr)
+			}
+
+			logger.V(1).Info("Updated SyncState CloudflareID",
+				"name", syncState.Name,
+				"cloudflareId", newID)
+			return nil
+		}
+
+		if !apierrors.IsConflict(err) {
+			logger.Error(err, "Failed to update SyncState with Cloudflare ID",
+				"name", syncState.Name,
+				"cloudflareId", newID)
+			return fmt.Errorf("update SyncState CloudflareID to %s: %w", newID, err)
+		}
+		lastErr = err
 	}
 
-	logger.V(1).Info("Updated SyncState CloudflareID",
-		"name", syncState.Name,
-		"cloudflareId", newID)
-	return nil
+	return fmt.Errorf("update SyncState CloudflareID failed after %d retries: %w", MaxConflictRetries, lastErr)
 }
 
 // RequireAccountID validates that the SyncState has an AccountID specified.

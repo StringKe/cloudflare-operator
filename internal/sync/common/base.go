@@ -285,6 +285,7 @@ func RequeueAfterSuccess() time.Duration {
 
 // UpdateWithConflictRetry updates a SyncState with retry on conflict.
 // This should be used for all SyncState modifications including Finalizer operations.
+// After successful update, it re-fetches the object to ensure the caller has the latest resourceVersion.
 //
 //nolint:revive // cognitive complexity is acceptable for retry logic
 func UpdateWithConflictRetry(ctx context.Context, c client.Client, syncState *v1alpha2.CloudflareSyncState, updateFn func()) error {
@@ -300,6 +301,14 @@ func UpdateWithConflictRetry(ctx context.Context, c client.Client, syncState *v1
 		updateFn()
 		err := c.Update(ctx, syncState)
 		if err == nil {
+			// CRITICAL: Re-fetch after successful update to get the latest resourceVersion
+			// This ensures subsequent operations in the same reconcile loop won't fail
+			// with "the object has been modified" error
+			if fetchErr := c.Get(ctx, client.ObjectKeyFromObject(syncState), syncState); fetchErr != nil {
+				// Log but don't fail - the update was successful
+				log.FromContext(ctx).V(1).Info("Warning: failed to re-fetch after update",
+					"error", fetchErr)
+			}
 			return nil
 		}
 		if !apierrors.IsConflict(err) {
@@ -325,6 +334,8 @@ func RemoveFinalizerWithRetry(ctx context.Context, c client.Client, syncState *v
 }
 
 // UpdateStatusWithConflictRetry updates a SyncState status with retry on conflict.
+// After successful update, it re-fetches the object to ensure the caller has the latest resourceVersion.
+// This prevents subsequent updates from failing due to stale resourceVersion.
 //
 //nolint:revive // cognitive complexity is acceptable for retry logic
 func UpdateStatusWithConflictRetry(ctx context.Context, c client.Client, syncState *v1alpha2.CloudflareSyncState, updateFn func()) error {
@@ -340,6 +351,14 @@ func UpdateStatusWithConflictRetry(ctx context.Context, c client.Client, syncSta
 		updateFn()
 		err := c.Status().Update(ctx, syncState)
 		if err == nil {
+			// CRITICAL: Re-fetch after successful update to get the latest resourceVersion
+			// This ensures subsequent operations in the same reconcile loop won't fail
+			// with "the object has been modified" error
+			if fetchErr := c.Get(ctx, client.ObjectKeyFromObject(syncState), syncState); fetchErr != nil {
+				// Log but don't fail - the update was successful
+				log.FromContext(ctx).V(1).Info("Warning: failed to re-fetch after status update",
+					"error", fetchErr)
+			}
 			return nil
 		}
 		if !apierrors.IsConflict(err) {
