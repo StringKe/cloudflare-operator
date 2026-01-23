@@ -237,9 +237,8 @@ func (r *Controller) syncToCloudflare(
 			return nil, fmt.Errorf("create VirtualNetwork: %w", err)
 		}
 
-		// Update SyncState with actual VirtualNetwork ID
-		syncState.Spec.CloudflareID = result.ID
-		if updateErr := r.Client.Update(ctx, syncState); updateErr != nil {
+		// Update SyncState with actual VirtualNetwork ID (with conflict retry)
+		if updateErr := common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID); updateErr != nil {
 			logger.Error(updateErr, "Failed to update SyncState with VirtualNetwork ID",
 				"vnetId", result.ID)
 			// Non-fatal - will be fixed on next reconcile
@@ -266,9 +265,8 @@ func (r *Controller) syncToCloudflare(
 					return nil, fmt.Errorf("recreate VirtualNetwork: %w", err)
 				}
 
-				// Update SyncState with new VirtualNetwork ID
-				syncState.Spec.CloudflareID = result.ID
-				if updateErr := r.Client.Update(ctx, syncState); updateErr != nil {
+				// Update SyncState with new VirtualNetwork ID (with conflict retry)
+				if updateErr := common.UpdateCloudflareID(ctx, r.Client, syncState, result.ID); updateErr != nil {
 					logger.Error(updateErr, "Failed to update SyncState with new VirtualNetwork ID")
 				}
 			} else {

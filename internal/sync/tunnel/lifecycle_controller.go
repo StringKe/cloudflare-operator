@@ -367,21 +367,18 @@ func (r *LifecycleController) updateSuccessStatus(
 		}
 	}
 
-	// Update CloudflareID with actual tunnel ID
+	// Update CloudflareID with actual tunnel ID (with conflict retry)
 	if result != nil && result.TunnelID != "" {
-		syncState.Spec.CloudflareID = result.TunnelID
+		if err := common.UpdateCloudflareID(ctx, r.Client, syncState, result.TunnelID); err != nil {
+			return fmt.Errorf("update syncstate CloudflareID: %w", err)
+		}
 	}
 
 	syncResult := &common.SyncResult{
 		ConfigHash: "", // Lifecycle operations don't use config hash
 	}
 
-	// First update the spec to set CloudflareID
-	if err := r.Client.Update(ctx, syncState); err != nil {
-		return fmt.Errorf("update syncstate spec: %w", err)
-	}
-
-	// Then update the status
+	// Update status with result data (with conflict retry built into UpdateSyncStatus)
 	syncState.Status.ResultData = resultData
 	if err := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusSynced, syncResult, nil); err != nil {
 		return fmt.Errorf("update syncstate status: %w", err)

@@ -241,9 +241,8 @@ func (r *Controller) syncToCloudflare(
 				"tunnelId", result.TunnelID)
 		}
 
-		// Update SyncState CloudflareID with the network
-		syncState.Spec.CloudflareID = config.Network
-		if updateErr := r.Client.Update(ctx, syncState); updateErr != nil {
+		// Update SyncState CloudflareID with the network (with conflict retry)
+		if updateErr := common.UpdateCloudflareID(ctx, r.Client, syncState, config.Network); updateErr != nil {
 			logger.Error(updateErr, "Failed to update SyncState with route network",
 				"network", config.Network)
 			// Non-fatal - will be fixed on next reconcile
@@ -266,10 +265,9 @@ func (r *Controller) syncToCloudflare(
 					return nil, fmt.Errorf("recreate tunnel route: %w", err)
 				}
 
-				// Update SyncState CloudflareID if network changed
+				// Update SyncState CloudflareID if network changed (with conflict retry)
 				if result.Network != cloudflareID {
-					syncState.Spec.CloudflareID = result.Network
-					if updateErr := r.Client.Update(ctx, syncState); updateErr != nil {
+					if updateErr := common.UpdateCloudflareID(ctx, r.Client, syncState, result.Network); updateErr != nil {
 						logger.Error(updateErr, "Failed to update SyncState with new route network")
 					}
 				}

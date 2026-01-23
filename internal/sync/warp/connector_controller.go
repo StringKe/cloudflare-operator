@@ -385,21 +385,18 @@ func (r *ConnectorController) updateSuccessStatus(
 		resultData[warpsvc.ResultKeyRoutesConfigured] = strconv.Itoa(result.RoutesConfigured)
 	}
 
-	// Update CloudflareID with actual connector ID
+	// Update CloudflareID with actual connector ID (with conflict retry)
 	if result != nil && result.ConnectorID != "" {
-		syncState.Spec.CloudflareID = result.ConnectorID
+		if err := common.UpdateCloudflareID(ctx, r.Client, syncState, result.ConnectorID); err != nil {
+			return fmt.Errorf("update syncstate CloudflareID: %w", err)
+		}
 	}
 
 	syncResult := &common.SyncResult{
 		ConfigHash: "", // Lifecycle operations don't use config hash
 	}
 
-	// First update the spec to set CloudflareID
-	if err := r.Client.Update(ctx, syncState); err != nil {
-		return fmt.Errorf("update syncstate spec: %w", err)
-	}
-
-	// Then update the status
+	// Update status with result data (with conflict retry built into UpdateSyncStatus)
 	syncState.Status.ResultData = resultData
 	if err := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusSynced, syncResult, nil); err != nil {
 		return fmt.Errorf("update syncstate status: %w", err)

@@ -193,14 +193,22 @@ func (r *DeploymentSyncController) Reconcile(ctx context.Context, req ctrl.Reque
 	// we need to reset the CloudflareID to trigger a new deployment.
 	// Otherwise, handleCreateDeployment will just return the existing deployment info
 	// without creating a new one, even though the S3 key or other config has changed.
+	//
+	// IMPORTANT: We must check storedHash != "" to avoid the infinite deployment loop:
+	// - When SyncState is first created, ConfigHash is empty
+	// - ShouldSync("", "abc123") returns true (hash changed)
+	// - Without the storedHash check, we'd think "config changed" and reset CloudflareID
+	// - This would create a new deployment, then on next poll (when ConfigHash might still be empty
+	//   due to saveConfigHashForInProgress failure), we'd reset again → infinite loop
 	cloudflareID := syncState.Spec.CloudflareID
-	if !common.IsPendingID(cloudflareID) && cloudflareID != "" {
-		// Config changed but we have an existing deployment ID
+	storedHash := syncState.Status.ConfigHash
+	if !common.IsPendingID(cloudflareID) && cloudflareID != "" && storedHash != "" && storedHash != newHash {
+		// True config change: we have an existing deployment with a saved hash, and the hash has changed
 		// Reset to pending to force creation of a new deployment
 		logger.Info("Config changed, resetting CloudflareID to trigger new deployment",
 			"oldDeploymentId", cloudflareID,
 			"newHash", newHash,
-			"oldHash", syncState.Status.ConfigHash)
+			"oldHash", storedHash)
 
 		// Generate new pending ID
 		pendingID := ""
@@ -267,6 +275,22 @@ func (r *DeploymentSyncController) Reconcile(ctx context.Context, req ctrl.Reque
 			"deploymentId", result.DeploymentID,
 			"stage", result.Stage,
 			"pollInterval", DeploymentPollInterval)
+
+		// CRITICAL FIX: Save ConfigHash immediately after deployment creation succeeds.
+		// Without this, the next poll iteration will see:
+		//   status.ConfigHash = null, newHash = "abc123"
+		//   ShouldSync(null, "abc123") = true
+		//   CloudflareID is not pending → "config changed" → reset CloudflareID → create another deployment
+		// This caused infinite deployment creation loops.
+		//
+		// IMPORTANT: If saving ConfigHash fails, we MUST NOT continue polling.
+		// Otherwise, the next reconcile will see ConfigHash="" and may create another deployment.
+		// Returning an error allows the controller to re-queue and retry the entire reconcile,
+		// which is safer than continuing with a potentially stale state.
+		if err := r.saveConfigHashForInProgress(ctx, syncState, newHash); err != nil {
+			logger.Error(err, "Failed to save config hash for in-progress deployment - will retry reconcile")
+			return ctrl.Result{}, fmt.Errorf("save config hash for in-progress deployment: %w", err)
+		}
 
 		// Keep Syncing status (already set above)
 		return ctrl.Result{RequeueAfter: DeploymentPollInterval}, nil
@@ -1165,6 +1189,9 @@ func (r *DeploymentSyncController) handleDeletion(
 
 // storeDeploymentResultData stores the deployment result in SyncState.ResultData.
 // This enables the L2 Controller to retrieve deployment status without querying Cloudflare API.
+//
+// Uses UpdateStatusWithConflictRetry to ensure proper conflict handling and re-fetch
+// after successful update, preventing "object has been modified" errors in subsequent operations.
 func (r *DeploymentSyncController) storeDeploymentResultData(
 	ctx context.Context,
 	syncState *v1alpha2.CloudflareSyncState,
@@ -1174,12 +1201,7 @@ func (r *DeploymentSyncController) storeDeploymentResultData(
 		return nil
 	}
 
-	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		// Re-fetch to get latest version
-		if err := r.Client.Get(ctx, client.ObjectKey{Name: syncState.Name}, syncState); err != nil {
-			return err
-		}
-
+	return common.UpdateStatusWithConflictRetry(ctx, r.Client, syncState, func() {
 		// Initialize ResultData if nil
 		if syncState.Status.ResultData == nil {
 			syncState.Status.ResultData = make(map[string]string)
@@ -1212,8 +1234,22 @@ func (r *DeploymentSyncController) storeDeploymentResultData(
 		if result.Source != "" {
 			syncState.Status.ResultData["sourceDescription"] = result.Source
 		}
+	})
+}
 
-		return r.Client.Status().Update(ctx, syncState)
+// saveConfigHashForInProgress saves the config hash while deployment is still in progress.
+// This is CRITICAL to prevent the "config changed" detection loop:
+//   - Without this, next reconcile sees ConfigHash=null vs newHash="abc"
+//   - ShouldSync returns true, CloudflareID gets reset, new deployment created
+//   - This causes infinite deployment creation loops
+func (r *DeploymentSyncController) saveConfigHashForInProgress(
+	ctx context.Context,
+	syncState *v1alpha2.CloudflareSyncState,
+	configHash string,
+) error {
+	return common.UpdateStatusWithConflictRetry(ctx, r.Client, syncState, func() {
+		syncState.Status.ConfigHash = configHash
+		// Keep the Syncing status - don't change other fields
 	})
 }
 

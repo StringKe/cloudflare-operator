@@ -449,6 +449,7 @@ func (r *ProjectSyncController) ensureWebAnalytics(
 }
 
 // storeOriginalConfig stores the original Cloudflare configuration before adoption.
+// Uses UpdateWithConflictRetry for safe concurrent updates.
 func (r *ProjectSyncController) storeOriginalConfig(
 	ctx context.Context,
 	syncState *v1alpha2.CloudflareSyncState,
@@ -473,26 +474,28 @@ func (r *ProjectSyncController) storeOriginalConfig(
 		return fmt.Errorf("marshal original config: %w", err)
 	}
 
-	if syncState.Annotations == nil {
-		syncState.Annotations = make(map[string]string)
-	}
-	syncState.Annotations["cloudflare-operator.io/original-config"] = string(configJSON)
-
-	return r.Client.Update(ctx, syncState)
+	return common.UpdateWithConflictRetry(ctx, r.Client, syncState, func() {
+		if syncState.Annotations == nil {
+			syncState.Annotations = make(map[string]string)
+		}
+		syncState.Annotations["cloudflare-operator.io/original-config"] = string(configJSON)
+	})
 }
 
 // markAsAdopted marks the SyncState as adopted.
+// Uses UpdateWithConflictRetry for safe concurrent updates.
 func (r *ProjectSyncController) markAsAdopted(
 	ctx context.Context,
 	syncState *v1alpha2.CloudflareSyncState,
 ) {
-	if syncState.Annotations == nil {
-		syncState.Annotations = make(map[string]string)
-	}
-	syncState.Annotations["cloudflare-operator.io/adopted"] = "true"
-	syncState.Annotations["cloudflare-operator.io/adopted-at"] = metav1.Now().Format(time.RFC3339)
-
-	if err := r.Client.Update(ctx, syncState); err != nil {
+	err := common.UpdateWithConflictRetry(ctx, r.Client, syncState, func() {
+		if syncState.Annotations == nil {
+			syncState.Annotations = make(map[string]string)
+		}
+		syncState.Annotations["cloudflare-operator.io/adopted"] = "true"
+		syncState.Annotations["cloudflare-operator.io/adopted-at"] = metav1.Now().Format(time.RFC3339)
+	})
+	if err != nil {
 		log.FromContext(ctx).Error(err, "Failed to mark SyncState as adopted")
 	}
 }
