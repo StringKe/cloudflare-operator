@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/retry"
@@ -30,14 +32,38 @@ const (
 	sourceTypeGit          = "git"
 	sourceTypeDirectUpload = "directUpload"
 
-	// Stage constants
-	stageActive  = "active"
-	stageSuccess = "success"
-	stageDeploy  = "deploy"
+	// Stage constants - Cloudflare Pages deployment stages
+	stageQueued       = "queued"       // Deployment is queued
+	stageInitializing = "initializing" // Deployment is initializing
+	stageBuilding     = "building"     // Deployment is building
+	stageDeploying    = "deploying"    // Deployment is deploying
+	stageActive       = "active"       // Deployment is active (final - success)
+	stageSuccess      = "success"      // Deployment succeeded (final - success)
+	stageDeploy       = "deploy"       // Legacy stage name for active
+	stageFailure      = "failure"      // Deployment failed (final - error)
+	stageIdle         = "idle"         // Deployment is idle (final - success for direct upload)
 
 	// Environment constants
 	envProduction = "production"
+
+	// DeploymentPollInterval is the interval to poll deployment status
+	DeploymentPollInterval = 30 * time.Second
 )
+
+// isDeploymentInProgress checks if a deployment is still in progress (not yet completed)
+func isDeploymentInProgress(stage string) bool {
+	switch strings.ToLower(stage) {
+	case stageQueued, stageInitializing, stageBuilding, stageDeploying:
+		return true
+	default:
+		return false
+	}
+}
+
+// isDeploymentFailed checks if a deployment has failed
+func isDeploymentFailed(stage string) bool {
+	return strings.ToLower(stage) == stageFailure
+}
 
 // DeploymentSyncController is the Sync Controller for Pages Deployment Configuration.
 // It watches CloudflareSyncState resources of type PagesDeployment,
@@ -226,19 +252,51 @@ func (r *DeploymentSyncController) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, nil
 	}
 
-	// Update success status
+	// Store deployment result data (Stage, URL) in SyncState.ResultData
+	// This enables the L2 Controller to retrieve deployment status
+	if err := r.storeDeploymentResultData(ctx, syncState, result); err != nil {
+		logger.Error(err, "Failed to store deployment result data")
+		// Non-fatal, continue
+	}
+
+	// Check deployment stage to determine if we need to continue polling
+	// Cloudflare Pages deployment is async - stages: queued → initializing → building → deploying → active/success/failure
+	if isDeploymentInProgress(result.Stage) {
+		// Deployment still in progress - keep Syncing status and poll again
+		logger.Info("Deployment in progress, will poll again",
+			"deploymentId", result.DeploymentID,
+			"stage", result.Stage,
+			"pollInterval", DeploymentPollInterval)
+
+		// Keep Syncing status (already set above)
+		return ctrl.Result{RequeueAfter: DeploymentPollInterval}, nil
+	}
+
+	if isDeploymentFailed(result.Stage) {
+		// Deployment failed - transition to Error state
+		deploymentErr := fmt.Errorf("deployment failed: stage=%s", result.Stage)
+		logger.Error(deploymentErr, "Cloudflare deployment failed",
+			"deploymentId", result.DeploymentID,
+			"stage", result.Stage)
+
+		// Use unified error handling - this is a permanent error
+		errorResult, handleErr := r.HandleSyncError(ctx, syncState, deploymentErr)
+		if handleErr != nil {
+			return ctrl.Result{}, handleErr
+		}
+
+		if errorResult.ShouldRequeue {
+			return ctrl.Result{RequeueAfter: errorResult.RequeueAfter}, nil
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// Deployment succeeded - update to Synced status
 	syncResult := &common.SyncResult{
 		ConfigHash: newHash,
 	}
 	if err := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusSynced, syncResult, nil); err != nil {
 		return ctrl.Result{}, err
-	}
-
-	// Store deployment result data (Stage, URL) in SyncState.ResultData
-	// This enables the L2 Controller to retrieve deployment status
-	if err := r.storeDeploymentResultData(ctx, syncState, result); err != nil {
-		logger.Error(err, "Failed to store deployment result data")
-		// Non-fatal, continue - status was already updated
 	}
 
 	// Update PagesProject deployment history (non-blocking)
@@ -249,9 +307,10 @@ func (r *DeploymentSyncController) Reconcile(ctx context.Context, req ctrl.Reque
 			"projectName", config.ProjectName)
 	}
 
-	logger.Info("Successfully synced Pages deployment to Cloudflare",
+	logger.Info("Deployment completed successfully",
 		"deploymentId", result.DeploymentID,
-		"action", config.Action)
+		"stage", result.Stage,
+		"url", result.URL)
 
 	return ctrl.Result{RequeueAfter: common.RequeueAfterSuccess()}, nil
 }
