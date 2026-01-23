@@ -261,13 +261,53 @@ spec:
                 type: integer
               error:
                 description: Error contains the last error message if SyncStatus is
-                  Error
+                  Error or Failed
+                type: string
+              errorCategory:
+                description: |-
+                  ErrorCategory classifies the error for retry decision making
+                  Values: Permanent, Transient, Unknown
+                enum:
+                - Permanent
+                - Transient
+                - Unknown
+                - ""
+                type: string
+              failedAt:
+                description: |-
+                  FailedAt is the timestamp when the sync entered Failed state
+                  Used for debugging and alerting purposes
+                format: date-time
+                type: string
+              failureReason:
+                description: |-
+                  FailureReason provides a categorized reason for permanent failures
+                  Values: NotFound, AuthError, ValidationError, MaxRetriesExceeded, NonRetryable
+                enum:
+                - NotFound
+                - AuthError
+                - ValidationError
+                - MaxRetriesExceeded
+                - NonRetryable
+                - ""
                 type: string
               lastSyncTime:
                 description: LastSyncTime is the timestamp of the last successful
                   sync to Cloudflare
                 format: date-time
                 type: string
+              maxRetries:
+                default: 5
+                description: |-
+                  MaxRetries is the maximum number of retry attempts before transitioning to Failed
+                  Default is 5. Set to 0 for unlimited retries.
+                type: integer
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the generation of the Spec that was last processed
+                  Used to detect Spec changes and reset Failed state
+                format: int64
+                type: integer
               resultData:
                 additionalProperties:
                   type: string
@@ -276,6 +316,12 @@ spec:
                   For TunnelLifecycle: tunnelId, tunnelToken, credentials (base64)
                   For OriginCACertificate: certificate (PEM)
                 type: object
+              retryCount:
+                default: 0
+                description: |-
+                  RetryCount tracks the number of retry attempts for transient errors
+                  Reset to 0 on successful sync or when Spec changes
+                type: integer
               syncStatus:
                 description: SyncStatus indicates the current synchronization state
                 enum:
@@ -283,6 +329,7 @@ spec:
                 - Syncing
                 - Synced
                 - Error
+                - Failed
                 type: string
             type: object
         type: object

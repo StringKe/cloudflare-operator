@@ -163,6 +163,10 @@ func (*BaseSyncController) setStatusConditionByStatus(syncState *v1alpha2.Cloudf
 	switch status {
 	case v1alpha2.SyncStatusSynced:
 		syncState.Status.Error = ""
+		syncState.Status.RetryCount = 0
+		syncState.Status.FailureReason = ""
+		syncState.Status.ErrorCategory = ""
+		syncState.Status.FailedAt = nil
 		meta.SetStatusCondition(&syncState.Status.Conditions, metav1.Condition{
 			Type:               "Ready",
 			Status:             metav1.ConditionTrue,
@@ -184,6 +188,15 @@ func (*BaseSyncController) setStatusConditionByStatus(syncState *v1alpha2.Cloudf
 			Status:             metav1.ConditionFalse,
 			Reason:             "Pending",
 			Message:            "Waiting for sync",
+			LastTransitionTime: metav1.Now(),
+		})
+	case v1alpha2.SyncStatusFailed:
+		// Failed status is handled by transitionToFailed, but include here for completeness
+		meta.SetStatusCondition(&syncState.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			Reason:             "Failed",
+			Message:            "Sync failed permanently",
 			LastTransitionTime: metav1.Now(),
 		})
 	}
@@ -237,11 +250,12 @@ func FilterSourcesByKind(sources []v1alpha2.ConfigSource, kinds ...string) []v1a
 
 // RequeueAfterError returns a requeue duration appropriate for the error type.
 // Uses error-type-specific delays:
-//   - Rate limit errors: 60-120 seconds (exponential backoff)
-//   - Temporary errors (timeout, 502, 503, 504): 10-60 seconds (exponential backoff)
-//   - Authentication errors: 5 minutes (needs manual intervention)
-//   - Not found errors: 0 (no retry needed)
-//   - Other errors: 30 seconds (default)
+//   - Rate limit errors: 60 seconds (base for exponential backoff)
+//   - Temporary errors (timeout, 502, 503, 504): 10 seconds (base for exponential backoff)
+//   - Authentication errors: 0 (permanent error, no retry)
+//   - Not found errors: 0 (permanent error, no retry)
+//   - Validation errors: 0 (permanent error, no retry)
+//   - Other errors: 30 seconds (default for unknown errors)
 func RequeueAfterError(err error) time.Duration {
 	if err == nil {
 		return 0
@@ -254,12 +268,9 @@ func RequeueAfterError(err error) time.Duration {
 	case cf.IsTemporaryError(err):
 		// Temporary errors: shorter delay for quick recovery
 		return 10 * time.Second
-	case cf.IsAuthError(err):
-		// Auth errors: longer delay, likely needs manual intervention
-		return 5 * time.Minute
-	case cf.IsNotFoundError(err):
-		// Not found: no automatic retry, resource may need to be recreated
-		return 30 * time.Second
+	case cf.IsAuthError(err), cf.IsNotFoundError(err), cf.IsValidationError(err):
+		// Permanent errors: no retry needed, requires user intervention
+		return 0
 	default:
 		// Default delay for unknown errors
 		return 30 * time.Second
@@ -337,4 +348,274 @@ func UpdateStatusWithConflictRetry(ctx context.Context, c client.Client, syncSta
 		lastErr = err
 	}
 	return fmt.Errorf("update SyncState status failed after %d retries: %w", MaxConflictRetries, lastErr)
+}
+
+// ============================================================================
+// Unified Error Handling for SyncState
+// ============================================================================
+
+const (
+	// DefaultMaxRetries is the default maximum number of retry attempts
+	DefaultMaxRetries = 5
+	// BaseRetryDelay is the base delay for exponential backoff
+	BaseRetryDelay = 10 * time.Second
+	// MaxRetryDelay is the maximum delay for exponential backoff
+	MaxRetryDelay = 5 * time.Minute
+)
+
+// SyncErrorResult contains the result of error handling
+type SyncErrorResult struct {
+	// ShouldRequeue indicates whether the reconcile should requeue
+	ShouldRequeue bool
+	// RequeueAfter is the duration to wait before requeuing (0 = no requeue)
+	RequeueAfter time.Duration
+	// IsFailed indicates whether the SyncState entered Failed state
+	IsFailed bool
+}
+
+// HandleSyncError handles an error from sync operations using the unified error handling approach.
+// It classifies the error, updates retry count, and transitions to Failed state when appropriate.
+//
+// Error handling strategy:
+//   - Permanent errors (NotFound, Auth, Validation): Immediate transition to Failed
+//   - Transient errors: Increment retry count, use exponential backoff
+//   - Max retries exceeded: Transition to Failed
+//   - Unknown errors: Treat as transient with limited retries
+//
+// Returns SyncErrorResult indicating how the reconciler should proceed.
+//
+//nolint:revive // cognitive complexity is acceptable for unified error handling
+func (c *BaseSyncController) HandleSyncError(
+	ctx context.Context,
+	syncState *v1alpha2.CloudflareSyncState,
+	syncErr error,
+) (*SyncErrorResult, error) {
+	logger := log.FromContext(ctx)
+
+	if syncErr == nil {
+		return &SyncErrorResult{ShouldRequeue: false}, nil
+	}
+
+	// Classify the error
+	category := cf.ClassifyError(syncErr)
+	failureReason := cf.GetFailureReason(syncErr)
+
+	logger.V(1).Info("Handling sync error",
+		"error", syncErr.Error(),
+		"category", category,
+		"failureReason", failureReason,
+		"currentRetryCount", syncState.Status.RetryCount)
+
+	// Determine max retries (use default if not set)
+	maxRetries := syncState.Status.MaxRetries
+	if maxRetries == 0 {
+		maxRetries = DefaultMaxRetries
+	}
+
+	switch category {
+	case cf.ErrorCategoryPermanent:
+		// Permanent error: immediate transition to Failed
+		return c.transitionToFailed(ctx, syncState, syncErr, string(failureReason), string(category))
+
+	case cf.ErrorCategoryTransient:
+		// Transient error: increment retry count, check max retries
+		newRetryCount := syncState.Status.RetryCount + 1
+
+		if newRetryCount >= maxRetries {
+			// Max retries exceeded: transition to Failed
+			logger.Info("Max retries exceeded, transitioning to Failed",
+				"retryCount", newRetryCount,
+				"maxRetries", maxRetries)
+			return c.transitionToFailed(ctx, syncState, syncErr, string(cf.FailureReasonMaxRetriesExceeded), string(category))
+		}
+
+		// Update status with incremented retry count
+		requeueDelay := calculateExponentialBackoff(newRetryCount)
+		if err := c.updateErrorStatus(ctx, syncState, syncErr, newRetryCount, string(category)); err != nil {
+			return nil, err
+		}
+
+		logger.Info("Transient error, will retry",
+			"retryCount", newRetryCount,
+			"maxRetries", maxRetries,
+			"requeueAfter", requeueDelay)
+
+		return &SyncErrorResult{
+			ShouldRequeue: true,
+			RequeueAfter:  requeueDelay,
+			IsFailed:      false,
+		}, nil
+
+	default: // ErrorCategoryUnknown
+		// Unknown error: treat as transient with limited retries
+		newRetryCount := syncState.Status.RetryCount + 1
+
+		if newRetryCount >= maxRetries {
+			logger.Info("Max retries exceeded for unknown error, transitioning to Failed",
+				"retryCount", newRetryCount,
+				"maxRetries", maxRetries)
+			return c.transitionToFailed(ctx, syncState, syncErr, string(cf.FailureReasonMaxRetriesExceeded), string(category))
+		}
+
+		requeueDelay := calculateExponentialBackoff(newRetryCount)
+		if err := c.updateErrorStatus(ctx, syncState, syncErr, newRetryCount, string(category)); err != nil {
+			return nil, err
+		}
+
+		logger.Info("Unknown error, will retry",
+			"retryCount", newRetryCount,
+			"maxRetries", maxRetries,
+			"requeueAfter", requeueDelay)
+
+		return &SyncErrorResult{
+			ShouldRequeue: true,
+			RequeueAfter:  requeueDelay,
+			IsFailed:      false,
+		}, nil
+	}
+}
+
+// transitionToFailed transitions the SyncState to Failed status
+func (c *BaseSyncController) transitionToFailed(
+	ctx context.Context,
+	syncState *v1alpha2.CloudflareSyncState,
+	syncErr error,
+	failureReason string,
+	errorCategory string,
+) (*SyncErrorResult, error) {
+	logger := log.FromContext(ctx)
+
+	now := metav1.Now()
+	err := UpdateStatusWithConflictRetry(ctx, c.Client, syncState, func() {
+		syncState.Status.SyncStatus = v1alpha2.SyncStatusFailed
+		syncState.Status.Error = cf.SanitizeErrorMessage(syncErr)
+		syncState.Status.FailedAt = &now
+		syncState.Status.FailureReason = failureReason
+		syncState.Status.ErrorCategory = errorCategory
+		syncState.Status.ObservedGeneration = syncState.Generation
+
+		meta.SetStatusCondition(&syncState.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			Reason:             "Failed",
+			Message:            fmt.Sprintf("Sync failed permanently: %s", failureReason),
+			ObservedGeneration: syncState.Generation,
+			LastTransitionTime: now,
+		})
+	})
+
+	if err != nil {
+		logger.Error(err, "Failed to update SyncState to Failed status")
+		return nil, err
+	}
+
+	logger.Info("Transitioned to Failed state",
+		"failureReason", failureReason,
+		"error", syncErr.Error())
+
+	return &SyncErrorResult{
+		ShouldRequeue: false,
+		RequeueAfter:  0,
+		IsFailed:      true,
+	}, nil
+}
+
+// updateErrorStatus updates the SyncState status for a transient error
+func (c *BaseSyncController) updateErrorStatus(
+	ctx context.Context,
+	syncState *v1alpha2.CloudflareSyncState,
+	syncErr error,
+	retryCount int,
+	errorCategory string,
+) error {
+	return UpdateStatusWithConflictRetry(ctx, c.Client, syncState, func() {
+		syncState.Status.SyncStatus = v1alpha2.SyncStatusError
+		syncState.Status.Error = cf.SanitizeErrorMessage(syncErr)
+		syncState.Status.RetryCount = retryCount
+		syncState.Status.ErrorCategory = errorCategory
+		syncState.Status.ObservedGeneration = syncState.Generation
+
+		meta.SetStatusCondition(&syncState.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			Reason:             "SyncError",
+			Message:            fmt.Sprintf("Sync failed (retry %d): %s", retryCount, cf.SanitizeErrorMessage(syncErr)),
+			ObservedGeneration: syncState.Generation,
+			LastTransitionTime: metav1.Now(),
+		})
+	})
+}
+
+// ShouldResetFromFailed checks if the SyncState should be reset from Failed state.
+// This happens when the Spec generation changes, indicating the user has made changes.
+func ShouldResetFromFailed(syncState *v1alpha2.CloudflareSyncState) bool {
+	if syncState.Status.SyncStatus != v1alpha2.SyncStatusFailed {
+		return false
+	}
+	// Check if Spec generation has changed since we entered Failed state
+	return syncState.Generation > syncState.Status.ObservedGeneration
+}
+
+// ResetFromFailed resets a SyncState from Failed status back to Pending.
+// This should be called when Spec changes are detected on a Failed SyncState.
+func (c *BaseSyncController) ResetFromFailed(
+	ctx context.Context,
+	syncState *v1alpha2.CloudflareSyncState,
+) error {
+	logger := log.FromContext(ctx)
+
+	if syncState.Status.SyncStatus != v1alpha2.SyncStatusFailed {
+		return nil
+	}
+
+	logger.Info("Resetting from Failed state due to Spec change",
+		"previousFailureReason", syncState.Status.FailureReason,
+		"previousGeneration", syncState.Status.ObservedGeneration,
+		"currentGeneration", syncState.Generation)
+
+	return UpdateStatusWithConflictRetry(ctx, c.Client, syncState, func() {
+		syncState.Status.SyncStatus = v1alpha2.SyncStatusPending
+		syncState.Status.Error = ""
+		syncState.Status.RetryCount = 0
+		syncState.Status.FailedAt = nil
+		syncState.Status.FailureReason = ""
+		syncState.Status.ErrorCategory = ""
+		syncState.Status.ObservedGeneration = syncState.Generation
+
+		meta.SetStatusCondition(&syncState.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			Reason:             "Pending",
+			Message:            "Reset from Failed state due to Spec change",
+			ObservedGeneration: syncState.Generation,
+			LastTransitionTime: metav1.Now(),
+		})
+	})
+}
+
+// IsFailed checks if a SyncState is in Failed status
+func IsFailed(syncState *v1alpha2.CloudflareSyncState) bool {
+	return syncState.Status.SyncStatus == v1alpha2.SyncStatusFailed
+}
+
+// calculateExponentialBackoff computes exponential backoff delay
+// Formula: min(maxDelay, baseDelay * 2^retryCount)
+// Sequence: 10s, 20s, 40s, 80s, 160s (capped at 5min)
+func calculateExponentialBackoff(retryCount int) time.Duration {
+	if retryCount < 0 {
+		retryCount = 0
+	}
+
+	// Cap the shift to prevent overflow
+	const maxShift = 5
+	shift := retryCount
+	if shift > maxShift {
+		shift = maxShift
+	}
+
+	delay := BaseRetryDelay * time.Duration(1<<shift)
+	if delay > MaxRetryDelay {
+		return MaxRetryDelay
+	}
+	return delay
 }

@@ -74,7 +74,7 @@ const (
 )
 
 // SyncStatus represents the synchronization status
-// +kubebuilder:validation:Enum=Pending;Syncing;Synced;Error
+// +kubebuilder:validation:Enum=Pending;Syncing;Synced;Error;Failed
 type SyncStatus string
 
 const (
@@ -84,8 +84,12 @@ const (
 	SyncStatusSyncing SyncStatus = "Syncing"
 	// SyncStatusSynced indicates the sync completed successfully
 	SyncStatusSynced SyncStatus = "Synced"
-	// SyncStatusError indicates the sync failed
+	// SyncStatusError indicates the sync failed with a transient error (will retry)
 	SyncStatusError SyncStatus = "Error"
+	// SyncStatusFailed indicates the sync failed with a permanent error (no retry)
+	// This is a terminal state. To recover, the user must fix the underlying issue
+	// and update the Spec (which increments Generation and triggers recovery).
+	SyncStatusFailed SyncStatus = "Failed"
 )
 
 // SourceReference identifies a Kubernetes resource that contributes configuration
@@ -185,7 +189,7 @@ type CloudflareSyncStateStatus struct {
 	// +kubebuilder:validation:Optional
 	AggregatedConfig *runtime.RawExtension `json:"aggregatedConfig,omitempty"`
 
-	// Error contains the last error message if SyncStatus is Error
+	// Error contains the last error message if SyncStatus is Error or Failed
 	// +kubebuilder:validation:Optional
 	Error string `json:"error,omitempty"`
 
@@ -200,6 +204,40 @@ type CloudflareSyncStateStatus struct {
 	// +listType=map
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// RetryCount tracks the number of retry attempts for transient errors
+	// Reset to 0 on successful sync or when Spec changes
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=0
+	RetryCount int `json:"retryCount,omitempty"`
+
+	// MaxRetries is the maximum number of retry attempts before transitioning to Failed
+	// Default is 5. Set to 0 for unlimited retries.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=5
+	MaxRetries int `json:"maxRetries,omitempty"`
+
+	// ObservedGeneration is the generation of the Spec that was last processed
+	// Used to detect Spec changes and reset Failed state
+	// +kubebuilder:validation:Optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// FailedAt is the timestamp when the sync entered Failed state
+	// Used for debugging and alerting purposes
+	// +kubebuilder:validation:Optional
+	FailedAt *metav1.Time `json:"failedAt,omitempty"`
+
+	// FailureReason provides a categorized reason for permanent failures
+	// Values: NotFound, AuthError, ValidationError, MaxRetriesExceeded, NonRetryable
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=NotFound;AuthError;ValidationError;MaxRetriesExceeded;NonRetryable;""
+	FailureReason string `json:"failureReason,omitempty"`
+
+	// ErrorCategory classifies the error for retry decision making
+	// Values: Permanent, Transient, Unknown
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=Permanent;Transient;Unknown;""
+	ErrorCategory string `json:"errorCategory,omitempty"`
 }
 
 // +kubebuilder:object:root=true

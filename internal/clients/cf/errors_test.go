@@ -967,3 +967,334 @@ func TestIsAccessApplicationRecoverableError(t *testing.T) {
 		})
 	}
 }
+
+// ============================================================================
+// AWS S3 and OCI error detection tests
+// ============================================================================
+
+func TestIsNotFoundError_AWSS3(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "AWS S3 NoSuchKey error",
+			err:  errors.New("NoSuchKey: The specified key does not exist"),
+			want: true,
+		},
+		{
+			name: "AWS S3 NoSuchBucket error",
+			err:  errors.New("NoSuchBucket: The specified bucket does not exist"),
+			want: true,
+		},
+		{
+			name: "AWS S3 key not exist lowercase",
+			err:  errors.New("the specified key does not exist"),
+			want: true,
+		},
+		{
+			name: "AWS S3 bucket not exist lowercase",
+			err:  errors.New("the specified bucket does not exist"),
+			want: true,
+		},
+		{
+			name: "AWS S3 full error message",
+			err: errors.New(
+				"operation error S3: GetObject, https response error StatusCode: 404, " +
+					"RequestID: xxx, HostID: xxx, api error NoSuchKey: The specified key does not exist"),
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsNotFoundError(tt.err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestIsNotFoundError_OCI(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "OCI manifest unknown",
+			err:  errors.New("MANIFEST_UNKNOWN: manifest unknown"),
+			want: true,
+		},
+		{
+			name: "OCI repository not found",
+			err:  errors.New("NAME_UNKNOWN: repository not found"),
+			want: true,
+		},
+		{
+			name: "OCI artifact not found",
+			err:  errors.New("artifact not found in registry"),
+			want: true,
+		},
+		{
+			name: "OCI name unknown",
+			err:  errors.New("NAME_UNKNOWN: name unknown"),
+			want: true,
+		},
+		{
+			name: "OCI blob unknown",
+			err:  errors.New("BLOB_UNKNOWN: blob unknown to registry"),
+			want: true,
+		},
+		{
+			name: "Docker Hub error",
+			err:  errors.New("manifest unknown: manifest unknown"),
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsNotFoundError(tt.err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// ============================================================================
+// Error classification tests
+// ============================================================================
+
+func TestClassifyError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want ErrorCategory
+	}{
+		{
+			name: "nil error",
+			err:  nil,
+			want: ErrorCategoryUnknown,
+		},
+		{
+			name: "not found error is permanent",
+			err:  ErrResourceNotFound,
+			want: ErrorCategoryPermanent,
+		},
+		{
+			name: "auth error is permanent",
+			err:  ErrAuthenticationFailed,
+			want: ErrorCategoryPermanent,
+		},
+		{
+			name: "permission denied is permanent",
+			err:  ErrPermissionDenied,
+			want: ErrorCategoryPermanent,
+		},
+		{
+			name: "validation error is permanent",
+			err:  errors.New("invalid configuration: bad request 400"),
+			want: ErrorCategoryPermanent,
+		},
+		{
+			name: "rate limit error is transient",
+			err:  ErrAPIRateLimited,
+			want: ErrorCategoryTransient,
+		},
+		{
+			name: "temporary error is transient",
+			err:  ErrTemporaryFailure,
+			want: ErrorCategoryTransient,
+		},
+		{
+			name: "timeout error is transient",
+			err:  errors.New("connection timeout"),
+			want: ErrorCategoryTransient,
+		},
+		{
+			name: "503 error is transient",
+			err:  errors.New("HTTP 503 Service Unavailable"),
+			want: ErrorCategoryTransient,
+		},
+		{
+			name: "AWS S3 NoSuchKey is permanent",
+			err:  errors.New("NoSuchKey: The specified key does not exist"),
+			want: ErrorCategoryPermanent,
+		},
+		{
+			name: "unknown error",
+			err:  errors.New("something unexpected happened"),
+			want: ErrorCategoryUnknown,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ClassifyError(tt.err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestGetFailureReason(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want FailureReason
+	}{
+		{
+			name: "nil error",
+			err:  nil,
+			want: "",
+		},
+		{
+			name: "not found error",
+			err:  ErrResourceNotFound,
+			want: FailureReasonNotFound,
+		},
+		{
+			name: "AWS S3 NoSuchKey",
+			err:  errors.New("NoSuchKey: The specified key does not exist"),
+			want: FailureReasonNotFound,
+		},
+		{
+			name: "auth error",
+			err:  ErrAuthenticationFailed,
+			want: FailureReasonAuthError,
+		},
+		{
+			name: "validation error",
+			err:  errors.New("invalid configuration: bad request 400"),
+			want: FailureReasonValidationError,
+		},
+		{
+			name: "non-retryable pages error",
+			err:  errors.New("8000034: cannot delete the active production deployment"),
+			want: FailureReasonNonRetryable,
+		},
+		{
+			name: "unknown error",
+			err:  errors.New("something unexpected"),
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := GetFailureReason(tt.err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestIsValidationError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil error",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "exact ErrInvalidConfiguration",
+			err:  ErrInvalidConfiguration,
+			want: true,
+		},
+		{
+			name: "invalid keyword",
+			err:  errors.New("invalid parameter value"),
+			want: true,
+		},
+		{
+			name: "validation failed",
+			err:  errors.New("validation failed for field X"),
+			want: true,
+		},
+		{
+			name: "bad request",
+			err:  errors.New("bad request: missing required field"),
+			want: true,
+		},
+		{
+			name: "malformed",
+			err:  errors.New("malformed JSON input"),
+			want: true,
+		},
+		{
+			name: "400 status code",
+			err:  errors.New("HTTP 400 Bad Request"),
+			want: true,
+		},
+		{
+			name: "unrelated error",
+			err:  errors.New("connection timeout"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsValidationError(tt.err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestIsPermanentError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil error",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "not found error",
+			err:  ErrResourceNotFound,
+			want: true,
+		},
+		{
+			name: "auth error",
+			err:  ErrAuthenticationFailed,
+			want: true,
+		},
+		{
+			name: "validation error",
+			err:  ErrInvalidConfiguration,
+			want: true,
+		},
+		{
+			name: "active production deployment error",
+			err:  errors.New("8000034: cannot delete active"),
+			want: true,
+		},
+		{
+			name: "temporary error is not permanent",
+			err:  ErrTemporaryFailure,
+			want: false,
+		},
+		{
+			name: "rate limit is not permanent",
+			err:  ErrAPIRateLimited,
+			want: false,
+		},
+		{
+			name: "unknown error is not permanent",
+			err:  errors.New("something unexpected"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsPermanentError(tt.err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

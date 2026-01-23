@@ -75,6 +75,27 @@ func (r *DeploymentSyncController) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, nil
 	}
 
+	// Check if we should reset from Failed state due to Spec changes
+	if common.ShouldResetFromFailed(syncState) {
+		logger.Info("Resetting from Failed state due to Spec change",
+			"previousFailureReason", syncState.Status.FailureReason)
+		if err := r.ResetFromFailed(ctx, syncState); err != nil {
+			return ctrl.Result{}, err
+		}
+		// Re-fetch after reset
+		if err := r.Client.Get(ctx, client.ObjectKey{Name: syncState.Name}, syncState); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	// Skip processing if in Failed state (requires Spec change to recover)
+	if common.IsFailed(syncState) {
+		logger.V(1).Info("SyncState is in Failed state, skipping until Spec changes",
+			"failureReason", syncState.Status.FailureReason,
+			"failedAt", syncState.Status.FailedAt)
+		return ctrl.Result{}, nil
+	}
+
 	logger.V(1).Info("Processing Pages Deployment SyncState",
 		"cloudflareId", syncState.Spec.CloudflareID,
 		"sources", len(syncState.Spec.Sources))
@@ -108,10 +129,25 @@ func (r *DeploymentSyncController) Reconcile(ctx context.Context, req ctrl.Reque
 	config, err := r.extractConfig(syncState)
 	if err != nil {
 		logger.Error(err, "Failed to extract Pages deployment configuration")
-		if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
-			logger.Error(statusErr, "Failed to update error status")
+
+		// Use unified error handling for config extraction errors
+		errorResult, handleErr := r.HandleSyncError(ctx, syncState, err)
+		if handleErr != nil {
+			logger.Error(handleErr, "Failed to handle config extraction error")
+			return ctrl.Result{}, handleErr
 		}
-		return ctrl.Result{RequeueAfter: common.RequeueAfterError(err)}, nil
+
+		if errorResult.IsFailed {
+			logger.Info("Pages deployment config extraction entered Failed state",
+				"failureReason", syncState.Status.FailureReason)
+			return ctrl.Result{}, nil
+		}
+
+		if errorResult.ShouldRequeue {
+			return ctrl.Result{RequeueAfter: errorResult.RequeueAfter}, nil
+		}
+
+		return ctrl.Result{}, nil
 	}
 
 	// Compute hash for change detection
@@ -169,10 +205,25 @@ func (r *DeploymentSyncController) Reconcile(ctx context.Context, req ctrl.Reque
 	result, err := r.syncToCloudflare(ctx, syncState, config)
 	if err != nil {
 		logger.Error(err, "Failed to sync Pages deployment to Cloudflare")
-		if statusErr := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusError, nil, err); statusErr != nil {
-			logger.Error(statusErr, "Failed to update error status")
+
+		// Use unified error handling
+		errorResult, handleErr := r.HandleSyncError(ctx, syncState, err)
+		if handleErr != nil {
+			logger.Error(handleErr, "Failed to handle sync error")
+			return ctrl.Result{}, handleErr
 		}
-		return ctrl.Result{RequeueAfter: common.RequeueAfterError(err)}, nil
+
+		if errorResult.IsFailed {
+			logger.Info("Pages deployment sync entered Failed state",
+				"failureReason", syncState.Status.FailureReason)
+			return ctrl.Result{}, nil
+		}
+
+		if errorResult.ShouldRequeue {
+			return ctrl.Result{RequeueAfter: errorResult.RequeueAfter}, nil
+		}
+
+		return ctrl.Result{}, nil
 	}
 
 	// Update success status

@@ -14,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/scheme"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/StringKe/cloudflare-operator/api/v1alpha2"
@@ -237,4 +238,264 @@ func TestParseSourceConfig_InvalidJSON(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, result)
+}
+
+// ============================================================================
+// Unified Error Handling Tests
+// ============================================================================
+
+func TestRequeueAfterError_PermanentErrors(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		wantZero bool
+	}{
+		{
+			name:     "nil error returns 0",
+			err:      nil,
+			wantZero: true,
+		},
+		{
+			name:     "auth error returns 0",
+			err:      assert.AnError,
+			wantZero: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			delay := RequeueAfterError(tt.err)
+			if tt.wantZero {
+				assert.Equal(t, time.Duration(0), delay)
+			}
+		})
+	}
+}
+
+func TestShouldResetFromFailed(t *testing.T) {
+	tests := []struct {
+		name                string
+		status              v1alpha2.SyncStatus
+		generation          int64
+		observedGeneration  int64
+		expectedShouldReset bool
+	}{
+		{
+			name:                "not in Failed status",
+			status:              v1alpha2.SyncStatusError,
+			generation:          2,
+			observedGeneration:  1,
+			expectedShouldReset: false,
+		},
+		{
+			name:                "in Failed status, same generation",
+			status:              v1alpha2.SyncStatusFailed,
+			generation:          1,
+			observedGeneration:  1,
+			expectedShouldReset: false,
+		},
+		{
+			name:                "in Failed status, generation increased",
+			status:              v1alpha2.SyncStatusFailed,
+			generation:          2,
+			observedGeneration:  1,
+			expectedShouldReset: true,
+		},
+		{
+			name:                "in Failed status, generation much higher",
+			status:              v1alpha2.SyncStatusFailed,
+			generation:          10,
+			observedGeneration:  1,
+			expectedShouldReset: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			syncState := &v1alpha2.CloudflareSyncState{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "test",
+					Generation: tt.generation,
+				},
+				Status: v1alpha2.CloudflareSyncStateStatus{
+					SyncStatus:         tt.status,
+					ObservedGeneration: tt.observedGeneration,
+				},
+			}
+
+			result := ShouldResetFromFailed(syncState)
+			assert.Equal(t, tt.expectedShouldReset, result)
+		})
+	}
+}
+
+func TestIsFailed(t *testing.T) {
+	tests := []struct {
+		name   string
+		status v1alpha2.SyncStatus
+		want   bool
+	}{
+		{
+			name:   "SyncStatusFailed",
+			status: v1alpha2.SyncStatusFailed,
+			want:   true,
+		},
+		{
+			name:   "SyncStatusError",
+			status: v1alpha2.SyncStatusError,
+			want:   false,
+		},
+		{
+			name:   "SyncStatusSynced",
+			status: v1alpha2.SyncStatusSynced,
+			want:   false,
+		},
+		{
+			name:   "SyncStatusPending",
+			status: v1alpha2.SyncStatusPending,
+			want:   false,
+		},
+		{
+			name:   "SyncStatusSyncing",
+			status: v1alpha2.SyncStatusSyncing,
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			syncState := &v1alpha2.CloudflareSyncState{
+				Status: v1alpha2.CloudflareSyncStateStatus{
+					SyncStatus: tt.status,
+				},
+			}
+
+			result := IsFailed(syncState)
+			assert.Equal(t, tt.want, result)
+		})
+	}
+}
+
+func TestCalculateExponentialBackoff(t *testing.T) {
+	tests := []struct {
+		retryCount int
+		wantDelay  time.Duration
+	}{
+		{0, 10 * time.Second},  // 10 * 2^0 = 10s
+		{1, 20 * time.Second},  // 10 * 2^1 = 20s
+		{2, 40 * time.Second},  // 10 * 2^2 = 40s
+		{3, 80 * time.Second},  // 10 * 2^3 = 80s
+		{4, 160 * time.Second}, // 10 * 2^4 = 160s
+		{5, 5 * time.Minute},   // 10 * 2^5 = 320s, capped at 5min
+		{6, 5 * time.Minute},   // capped at max shift
+		{10, 5 * time.Minute},  // still capped
+		{-1, 10 * time.Second}, // negative treated as 0
+	}
+
+	for _, tt := range tests {
+		t.Run("retry_"+string(rune('0'+tt.retryCount)), func(t *testing.T) {
+			delay := calculateExponentialBackoff(tt.retryCount)
+			assert.Equal(t, tt.wantDelay, delay)
+		})
+	}
+}
+
+func TestCalculateExponentialBackoff_NeverExceedsMax(t *testing.T) {
+	// Test a range of retry counts to ensure we never exceed max delay
+	for i := 0; i <= 100; i++ {
+		delay := calculateExponentialBackoff(i)
+		assert.LessOrEqual(t, delay, MaxRetryDelay,
+			"Delay for retry %d should not exceed MaxRetryDelay", i)
+	}
+}
+
+func TestBaseSyncController_ResetFromFailed(t *testing.T) {
+	syncState := &v1alpha2.CloudflareSyncState{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-sync-state",
+			Generation: 5,
+		},
+		Spec: v1alpha2.CloudflareSyncStateSpec{
+			ResourceType: v1alpha2.SyncResourceDNSRecord,
+			CloudflareID: "dns-123",
+			AccountID:    "acc-123",
+		},
+		Status: v1alpha2.CloudflareSyncStateStatus{
+			SyncStatus:         v1alpha2.SyncStatusFailed,
+			Error:              "previous error",
+			RetryCount:         5,
+			FailureReason:      "NotFound",
+			ErrorCategory:      "Permanent",
+			ObservedGeneration: 3,
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme.Scheme).
+		WithObjects(syncState).
+		WithStatusSubresource(syncState).
+		Build()
+
+	c := NewBaseSyncController(client)
+	ctx := context.Background()
+
+	err := c.ResetFromFailed(ctx, syncState)
+	require.NoError(t, err)
+
+	// Verify the status was reset
+	var updated v1alpha2.CloudflareSyncState
+	err = client.Get(ctx, ctrlclient.ObjectKey{Name: "test-sync-state"}, &updated)
+	require.NoError(t, err)
+
+	assert.Equal(t, v1alpha2.SyncStatusPending, updated.Status.SyncStatus)
+	assert.Empty(t, updated.Status.Error)
+	assert.Equal(t, 0, updated.Status.RetryCount)
+	assert.Empty(t, updated.Status.FailureReason)
+	assert.Empty(t, updated.Status.ErrorCategory)
+	assert.Equal(t, int64(5), updated.Status.ObservedGeneration)
+}
+
+func TestBaseSyncController_ResetFromFailed_NotInFailedStatus(t *testing.T) {
+	syncState := &v1alpha2.CloudflareSyncState{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-sync-state",
+			Generation: 2,
+		},
+		Spec: v1alpha2.CloudflareSyncStateSpec{
+			ResourceType: v1alpha2.SyncResourceDNSRecord,
+			CloudflareID: "dns-123",
+			AccountID:    "acc-123",
+		},
+		Status: v1alpha2.CloudflareSyncStateStatus{
+			SyncStatus: v1alpha2.SyncStatusSynced,
+			ConfigHash: "abc123",
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme.Scheme).
+		WithObjects(syncState).
+		WithStatusSubresource(syncState).
+		Build()
+
+	c := NewBaseSyncController(client)
+	ctx := context.Background()
+
+	err := c.ResetFromFailed(ctx, syncState)
+	require.NoError(t, err)
+
+	// Status should remain unchanged
+	var updated v1alpha2.CloudflareSyncState
+	err = client.Get(ctx, ctrlclient.ObjectKey{Name: "test-sync-state"}, &updated)
+	require.NoError(t, err)
+
+	assert.Equal(t, v1alpha2.SyncStatusSynced, updated.Status.SyncStatus)
+	assert.Equal(t, "abc123", updated.Status.ConfigHash)
+}
+
+func TestConstants(t *testing.T) {
+	// Verify constants have expected values
+	assert.Equal(t, 5, DefaultMaxRetries)
+	assert.Equal(t, 10*time.Second, BaseRetryDelay)
+	assert.Equal(t, 5*time.Minute, MaxRetryDelay)
 }

@@ -10,6 +10,43 @@ import (
 	"time"
 )
 
+// ErrorCategory classifies errors for retry decision making
+type ErrorCategory string
+
+const (
+	// ErrorCategoryPermanent indicates errors that will never succeed with retry
+	// Examples: NotFound, ValidationError, AuthError
+	ErrorCategoryPermanent ErrorCategory = "Permanent"
+
+	// ErrorCategoryTransient indicates temporary errors that may succeed with retry
+	// Examples: RateLimit, Timeout, 5xx errors
+	ErrorCategoryTransient ErrorCategory = "Transient"
+
+	// ErrorCategoryUnknown indicates errors that cannot be classified
+	// These are treated as transient with limited retries
+	ErrorCategoryUnknown ErrorCategory = "Unknown"
+)
+
+// FailureReason provides a human-readable reason for permanent failures
+type FailureReason string
+
+const (
+	// FailureReasonNotFound indicates the resource does not exist
+	FailureReasonNotFound FailureReason = "NotFound"
+
+	// FailureReasonAuthError indicates authentication/authorization failure
+	FailureReasonAuthError FailureReason = "AuthError"
+
+	// FailureReasonValidationError indicates invalid configuration
+	FailureReasonValidationError FailureReason = "ValidationError"
+
+	// FailureReasonMaxRetriesExceeded indicates retry limit was reached
+	FailureReasonMaxRetriesExceeded FailureReason = "MaxRetriesExceeded"
+
+	// FailureReasonNonRetryable indicates the error type should not be retried
+	FailureReasonNonRetryable FailureReason = "NonRetryable"
+)
+
 // Error types for Cloudflare API operations
 var (
 	// ErrResourceNotFound indicates the requested resource was not found
@@ -96,7 +133,18 @@ func IsNotFoundError(err error) bool {
 		strings.Contains(errStr, "virtual network not found") ||
 		// General Cloudflare API patterns
 		strings.Contains(errStr, "resource_not_found") ||
-		strings.Contains(errStr, "could not find")
+		strings.Contains(errStr, "could not find") ||
+		// AWS S3 specific "not found" errors
+		strings.Contains(errStr, "nosuchkey") ||
+		strings.Contains(errStr, "nosuchbucket") ||
+		strings.Contains(errStr, "the specified key does not exist") ||
+		strings.Contains(errStr, "the specified bucket does not exist") ||
+		// OCI/Container Registry specific "not found" errors
+		strings.Contains(errStr, "manifest unknown") ||
+		strings.Contains(errStr, "repository not found") ||
+		strings.Contains(errStr, "artifact not found") ||
+		strings.Contains(errStr, "name unknown") ||
+		strings.Contains(errStr, "blob unknown")
 }
 
 // IsConflictError checks if the error indicates a resource conflict
@@ -162,6 +210,72 @@ func IsAuthError(err error) bool {
 		strings.Contains(errStr, "forbidden") ||
 		strings.Contains(errStr, "401") ||
 		strings.Contains(errStr, "403")
+}
+
+// IsValidationError checks if the error indicates invalid configuration or input
+func IsValidationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrInvalidConfiguration) {
+		return true
+	}
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "invalid") ||
+		strings.Contains(errStr, "validation failed") ||
+		strings.Contains(errStr, "bad request") ||
+		strings.Contains(errStr, "malformed") ||
+		strings.Contains(errStr, "400")
+}
+
+// IsPermanentError checks if the error is permanent and should not be retried
+func IsPermanentError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return IsNotFoundError(err) ||
+		IsAuthError(err) ||
+		IsValidationError(err) ||
+		IsPagesDeploymentNonRetryableError(err)
+}
+
+// ClassifyError categorizes an error for retry decision making
+func ClassifyError(err error) ErrorCategory {
+	if err == nil {
+		return ErrorCategoryUnknown
+	}
+
+	// Check for permanent errors first
+	if IsNotFoundError(err) || IsAuthError(err) || IsValidationError(err) || IsPagesDeploymentNonRetryableError(err) {
+		return ErrorCategoryPermanent
+	}
+
+	// Check for transient errors
+	if IsTemporaryError(err) || IsRateLimitError(err) {
+		return ErrorCategoryTransient
+	}
+
+	return ErrorCategoryUnknown
+}
+
+// GetFailureReason returns a FailureReason for permanent errors
+func GetFailureReason(err error) FailureReason {
+	if err == nil {
+		return ""
+	}
+
+	switch {
+	case IsNotFoundError(err):
+		return FailureReasonNotFound
+	case IsAuthError(err):
+		return FailureReasonAuthError
+	case IsValidationError(err):
+		return FailureReasonValidationError
+	case IsPagesDeploymentNonRetryableError(err):
+		return FailureReasonNonRetryable
+	default:
+		return ""
+	}
 }
 
 // WrapNotFound wraps an error as a not found error
