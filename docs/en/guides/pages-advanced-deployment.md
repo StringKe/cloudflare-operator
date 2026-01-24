@@ -2,7 +2,7 @@
 
 This guide covers advanced deployment features for Cloudflare Pages including the new Persistent Version Entity model, Direct Upload, Smart Rollback, Project Adoption, and Web Analytics integration.
 
-> **Version**: v0.28.0+
+> **Version**: v0.34.0+
 
 ## Overview
 
@@ -211,6 +211,7 @@ status:
 
   # Version tracking
   version: 5
+  versionName: "v1.2.3"   # From label or deployment name
   sourceDescription: "git:main@abc123"
 
   # Stage tracking
@@ -227,12 +228,36 @@ status:
 | Field | Description |
 |-------|-------------|
 | `deploymentId` | Cloudflare deployment ID |
-| `hashUrl` | Unique hash-based URL (e.g., `<hash>.project.pages.dev`) |
+| `hashUrl` | **Unique hash-based URL** (e.g., `<hash>.project.pages.dev`) - immutable reference |
 | `branchUrl` | Branch-based URL (e.g., `<branch>.project.pages.dev`) |
 | `environment` | Deployment environment (production/preview) |
 | `isCurrentProduction` | Whether this is the active production deployment |
 | `version` | Sequential version number within the project |
+| `versionName` | **Human-readable version identifier** (from `networking.cloudflare-operator.io/version` label or deployment name) |
 | `sourceDescription` | Human-readable source description |
+
+### Version Tracking
+
+To track version names for external applications, add the `networking.cloudflare-operator.io/version` label:
+
+```yaml
+metadata:
+  name: my-app-deploy-v1-2-3
+  labels:
+    networking.cloudflare-operator.io/version: "v1.2.3"
+```
+
+This label value is automatically stored in `status.versionName`. If the label is not present, the deployment name is used as the version name.
+
+**Reading version information:**
+
+```bash
+# Get version name
+kubectl get pagesdeployment my-app-deploy -o jsonpath='{.status.versionName}'
+
+# Get hash URL (immutable reference to this deployment)
+kubectl get pagesdeployment my-app-deploy -o jsonpath='{.status.hashUrl}'
+```
 
 ---
 

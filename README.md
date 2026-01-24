@@ -34,7 +34,7 @@
 
 </div>
 
-> **Note**: This project is currently in Alpha (v0.27.x). This is **NOT** an official Cloudflare product. It uses the [Cloudflare API](https://api.cloudflare.com/) and [cloudflared](https://github.com/cloudflare/cloudflared) to automate Zero Trust configuration on Kubernetes.
+> **Note**: This project is currently in Alpha (v0.34.x). This is **NOT** an official Cloudflare product. It uses the [Cloudflare API](https://api.cloudflare.com/) and [cloudflared](https://github.com/cloudflare/cloudflared) to automate Zero Trust configuration on Kubernetes.
 >
 > This project is a fork of [adyanth/cloudflare-operator](https://github.com/adyanth/cloudflare-operator) with extended Zero Trust features and improvements.
 
@@ -61,7 +61,7 @@ The Cloudflare Zero Trust Operator provides Kubernetes-native management of Clou
 
 ## Architecture
 
-This operator uses a **Unified Sync Architecture** with six layers to ensure concurrent safety and eliminate race conditions:
+This operator uses a **Three-Layer Architecture** for simplicity and reliability:
 
 ```mermaid
 flowchart TB
@@ -75,29 +75,23 @@ flowchart TB
     end
 
     subgraph K8s["Kubernetes Cluster"]
-        subgraph Layer1["Layer 1: K8s Resources"]
-            CRDs["Custom Resources<br/>(Tunnel, DNSRecord, AccessApp, etc.)"]
-            K8sNative["Kubernetes Native<br/>(Ingress, Gateway API)"]
+        subgraph Layer1["Layer 1: K8s CRD"]
+            OneToOne["1:1 Resources<br/>(DNSRecord, AccessApp, R2Bucket, PagesDeployment, etc.)"]
+            Aggregate["Aggregate Resources<br/>(Tunnel, ClusterTunnel, Ingress, HTTPRoute)"]
         end
 
-        subgraph Layer2["Layer 2: Resource Controllers"]
-            RC["Resource Controllers<br/>(Lightweight, 100-150 lines each)"]
+        subgraph Layer2["Layer 2: Controllers"]
+            Direct["Direct Controllers<br/>(Call CF API directly, write status to CRD)"]
+            ConfigAgg["Config Aggregation<br/>(Write to ConfigMap, TunnelConfig Controller syncs)"]
         end
 
-        subgraph Layer3["Layer 3: Core Services"]
-            SVC["Core Services<br/>(TunnelConfigService, DNSService, etc.)"]
-        end
-
-        subgraph Layer4["Layer 4: SyncState CRD"]
-            SyncState["CloudflareSyncState<br/>(Shared state with optimistic locking)"]
-        end
-
-        subgraph Layer5["Layer 5: Sync Controllers"]
-            SC["Sync Controllers<br/>(Debouncing, Aggregation, Hash detection)"]
+        subgraph Layer3["Layer 3: Cloudflare API Client"]
+            CFClient["Connection Pool, Rate Limiting<br/>Auto Retry, Error Handling"]
         end
 
         subgraph Managed["Managed Resources"]
             Deployment["cloudflared Deployment"]
+            ConfigMap["Tunnel ConfigMap"]
         end
 
         subgraph App["Applications"]
@@ -106,33 +100,34 @@ flowchart TB
         end
     end
 
-    CRDs -.->|watch| RC
-    K8sNative -.->|watch| RC
-    RC -->|register config| SVC
-    SVC -->|update| SyncState
-    SyncState -.->|watch| SC
-    SC -->|"API calls<br/>(single sync point)"| API
-    SC -->|creates| Managed
-    Managed -->|proxy| Service
+    OneToOne -.->|watch| Direct
+    Aggregate -.->|watch| ConfigAgg
+    Direct -->|"API calls"| API
+    Direct -->|"status"| OneToOne
+    ConfigAgg -->|write| ConfigMap
+    ConfigMap -.->|watch| Direct
+    Direct -->|"tunnel config"| API
+    Direct -->|creates| Deployment
+    Deployment -->|proxy| Service
     Service --> Pod
     Users -->|HTTPS/WARP| Edge
     Edge <-->|tunnel| Deployment
 
-    style Layer4 fill:#f9f,stroke:#333,stroke-width:2px
-    style SC fill:#9f9,stroke:#333,stroke-width:2px
+    style Layer2 fill:#9f9,stroke:#333,stroke-width:2px
+    style CFClient fill:#f9f,stroke:#333,stroke-width:2px
 ```
 
 ### Architecture Benefits
 
 | Feature | Benefit |
 |---------|---------|
-| **Single Sync Point** | Only Sync Controllers call Cloudflare API, eliminating race conditions |
-| **Optimistic Locking** | SyncState CRD uses K8s resourceVersion for multi-instance safety |
-| **Debouncing** | 500ms delay aggregates multiple changes into single API call |
+| **Direct Status Writes** | Controllers write directly to CRD.Status, no intermediate layers |
+| **Independent Informers** | Each CRD has its own Controller + Informer, no event interference |
+| **ConfigMap Aggregation** | Tunnel config uses ConfigMap for multi-source aggregation (Ingress, TunnelBinding, etc.) |
 | **Hash Detection** | Skip sync when config unchanged, reducing API usage |
-| **Separation of Concerns** | Each layer has clear, single responsibility |
+| **Simple Data Flow** | L1 CRD → L2 Controller → L3 CF API, easy to trace and debug |
 
-> **Note**: See [Unified Sync Architecture Design](docs/design/UNIFIED_SYNC_ARCHITECTURE.md) for detailed documentation.
+> **Note**: See [Three-Layer Architecture Design](docs/design/THREE_LAYER_ARCHITECTURE.md) for detailed documentation.
 
 ## Quick Start
 
@@ -393,7 +388,7 @@ This fork extends the original project with:
 - Zone settings and rules engine (SSL/TLS, Cache, WAF, Transform/Redirect rules)
 - Origin CA certificate integration
 - Domain registration management (Enterprise)
-- Six-layer unified sync architecture for race condition elimination
+- Three-layer architecture for simplicity and reliability (simplified from six-layer)
 - Reusable Access Policies and inline include/exclude/require rules
 - NetworkRoute adoption with cross-VNet search support
 - Enhanced error handling and status reporting

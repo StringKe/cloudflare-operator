@@ -77,7 +77,7 @@ metadata:
     networking.cloudflare-operator.io/managed-by: pagesproject
     networking.cloudflare-operator.io/managed-by-name: my-app
     networking.cloudflare-operator.io/managed-by-uid: "xxx"
-    networking.cloudflare-operator.io/version: v1.2.3
+    networking.cloudflare-operator.io/version: v1.2.3  # 版本名称，会自动写入 status.versionName
   ownerReferences:
     - apiVersion: networking.cloudflare-operator.io/v1alpha2
       kind: PagesProject
@@ -85,6 +85,8 @@ metadata:
       uid: xxx
       controller: true
 ```
+
+**版本追踪**：`networking.cloudflare-operator.io/version` 标签的值会自动写入 `status.versionName`，供外部应用读取部署版本信息。
 
 ### 4. 自动清理历史
 
@@ -107,12 +109,13 @@ Status 中聚合所有托管版本的状态：
 ```yaml
 status:
   # 当前生产部署信息
+  currentVersion: "v1.2.3"  # 当前生产版本名称
   currentProduction:
     version: "v1.2.3"
     deploymentId: "cf-abc123"
     deploymentName: "my-app-v1.2.3"
     url: "my-app.pages.dev"
-    hashUrl: "abc123.my-app.pages.dev"
+    hashUrl: "abc123.my-app.pages.dev"  # 不可变的 hash URL
     deployedAt: "2025-01-20T10:00:00Z"
 
   # 托管部署数量

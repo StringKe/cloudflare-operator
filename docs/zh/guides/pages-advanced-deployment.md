@@ -2,7 +2,7 @@
 
 本指南介绍 Cloudflare Pages 的高级部署功能，包括全新的持久化版本实体模式、直接上传、智能回滚、项目导入和 Web Analytics 集成。
 
-> **版本**: v0.28.0+
+> **版本**: v0.34.0+
 
 ## 概述
 
@@ -211,6 +211,7 @@ status:
 
   # 版本追踪
   version: 5
+  versionName: "v1.2.3"   # 来自标签或部署名称
   sourceDescription: "git:main@abc123"
 
   # 阶段追踪
@@ -227,12 +228,36 @@ status:
 | 字段 | 说明 |
 |------|------|
 | `deploymentId` | Cloudflare 部署 ID |
-| `hashUrl` | 基于哈希的唯一 URL（如 `<hash>.project.pages.dev`） |
+| `hashUrl` | **基于哈希的唯一 URL**（如 `<hash>.project.pages.dev`）- 不可变引用 |
 | `branchUrl` | 基于分支的 URL（如 `<branch>.project.pages.dev`） |
 | `environment` | 部署环境（production/preview） |
 | `isCurrentProduction` | 是否为当前活跃的生产部署 |
 | `version` | 项目内的顺序版本号 |
+| `versionName` | **人类可读的版本标识符**（来自 `networking.cloudflare-operator.io/version` 标签或部署名称） |
 | `sourceDescription` | 人类可读的源描述 |
+
+### 版本追踪
+
+要为外部应用程序追踪版本名称，添加 `networking.cloudflare-operator.io/version` 标签：
+
+```yaml
+metadata:
+  name: my-app-deploy-v1-2-3
+  labels:
+    networking.cloudflare-operator.io/version: "v1.2.3"
+```
+
+此标签值会自动存储在 `status.versionName` 中。如果没有设置此标签，则使用部署名称作为版本名称。
+
+**读取版本信息：**
+
+```bash
+# 获取版本名称
+kubectl get pagesdeployment my-app-deploy -o jsonpath='{.status.versionName}'
+
+# 获取 hash URL（此部署的不可变引用）
+kubectl get pagesdeployment my-app-deploy -o jsonpath='{.status.hashUrl}'
+```
 
 ---
 
