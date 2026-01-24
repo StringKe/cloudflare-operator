@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2025-2026 The Cloudflare Operator Authors
 
-// Package gatewayrule implements the controller for GatewayRule resources.
+// Package gatewayrule provides a controller for managing Cloudflare Gateway Rules.
+// It directly calls Cloudflare API and writes status back to the CRD.
 package gatewayrule
 
 import (
 	"context"
 	"fmt"
-	"time"
 
-	"github.com/go-logr/logr"
+	"github.com/cloudflare/cloudflare-go"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -19,237 +19,276 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
-	"github.com/StringKe/cloudflare-operator/internal/service"
-	gatewaysvc "github.com/StringKe/cloudflare-operator/internal/service/gateway"
+	"github.com/StringKe/cloudflare-operator/internal/controller/common"
 )
 
 const (
-	FinalizerName = "gatewayrule.networking.cloudflare-operator.io/finalizer"
+	finalizerName = "gatewayrule.networking.cloudflare-operator.io/finalizer"
 )
 
-// GatewayRuleReconciler reconciles a GatewayRule object
-type GatewayRuleReconciler struct {
+// Reconciler reconciles a GatewayRule object.
+// It directly calls Cloudflare API and writes status back to the CRD.
+type Reconciler struct {
 	client.Client
-	Scheme         *runtime.Scheme
-	Recorder       record.EventRecorder
-	gatewayService *gatewaysvc.GatewayRuleService
-
-	// Runtime state
-	ctx  context.Context
-	log  logr.Logger
-	rule *networkingv1alpha2.GatewayRule
+	Scheme     *runtime.Scheme
+	Recorder   record.EventRecorder
+	APIFactory *common.APIClientFactory
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=gatewayrules,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=gatewayrules/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=gatewayrules/finalizers,verbs=update
+// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
-func (r *GatewayRuleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	r.ctx = ctx
-	r.log = ctrllog.FromContext(ctx)
+// Reconcile handles GatewayRule reconciliation
+func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
 
-	// Fetch the GatewayRule instance
-	r.rule = &networkingv1alpha2.GatewayRule{}
-	if err := r.Get(ctx, req.NamespacedName, r.rule); err != nil {
+	// Get the GatewayRule resource
+	rule := &networkingv1alpha2.GatewayRule{}
+	if err := r.Get(ctx, req.NamespacedName, rule); err != nil {
 		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, nil
+			return common.NoRequeue(), nil
 		}
-		return ctrl.Result{}, err
-	}
-
-	// Resolve credentials
-	credInfo, err := r.resolveCredentials()
-	if err != nil {
-		r.log.Error(err, "Failed to resolve credentials")
-		return r.updateStatusError(err)
+		logger.Error(err, "Unable to fetch GatewayRule")
+		return common.NoRequeue(), err
 	}
 
 	// Handle deletion
-	if !r.rule.DeletionTimestamp.IsZero() {
-		return r.handleDeletion(credInfo)
+	if !rule.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, rule)
 	}
 
-	// Add finalizer if not present
-	if !controllerutil.ContainsFinalizer(r.rule, FinalizerName) {
-		controllerutil.AddFinalizer(r.rule, FinalizerName)
-		if err := r.Update(ctx, r.rule); err != nil {
-			return ctrl.Result{}, err
-		}
+	// Ensure finalizer
+	if added, err := controller.EnsureFinalizer(ctx, r.Client, rule, finalizerName); err != nil {
+		return common.NoRequeue(), err
+	} else if added {
+		return ctrl.Result{Requeue: true}, nil
 	}
 
-	// Register Gateway rule configuration to SyncState
-	return r.registerGatewayRule(credInfo)
-}
-
-// resolveCredentials resolves the credentials reference and returns the credentials info.
-// Following Unified Sync Architecture, the Resource Controller only needs
-// credential metadata (accountID, credRef) - it does not create a Cloudflare API client.
-func (r *GatewayRuleReconciler) resolveCredentials() (*controller.CredentialsInfo, error) {
+	// Get API client
 	// GatewayRule is cluster-scoped, use operator namespace for legacy inline secrets
-	info, err := controller.ResolveCredentialsForService(
-		r.ctx,
-		r.Client,
-		r.log,
-		r.rule.Spec.Cloudflare,
-		controller.OperatorNamespace,
-		r.rule.Status.AccountID,
-	)
+	apiResult, err := r.APIFactory.GetClient(ctx, common.APIClientOptions{
+		CloudflareDetails: &rule.Spec.Cloudflare,
+		Namespace:         common.OperatorNamespace,
+		StatusAccountID:   rule.Status.AccountID,
+	})
 	if err != nil {
-		r.log.Error(err, "failed to resolve credentials")
-		r.Recorder.Event(r.rule, corev1.EventTypeWarning, controller.EventReasonAPIError,
-			"Failed to resolve credentials: "+err.Error())
-		return nil, err
+		logger.Error(err, "Failed to get API client")
+		return r.updateStatusError(ctx, rule, err)
 	}
 
-	return info, nil
+	// Sync Gateway rule to Cloudflare
+	return r.syncGatewayRule(ctx, rule, apiResult)
 }
 
-// handleDeletion handles the deletion of a GatewayRule.
-// Following Unified Sync Architecture: Resource Controller only unregisters from SyncState,
-// the L5 Sync Controller handles actual Cloudflare API deletion.
-func (r *GatewayRuleReconciler) handleDeletion(
-	_ *controller.CredentialsInfo,
+// handleDeletion handles the deletion of GatewayRule.
+func (r *Reconciler) handleDeletion(
+	ctx context.Context,
+	rule *networkingv1alpha2.GatewayRule,
 ) (ctrl.Result, error) {
-	if !controllerutil.ContainsFinalizer(r.rule, FinalizerName) {
-		return ctrl.Result{}, nil
+	logger := log.FromContext(ctx)
+
+	if !controllerutil.ContainsFinalizer(rule, finalizerName) {
+		return common.NoRequeue(), nil
 	}
 
-	// Unregister from SyncState - L5 Sync Controller will handle Cloudflare deletion
-	source := service.Source{
-		Kind:      "GatewayRule",
-		Namespace: "",
-		Name:      r.rule.Name,
-	}
-	if err := r.gatewayService.Unregister(r.ctx, r.rule.Status.RuleID, source); err != nil {
-		r.log.Error(err, "Failed to unregister Gateway rule from SyncState")
-		r.Recorder.Event(r.rule, corev1.EventTypeWarning, "UnregisterFailed",
-			fmt.Sprintf("Failed to unregister from SyncState: %s", err.Error()))
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	// Get API client
+	apiResult, err := r.APIFactory.GetClient(ctx, common.APIClientOptions{
+		CloudflareDetails: &rule.Spec.Cloudflare,
+		Namespace:         common.OperatorNamespace,
+		StatusAccountID:   rule.Status.AccountID,
+	})
+	if err != nil {
+		logger.Error(err, "Failed to get API client for deletion")
+		// Continue with finalizer removal
+	} else if rule.Status.RuleID != "" {
+		// Delete Gateway rule from Cloudflare
+		logger.Info("Deleting Gateway Rule from Cloudflare",
+			"ruleId", rule.Status.RuleID)
+
+		if err := apiResult.API.DeleteGatewayRule(ctx, rule.Status.RuleID); err != nil {
+			if !cf.IsNotFoundError(err) {
+				logger.Error(err, "Failed to delete Gateway Rule from Cloudflare")
+				r.Recorder.Event(rule, corev1.EventTypeWarning, "DeleteFailed",
+					fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
+				return common.RequeueShort(), err
+			}
+			logger.Info("Gateway Rule not found in Cloudflare, may have been already deleted")
+		}
+
+		r.Recorder.Event(rule, corev1.EventTypeNormal, "Deleted",
+			"Gateway Rule deleted from Cloudflare")
 	}
 
-	r.log.Info("Unregistered Gateway rule from SyncState, L5 Sync Controller will handle Cloudflare deletion")
-	r.Recorder.Event(r.rule, corev1.EventTypeNormal, "Unregistered", "Unregistered from SyncState")
-
-	// Remove finalizer with retry logic
-	if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.rule, func() {
-		controllerutil.RemoveFinalizer(r.rule, FinalizerName)
+	// Remove finalizer
+	if err := controller.UpdateWithConflictRetry(ctx, r.Client, rule, func() {
+		controllerutil.RemoveFinalizer(rule, finalizerName)
 	}); err != nil {
-		r.log.Error(err, "failed to remove finalizer")
-		return ctrl.Result{}, err
+		logger.Error(err, "Failed to remove finalizer")
+		return common.NoRequeue(), err
 	}
-	r.Recorder.Event(r.rule, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
+	r.Recorder.Event(rule, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
 
-	return ctrl.Result{}, nil
+	return common.NoRequeue(), nil
 }
 
-// registerGatewayRule registers the Gateway rule configuration to SyncState.
-func (r *GatewayRuleReconciler) registerGatewayRule(
-	credInfo *controller.CredentialsInfo,
+// syncGatewayRule syncs the Gateway Rule to Cloudflare.
+func (r *Reconciler) syncGatewayRule(
+	ctx context.Context,
+	rule *networkingv1alpha2.GatewayRule,
+	apiResult *common.APIClientResult,
 ) (ctrl.Result, error) {
-	// Use the Name from the spec, or fall back to the resource name
-	ruleName := r.rule.Spec.Name
-	if ruleName == "" {
-		ruleName = r.rule.Name
-	}
+	logger := log.FromContext(ctx)
 
-	// Build Gateway rule configuration
-	config := gatewaysvc.GatewayRuleConfig{
-		Name:          ruleName,
-		Description:   r.rule.Spec.Description,
-		TrafficType:   "", // Determined by filters
-		Action:        r.rule.Spec.Action,
-		Enabled:       r.rule.Spec.Enabled,
-		Priority:      r.rule.Spec.Precedence,
-		Identity:      r.rule.Spec.Identity,
-		DevicePosture: r.rule.Spec.DevicePosture,
-	}
+	// Determine rule name
+	ruleName := rule.GetGatewayRuleName()
 
-	// Build filters
-	for _, f := range r.rule.Spec.Filters {
-		config.Filters = append(config.Filters, gatewaysvc.GatewayRuleFilter{
-			Type:       f,
-			Expression: r.rule.Spec.Traffic,
-		})
-	}
+	// Build params
+	params := r.buildParams(rule, ruleName)
 
-	// Build schedule
-	if r.rule.Spec.Schedule != nil {
-		config.Schedule = &gatewaysvc.GatewayRuleSchedule{
-			TimeZone: r.rule.Spec.Schedule.TimeZone,
-			Mon:      r.rule.Spec.Schedule.Mon,
-			Tue:      r.rule.Spec.Schedule.Tue,
-			Wed:      r.rule.Spec.Schedule.Wed,
-			Thu:      r.rule.Spec.Schedule.Thu,
-			Fri:      r.rule.Spec.Schedule.Fri,
-			Sat:      r.rule.Spec.Schedule.Sat,
-			Sun:      r.rule.Spec.Schedule.Sun,
+	// Check if rule already exists by ID
+	if rule.Status.RuleID != "" {
+		existing, err := apiResult.API.GetGatewayRule(ctx, rule.Status.RuleID)
+		if err != nil {
+			if !cf.IsNotFoundError(err) {
+				logger.Error(err, "Failed to get Gateway Rule from Cloudflare")
+				return r.updateStatusError(ctx, rule, err)
+			}
+			// Rule doesn't exist, will create
+			logger.Info("Gateway Rule not found in Cloudflare, will recreate",
+				"ruleId", rule.Status.RuleID)
+		} else {
+			// Rule exists, update it
+			logger.V(1).Info("Updating Gateway Rule in Cloudflare",
+				"ruleId", existing.ID,
+				"name", ruleName)
+
+			result, err := apiResult.API.UpdateGatewayRule(ctx, existing.ID, params)
+			if err != nil {
+				logger.Error(err, "Failed to update Gateway Rule")
+				return r.updateStatusError(ctx, rule, err)
+			}
+
+			r.Recorder.Event(rule, corev1.EventTypeNormal, "Updated",
+				fmt.Sprintf("Gateway Rule '%s' updated in Cloudflare", ruleName))
+
+			return r.updateStatusReady(ctx, rule, apiResult.AccountID, result.ID)
 		}
 	}
 
-	// Build expiration
-	if r.rule.Spec.Expiration != nil {
-		config.Expiration = &gatewaysvc.GatewayRuleExpiration{
-			ExpiresAt: r.rule.Spec.Expiration.ExpiresAt,
-			Duration:  r.rule.Spec.Expiration.Duration,
+	// Try to find existing rule by name
+	existingByName, err := apiResult.API.ListGatewayRulesByName(ctx, ruleName)
+	if err != nil && !cf.IsNotFoundError(err) {
+		logger.Error(err, "Failed to search for existing Gateway Rule")
+		return r.updateStatusError(ctx, rule, err)
+	}
+
+	if existingByName != nil {
+		// Rule already exists with this name, adopt it
+		logger.Info("Gateway Rule already exists with same name, adopting it",
+			"ruleId", existingByName.ID,
+			"name", ruleName)
+
+		// Update the existing rule
+		result, err := apiResult.API.UpdateGatewayRule(ctx, existingByName.ID, params)
+		if err != nil {
+			logger.Error(err, "Failed to update existing Gateway Rule")
+			return r.updateStatusError(ctx, rule, err)
 		}
+
+		r.Recorder.Event(rule, corev1.EventTypeNormal, "Adopted",
+			fmt.Sprintf("Adopted existing Gateway Rule '%s'", ruleName))
+
+		return r.updateStatusReady(ctx, rule, apiResult.AccountID, result.ID)
 	}
 
-	// Build rule settings
-	if r.rule.Spec.RuleSettings != nil {
-		config.RuleSettings = r.buildRuleSettings(r.rule.Spec.RuleSettings)
+	// Create new rule
+	logger.Info("Creating Gateway Rule in Cloudflare",
+		"name", ruleName)
+
+	result, err := apiResult.API.CreateGatewayRule(ctx, params)
+	if err != nil {
+		logger.Error(err, "Failed to create Gateway Rule")
+		return r.updateStatusError(ctx, rule, err)
 	}
 
-	// Create source reference
-	source := service.Source{
-		Kind:      "GatewayRule",
-		Namespace: "",
-		Name:      r.rule.Name,
-	}
+	r.Recorder.Event(rule, corev1.EventTypeNormal, "Created",
+		fmt.Sprintf("Gateway Rule '%s' created in Cloudflare", ruleName))
 
-	// Register to SyncState
-	opts := gatewaysvc.GatewayRuleRegisterOptions{
-		AccountID:      credInfo.AccountID,
-		RuleID:         r.rule.Status.RuleID,
-		Source:         source,
-		Config:         config,
-		CredentialsRef: credInfo.CredentialsRef,
-	}
-
-	if err := r.gatewayService.Register(r.ctx, opts); err != nil {
-		r.log.Error(err, "Failed to register Gateway rule configuration")
-		r.Recorder.Event(r.rule, corev1.EventTypeWarning, "RegisterFailed",
-			fmt.Sprintf("Failed to register Gateway rule: %s", err.Error()))
-		return r.updateStatusError(err)
-	}
-
-	r.Recorder.Event(r.rule, corev1.EventTypeNormal, "Registered",
-		fmt.Sprintf("Registered Gateway Rule '%s' configuration to SyncState", ruleName))
-
-	// Update status to Pending - actual sync happens via GatewaySyncController
-	return r.updateStatusPending(credInfo.AccountID)
+	return r.updateStatusReady(ctx, rule, apiResult.AccountID, result.ID)
 }
 
-// buildRuleSettings converts CRD rule settings to service layer type.
+// buildParams builds the GatewayRuleParams from the GatewayRule spec.
+func (r *Reconciler) buildParams(rule *networkingv1alpha2.GatewayRule, ruleName string) cf.GatewayRuleParams {
+	params := cf.GatewayRuleParams{
+		Name:          ruleName,
+		Description:   rule.Spec.Description,
+		Precedence:    rule.Spec.Precedence,
+		Enabled:       rule.Spec.Enabled,
+		Action:        rule.Spec.Action,
+		Traffic:       rule.Spec.Traffic,
+		Identity:      rule.Spec.Identity,
+		DevicePosture: rule.Spec.DevicePosture,
+	}
+
+	// Convert filters
+	for _, f := range rule.Spec.Filters {
+		params.Filters = append(params.Filters, cloudflare.TeamsFilterType(f))
+	}
+
+	// Convert schedule
+	if rule.Spec.Schedule != nil {
+		params.Schedule = &cf.GatewayRuleScheduleParams{
+			TimeZone: rule.Spec.Schedule.TimeZone,
+			Mon:      rule.Spec.Schedule.Mon,
+			Tue:      rule.Spec.Schedule.Tue,
+			Wed:      rule.Spec.Schedule.Wed,
+			Thu:      rule.Spec.Schedule.Thu,
+			Fri:      rule.Spec.Schedule.Fri,
+			Sat:      rule.Spec.Schedule.Sat,
+			Sun:      rule.Spec.Schedule.Sun,
+		}
+	}
+
+	// Convert expiration
+	if rule.Spec.Expiration != nil {
+		params.Expiration = &cf.GatewayRuleExpirationParams{
+			ExpiresAt: rule.Spec.Expiration.ExpiresAt,
+			Duration:  rule.Spec.Expiration.Duration,
+		}
+	}
+
+	// Convert rule settings
+	if rule.Spec.RuleSettings != nil {
+		params.RuleSettings = r.buildRuleSettings(rule.Spec.RuleSettings)
+	}
+
+	return params
+}
+
+// buildRuleSettings converts CRD rule settings to CF API type.
 //
 //nolint:revive // cognitive complexity is acceptable for this conversion
-func (*GatewayRuleReconciler) buildRuleSettings(settings *networkingv1alpha2.GatewayRuleSettings) *gatewaysvc.GatewayRuleSettings {
+func (r *Reconciler) buildRuleSettings(settings *networkingv1alpha2.GatewayRuleSettings) *cf.GatewayRuleSettingsParams {
 	if settings == nil {
 		return nil
 	}
 
-	result := &gatewaysvc.GatewayRuleSettings{
+	result := &cf.GatewayRuleSettingsParams{
 		BlockPageEnabled:                settings.BlockPageEnabled,
 		BlockReason:                     settings.BlockReason,
 		OverrideHost:                    settings.OverrideHost,
 		OverrideIPs:                     settings.OverrideIPs,
 		InsecureDisableDNSSECValidation: settings.InsecureDisableDNSSECValidation,
 		AddHeaders:                      settings.AddHeaders,
-		UntrustedCertificateAction:      settings.UntrustedCertificateAction,
+		UntrustedCertAction:             settings.UntrustedCertificateAction,
 		ResolveDNSThroughCloudflare:     settings.ResolveDNSThroughCloudflare,
 		AllowChildBypass:                settings.AllowChildBypass,
 		BypassParentRule:                settings.BypassParentRule,
@@ -259,52 +298,52 @@ func (*GatewayRuleReconciler) buildRuleSettings(settings *networkingv1alpha2.Gat
 	}
 
 	if settings.L4Override != nil {
-		result.L4Override = &gatewaysvc.L4OverrideSettings{
+		result.L4Override = &cf.GatewayL4OverrideParams{
 			IP:   settings.L4Override.IP,
 			Port: settings.L4Override.Port,
 		}
 	}
 
 	if settings.BISOAdminControls != nil {
-		result.BISOAdminControls = &gatewaysvc.BISOAdminControls{
-			DisablePrinting:          settings.BISOAdminControls.DisablePrinting,
-			DisableCopyPaste:         settings.BISOAdminControls.DisableCopyPaste,
-			DisableDownload:          settings.BISOAdminControls.DisableDownload,
-			DisableUpload:            settings.BISOAdminControls.DisableUpload,
-			DisableKeyboard:          settings.BISOAdminControls.DisableKeyboard,
-			DisableClipboardRedirect: settings.BISOAdminControls.DisableClipboardRedirection,
+		result.BISOAdminControls = &cf.GatewayBISOAdminControlsParams{
+			DisablePrinting:             settings.BISOAdminControls.DisablePrinting,
+			DisableCopyPaste:            settings.BISOAdminControls.DisableCopyPaste,
+			DisableDownload:             settings.BISOAdminControls.DisableDownload,
+			DisableUpload:               settings.BISOAdminControls.DisableUpload,
+			DisableKeyboard:             settings.BISOAdminControls.DisableKeyboard,
+			DisableClipboardRedirection: settings.BISOAdminControls.DisableClipboardRedirection,
 		}
 	}
 
 	if settings.CheckSession != nil {
-		result.CheckSession = &gatewaysvc.CheckSessionSettings{
+		result.CheckSession = &cf.GatewayCheckSessionParams{
 			Enforce:  settings.CheckSession.Enforce,
 			Duration: settings.CheckSession.Duration,
 		}
 	}
 
 	if settings.Egress != nil {
-		result.Egress = &gatewaysvc.EgressSettings{
-			Ipv4:         settings.Egress.IPv4,
-			Ipv6:         settings.Egress.IPv6,
-			Ipv4Fallback: settings.Egress.IPv4Fallback,
+		result.Egress = &cf.GatewayEgressParams{
+			IPv4:         settings.Egress.IPv4,
+			IPv6:         settings.Egress.IPv6,
+			IPv4Fallback: settings.Egress.IPv4Fallback,
 		}
 	}
 
 	if settings.PayloadLog != nil {
-		result.PayloadLog = &gatewaysvc.PayloadLogSettings{
+		result.PayloadLog = &cf.GatewayPayloadLogParams{
 			Enabled: settings.PayloadLog.Enabled,
 		}
 	}
 
 	if settings.AuditSSH != nil {
-		result.AuditSSH = &gatewaysvc.AuditSSHSettings{
+		result.AuditSSH = &cf.GatewayAuditSSHParams{
 			CommandLogging: settings.AuditSSH.CommandLogging,
 		}
 	}
 
 	if settings.NotificationSettings != nil {
-		result.NotificationSettings = &gatewaysvc.NotificationSettings{
+		result.NotificationSettings = &cf.GatewayNotificationSettingsParams{
 			Enabled:    settings.NotificationSettings.Enabled,
 			Message:    settings.NotificationSettings.Message,
 			SupportURL: settings.NotificationSettings.SupportURL,
@@ -312,9 +351,9 @@ func (*GatewayRuleReconciler) buildRuleSettings(settings *networkingv1alpha2.Gat
 	}
 
 	if settings.DNSResolvers != nil {
-		result.DNSResolvers = &gatewaysvc.DNSResolverSettings{}
+		result.DNSResolvers = &cf.GatewayDNSResolversParams{}
 		for _, resolver := range settings.DNSResolvers.IPv4 {
-			result.DNSResolvers.Ipv4 = append(result.DNSResolvers.Ipv4, gatewaysvc.DNSResolverAddress{
+			result.DNSResolvers.IPv4 = append(result.DNSResolvers.IPv4, cf.GatewayDNSResolverEntryParams{
 				IP:                         resolver.IP,
 				Port:                       resolver.Port,
 				VNetID:                     resolver.VNetID,
@@ -322,7 +361,7 @@ func (*GatewayRuleReconciler) buildRuleSettings(settings *networkingv1alpha2.Gat
 			})
 		}
 		for _, resolver := range settings.DNSResolvers.IPv6 {
-			result.DNSResolvers.Ipv6 = append(result.DNSResolvers.Ipv6, gatewaysvc.DNSResolverAddress{
+			result.DNSResolvers.IPv6 = append(result.DNSResolvers.IPv6, cf.GatewayDNSResolverEntryParams{
 				IP:                         resolver.IP,
 				Port:                       resolver.Port,
 				VNetID:                     resolver.VNetID,
@@ -332,20 +371,18 @@ func (*GatewayRuleReconciler) buildRuleSettings(settings *networkingv1alpha2.Gat
 	}
 
 	if settings.ResolveDNSInternally != nil {
-		result.ResolveDNSInternally = &gatewaysvc.ResolveDNSInternallySettings{
-			ViewID: settings.ResolveDNSInternally.ViewID,
+		fallback := "none"
+		if settings.ResolveDNSInternally.Fallback != nil && *settings.ResolveDNSInternally.Fallback {
+			fallback = "public_dns"
 		}
-		if settings.ResolveDNSInternally.Fallback != nil {
-			if *settings.ResolveDNSInternally.Fallback {
-				result.ResolveDNSInternally.Fallback = "public_dns"
-			} else {
-				result.ResolveDNSInternally.Fallback = "none"
-			}
+		result.ResolveDNSInternally = &cf.GatewayResolveDNSInternallyParams{
+			ViewID:   settings.ResolveDNSInternally.ViewID,
+			Fallback: fallback,
 		}
 	}
 
 	if settings.Quarantine != nil {
-		result.Quarantine = &gatewaysvc.QuarantineSettings{
+		result.Quarantine = &cf.GatewayQuarantineParams{
 			FileTypes: settings.Quarantine.FileTypes,
 		}
 	}
@@ -353,62 +390,67 @@ func (*GatewayRuleReconciler) buildRuleSettings(settings *networkingv1alpha2.Gat
 	return result
 }
 
-func (r *GatewayRuleReconciler) updateStatusError(
+func (r *Reconciler) updateStatusError(
+	ctx context.Context,
+	rule *networkingv1alpha2.GatewayRule,
 	err error,
 ) (ctrl.Result, error) {
-	updateErr := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.rule, func() {
-		r.rule.Status.State = "Error"
-		meta.SetStatusCondition(&r.rule.Status.Conditions, metav1.Condition{
+	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, rule, func() {
+		rule.Status.State = "Error"
+		meta.SetStatusCondition(&rule.Status.Conditions, metav1.Condition{
 			Type:               "Ready",
 			Status:             metav1.ConditionFalse,
-			ObservedGeneration: r.rule.Generation,
-			Reason:             "ReconcileError",
+			ObservedGeneration: rule.Generation,
+			Reason:             "Error",
 			Message:            cf.SanitizeErrorMessage(err),
 			LastTransitionTime: metav1.Now(),
 		})
-		r.rule.Status.ObservedGeneration = r.rule.Generation
+		rule.Status.ObservedGeneration = rule.Generation
 	})
+
 	if updateErr != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
+		return common.NoRequeue(), fmt.Errorf("failed to update status: %w", updateErr)
 	}
 
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	return common.RequeueShort(), nil
 }
 
-func (r *GatewayRuleReconciler) updateStatusPending(
-	accountID string,
+func (r *Reconciler) updateStatusReady(
+	ctx context.Context,
+	rule *networkingv1alpha2.GatewayRule,
+	accountID, ruleID string,
 ) (ctrl.Result, error) {
-	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.rule, func() {
-		if r.rule.Status.AccountID == "" {
-			r.rule.Status.AccountID = accountID
-		}
-		r.rule.Status.State = "Pending"
-		meta.SetStatusCondition(&r.rule.Status.Conditions, metav1.Condition{
+	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, rule, func() {
+		rule.Status.AccountID = accountID
+		rule.Status.RuleID = ruleID
+		rule.Status.State = "Ready"
+		meta.SetStatusCondition(&rule.Status.Conditions, metav1.Condition{
 			Type:               "Ready",
-			Status:             metav1.ConditionFalse,
-			ObservedGeneration: r.rule.Generation,
-			Reason:             "Pending",
-			Message:            "Gateway rule configuration registered, waiting for sync",
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: rule.Generation,
+			Reason:             "Synced",
+			Message:            "Gateway Rule synced to Cloudflare",
 			LastTransitionTime: metav1.Now(),
 		})
-		r.rule.Status.ObservedGeneration = r.rule.Generation
+		rule.Status.ObservedGeneration = rule.Generation
 	})
 
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
+		return common.NoRequeue(), fmt.Errorf("failed to update status: %w", err)
 	}
 
-	// Requeue to check for sync completion
-	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	return common.NoRequeue(), nil
 }
 
-func (r *GatewayRuleReconciler) SetupWithManager(mgr ctrl.Manager) error {
+// SetupWithManager sets up the controller with the Manager.
+func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("gatewayrule-controller")
 
-	// Initialize GatewayRuleService
-	r.gatewayService = gatewaysvc.NewGatewayRuleService(mgr.GetClient())
+	// Initialize APIClientFactory
+	r.APIFactory = common.NewAPIClientFactory(mgr.GetClient(), ctrl.Log.WithName("gatewayrule"))
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.GatewayRule{}).
+		Named("gatewayrule").
 		Complete(r)
 }

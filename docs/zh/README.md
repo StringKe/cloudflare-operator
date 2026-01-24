@@ -27,10 +27,10 @@ Cloudflare Operator 提供以下 Kubernetes 原生管理功能：
 
 ## 架构
 
-Operator 采用**统一同步架构**，包含六层：
+Operator 采用**三层架构**：
 
 ```
-K8s 资源 → 资源控制器 → 核心服务 → SyncState CRD → 同步控制器 → Cloudflare API
+L1: K8s CRD → L2: 控制器 → L3: Cloudflare API
 ```
 
 ```mermaid
@@ -45,25 +45,15 @@ flowchart TB
     end
 
     subgraph K8s["Kubernetes 集群"]
-        subgraph Layer1["Layer 1: K8s 资源"]
+        subgraph Layer1["Layer 1: K8s CRD"]
             CRDs["自定义资源"]
             K8sNative["Ingress / Gateway API"]
         end
 
-        subgraph Layer2["Layer 2: 资源控制器"]
-            RC["资源控制器"]
-        end
-
-        subgraph Layer3["Layer 3: 核心服务"]
-            SVC["核心服务"]
-        end
-
-        subgraph Layer4["Layer 4: SyncState CRD"]
-            SyncState["CloudflareSyncState"]
-        end
-
-        subgraph Layer5["Layer 5: 同步控制器"]
-            SC["同步控制器"]
+        subgraph Layer2["Layer 2: 控制器"]
+            RC["1:1 控制器"]
+            TC["TunnelConfig 控制器"]
+            CM["ConfigMap (聚合)"]
         end
 
         subgraph Managed["托管资源"]
@@ -78,11 +68,12 @@ flowchart TB
 
     CRDs -.->|监听| RC
     K8sNative -.->|监听| RC
-    RC -->|注册配置| SVC
-    SVC -->|更新| SyncState
-    SyncState -.->|监听| SC
-    SC -->|"API 调用 (唯一同步点)"| API
-    SC -->|创建| Managed
+    RC -->|直接 API 调用| API
+    CRDs -.->|监听| TC
+    K8sNative -->|写入配置| CM
+    CM -.->|监听| TC
+    TC -->|聚合 API 调用| API
+    TC -->|创建| Managed
     Managed -->|代理| Service
     Service --> Pod
     Users -->|HTTPS/WARP| Edge
@@ -93,12 +84,12 @@ flowchart TB
 
 | 特性 | 说明 |
 |------|------|
-| **单一同步点** | 只有同步控制器调用 Cloudflare API |
-| **无竞态条件** | SyncState CRD 使用 K8s 乐观锁 |
-| **防抖** | 500ms 延迟聚合多次变更 |
-| **Hash 检测** | 配置无变化时跳过同步 |
+| **简单数据流** | 控制器直接调用 Cloudflare API |
+| **状态直接回写** | 状态立即写回 CRD |
+| **独立 Informer** | 每个 CRD 有独立控制器，互不干扰 |
+| **ConfigMap 聚合** | Tunnel 配置通过 ConfigMap 聚合 |
 
-> 详见[统一同步架构](../design/UNIFIED_SYNC_ARCHITECTURE.md)。
+> 详见[三层架构](../design/THREE_LAYER_ARCHITECTURE.md)。
 
 ## CRD 摘要 (共 34 个)
 
@@ -222,7 +213,7 @@ Operator 根据 CRD 作用域使用不同的 Secret 查找规则：
 
 ## 版本信息
 
-- 当前版本：v0.27.x (Alpha)
+- 当前版本：v0.34.x (Alpha)
 - API 版本：`networking.cloudflare-operator.io/v1alpha2`
 - Kubernetes：v1.28+
 - Go：1.25
@@ -231,6 +222,13 @@ Operator 根据 CRD 作用域使用不同的 Secret 查找规则：
 - gateway-api：v1.4.1
 
 ## 版本变更
+
+### v0.34.x - 三层架构
+- **架构简化**：从六层 SyncState 架构迁移到三层 ConfigMap 架构
+- **直接 API 调用**：1:1 资源控制器现在直接调用 Cloudflare API
+- **ConfigMap 聚合**：Tunnel 配置通过 ConfigMap 聚合，替代 SyncState
+- **消除服务层**：移除大部分资源的中间服务层和同步层
+- **改进轮询**：每个 CRD 有独立控制器和隔离的 Informer
 
 ### v0.27.x - AccessApplication 内联策略与 NetworkRoute 改进
 - **AccessApplication 内联策略**：直接在 AccessApplication spec 中定义 include/exclude/require 规则，无需单独创建 AccessPolicy 资源

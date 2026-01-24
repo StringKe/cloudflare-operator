@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2025-2026 The Cloudflare Operator Authors
 
+// Package privateservice provides a controller for managing Cloudflare Private Services.
+// It directly calls Cloudflare API and writes status back to the CRD.
 package privateservice
 
 import (
 	"context"
 	"fmt"
-	"time"
 
-	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -20,28 +20,26 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
+	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
-	"github.com/StringKe/cloudflare-operator/internal/service"
-	pssvc "github.com/StringKe/cloudflare-operator/internal/service/privateservice"
+	"github.com/StringKe/cloudflare-operator/internal/controller/common"
 )
 
-// Reconciler reconciles a PrivateService object
+const (
+	finalizerName = "privateservice.networking.cloudflare-operator.io/finalizer"
+)
+
+// Reconciler reconciles a PrivateService object.
+// It directly calls Cloudflare API and writes status back to the CRD.
 type Reconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
-
-	// Services
-	privateServiceService *pssvc.Service
-
-	// Runtime state (kept for backwards compatibility with watch handlers)
-	ctx            context.Context
-	log            logr.Logger
-	privateService *networkingv1alpha2.PrivateService
+	Scheme     *runtime.Scheme
+	Recorder   record.EventRecorder
+	APIFactory *common.APIClientFactory
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=privateservices,verbs=get;list;watch;create;update;patch;delete
@@ -54,303 +52,94 @@ type Reconciler struct {
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
-// Reconcile implements the reconciliation loop for PrivateService resources.
-// Following Unified Sync Architecture:
-// K8s Resources → Resource Controllers → Core Services → SyncState CRD → Sync Controllers → Cloudflare API
+// Reconcile handles PrivateService reconciliation
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	r.ctx = ctx
-	r.log = ctrllog.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
-	// Fetch the PrivateService resource
-	r.privateService = &networkingv1alpha2.PrivateService{}
-	if err := r.Get(ctx, req.NamespacedName, r.privateService); err != nil {
+	// Get the PrivateService resource
+	ps := &networkingv1alpha2.PrivateService{}
+	if err := r.Get(ctx, req.NamespacedName, ps); err != nil {
 		if apierrors.IsNotFound(err) {
-			r.log.Info("PrivateService deleted, nothing to do")
-			return ctrl.Result{}, nil
+			return common.NoRequeue(), nil
 		}
-		r.log.Error(err, "unable to fetch PrivateService")
-		return ctrl.Result{}, err
+		logger.Error(err, "Unable to fetch PrivateService")
+		return common.NoRequeue(), err
 	}
 
-	// Resolve credentials for account ID (needed for SyncState)
-	credInfo, err := r.resolveCredentials()
+	// Handle deletion
+	if !ps.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, ps)
+	}
+
+	// Ensure finalizer
+	if added, err := controller.EnsureFinalizer(ctx, r.Client, ps, finalizerName); err != nil {
+		return common.NoRequeue(), err
+	} else if added {
+		return ctrl.Result{Requeue: true}, nil
+	}
+
+	// Resolve dependencies before getting API client
+	serviceIP, err := r.resolveServiceIP(ctx, ps)
 	if err != nil {
-		r.log.Error(err, "failed to resolve credentials")
-		r.setCondition(metav1.ConditionFalse, controller.EventReasonAPIError, err.Error())
-		return ctrl.Result{}, err
+		logger.Error(err, "Failed to resolve Service IP")
+		return r.updateStatusError(ctx, ps, err, "DependencyError")
 	}
 
-	// Check if PrivateService is being deleted
-	// Following Unified Sync Architecture: only unregister from SyncState
-	// Sync Controller handles actual Cloudflare API deletion
-	if r.privateService.GetDeletionTimestamp() != nil {
-		return r.handleDeletion()
+	tunnelID, tunnelName, err := r.resolveTunnelRef(ctx, ps)
+	if err != nil {
+		logger.Error(err, "Failed to resolve Tunnel reference")
+		return r.updateStatusError(ctx, ps, err, "DependencyError")
 	}
 
-	// Add finalizer if not present
-	if !controllerutil.ContainsFinalizer(r.privateService, controller.PrivateServiceFinalizer) {
-		controllerutil.AddFinalizer(r.privateService, controller.PrivateServiceFinalizer)
-		if err := r.Update(ctx, r.privateService); err != nil {
-			r.log.Error(err, "failed to add finalizer")
-			return ctrl.Result{}, err
-		}
-		r.Recorder.Event(r.privateService, corev1.EventTypeNormal, controller.EventReasonFinalizerSet, "Finalizer added")
+	virtualNetworkID, err := r.resolveVirtualNetworkRef(ctx, ps)
+	if err != nil {
+		logger.Error(err, "Failed to resolve VirtualNetwork reference")
+		return r.updateStatusError(ctx, ps, err, "DependencyError")
 	}
 
-	// Register PrivateService configuration to SyncState
-	// The actual sync to Cloudflare is handled by PrivateServiceSyncController
-	return r.registerPrivateService(credInfo)
+	// Get API client
+	apiResult, err := r.APIFactory.GetClient(ctx, common.APIClientOptions{
+		CloudflareDetails: &ps.Spec.Cloudflare,
+		Namespace:         ps.Namespace,
+		StatusAccountID:   ps.Status.AccountID,
+	})
+	if err != nil {
+		logger.Error(err, "Failed to get API client")
+		return r.updateStatusError(ctx, ps, err, "APIError")
+	}
+
+	// Sync tunnel route to Cloudflare
+	return r.syncTunnelRoute(ctx, ps, apiResult, serviceIP, tunnelID, tunnelName, virtualNetworkID)
 }
 
-// resolveCredentials resolves the credentials reference and returns the credentials info.
-// Following Unified Sync Architecture, the Resource Controller only needs
-// credential metadata (accountID, credRef) - it does not create a Cloudflare API client.
-func (r *Reconciler) resolveCredentials() (*controller.CredentialsInfo, error) {
-	// PrivateService is namespace-scoped, use its namespace for legacy inline secrets
-	info, err := controller.ResolveCredentialsForService(
-		r.ctx,
-		r.Client,
-		r.log,
-		r.privateService.Spec.Cloudflare,
-		r.privateService.Namespace,
-		r.privateService.Status.AccountID,
-	)
-	if err != nil {
-		r.log.Error(err, "failed to resolve credentials")
-		r.Recorder.Event(r.privateService, corev1.EventTypeWarning, controller.EventReasonAPIError,
-			"Failed to resolve credentials: "+err.Error())
-		return nil, err
-	}
-
-	return info, nil
-}
-
-// registerPrivateService registers the PrivateService configuration to SyncState.
-// Following Unified Sync Architecture:
-// Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
-//
-//nolint:revive // cognitive complexity is acceptable for configuration building
-func (r *Reconciler) registerPrivateService(credInfo *controller.CredentialsInfo) (ctrl.Result, error) {
-	// Get the referenced Service to obtain its ClusterIP
+// resolveServiceIP gets the ClusterIP of the referenced Service.
+func (r *Reconciler) resolveServiceIP(ctx context.Context, ps *networkingv1alpha2.PrivateService) (string, error) {
 	svc := &corev1.Service{}
-	if err := r.Get(r.ctx, apitypes.NamespacedName{
-		Name:      r.privateService.Spec.ServiceRef.Name,
-		Namespace: r.privateService.Namespace,
+	if err := r.Get(ctx, apitypes.NamespacedName{
+		Name:      ps.Spec.ServiceRef.Name,
+		Namespace: ps.Namespace,
 	}, svc); err != nil {
-		r.log.Error(err, "failed to get Service")
-		r.setCondition(metav1.ConditionFalse, controller.EventReasonDependencyError, err.Error())
-		return ctrl.Result{}, err
+		return "", fmt.Errorf("failed to get Service %s: %w", ps.Spec.ServiceRef.Name, err)
 	}
 
 	if svc.Spec.ClusterIP == "" || svc.Spec.ClusterIP == "None" {
-		err := fmt.Errorf("service %s has no ClusterIP", svc.Name)
-		r.log.Error(err, "Service must have a ClusterIP")
-		r.setCondition(metav1.ConditionFalse, controller.EventReasonInvalidConfig, err.Error())
-		return ctrl.Result{}, err
+		return "", fmt.Errorf("service %s has no ClusterIP (headless services not supported)", svc.Name)
 	}
 
-	// Create /32 network CIDR for the service IP
-	network := fmt.Sprintf("%s/32", svc.Spec.ClusterIP)
-
-	// Resolve tunnel reference to get tunnel ID
-	tunnelID, tunnelName, err := r.resolveTunnelRef()
-	if err != nil {
-		r.log.Error(err, "failed to resolve tunnel reference")
-		r.setCondition(metav1.ConditionFalse, controller.EventReasonDependencyError, err.Error())
-		return ctrl.Result{}, err
-	}
-
-	// Resolve virtual network reference if specified
-	virtualNetworkID := ""
-	if r.privateService.Spec.VirtualNetworkRef != nil {
-		virtualNetworkID, err = r.resolveVirtualNetworkRef()
-		if err != nil {
-			r.log.Error(err, "failed to resolve virtual network reference")
-			r.setCondition(metav1.ConditionFalse, controller.EventReasonDependencyError, err.Error())
-			return ctrl.Result{}, err
-		}
-	}
-
-	// Build comment with management marker to prevent adoption conflicts
-	userComment := r.privateService.Spec.Comment
-	if userComment == "" {
-		userComment = fmt.Sprintf("PrivateService %s/%s", r.privateService.Namespace, r.privateService.Name)
-	}
-	mgmtInfo := controller.NewManagementInfo(r.privateService, "PrivateService")
-	comment := controller.BuildManagedComment(mgmtInfo, userComment)
-
-	// Build PrivateServiceConfig for registration
-	config := pssvc.PrivateServiceConfig{
-		Network:          network,
-		TunnelID:         tunnelID,
-		TunnelName:       tunnelName,
-		VirtualNetworkID: virtualNetworkID,
-		ServiceIP:        svc.Spec.ClusterIP,
-		Comment:          comment,
-	}
-
-	// Determine route network for SyncState ID
-	// Use existing network from status if available, otherwise use new network
-	routeNetwork := r.privateService.Status.Network
-	if routeNetwork == "" {
-		routeNetwork = "" // Will use pending-{namespace}-{name} placeholder
-	}
-
-	// Register with service layer
-	source := service.Source{
-		Kind:      "PrivateService",
-		Namespace: r.privateService.Namespace,
-		Name:      r.privateService.Name,
-	}
-
-	opts := pssvc.RegisterOptions{
-		AccountID:        credInfo.AccountID,
-		RouteNetwork:     routeNetwork,
-		VirtualNetworkID: virtualNetworkID,
-		Source:           source,
-		Config:           config,
-		CredentialsRef:   credInfo.CredentialsRef,
-	}
-
-	if err := r.privateServiceService.Register(r.ctx, opts); err != nil {
-		r.log.Error(err, "failed to register PrivateService configuration")
-		r.Recorder.Event(r.privateService, corev1.EventTypeWarning, "RegisterFailed",
-			fmt.Sprintf("Failed to register configuration: %s", err.Error()))
-		r.setCondition(metav1.ConditionFalse, "RegisterFailed", err.Error())
-		return ctrl.Result{}, err
-	}
-
-	// Check sync status - if already synced, update to Ready state
-	// Reuse source from registration
-	syncStatus, getSyncErr := r.privateServiceService.GetSyncStatus(r.ctx, source, r.privateService.Status.Network, virtualNetworkID)
-	if getSyncErr != nil {
-		r.log.V(1).Info("Failed to get sync status, will retry", "error", getSyncErr)
-		// Continue with pending status
-	}
-
-	// If synced, update to Ready state
-	if syncStatus != nil && syncStatus.IsSynced && syncStatus.Network != "" {
-		if err := r.updateStatusReady(credInfo.AccountID, syncStatus.Network, svc.Spec.ClusterIP, tunnelID, tunnelName, virtualNetworkID); err != nil {
-			return ctrl.Result{}, err
-		}
-		r.log.Info("PrivateService synced to Cloudflare",
-			"network", syncStatus.Network,
-			"tunnelId", tunnelID,
-			"virtualNetworkId", virtualNetworkID)
-		r.Recorder.Event(r.privateService, corev1.EventTypeNormal, "Synced",
-			fmt.Sprintf("Route synced for network %s", syncStatus.Network))
-		return ctrl.Result{}, nil
-	}
-
-	// Update status to pending - Sync Controller will update to active after sync
-	if err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.privateService, func() {
-		r.privateService.Status.Network = network
-		r.privateService.Status.ServiceIP = svc.Spec.ClusterIP
-		r.privateService.Status.TunnelID = tunnelID
-		r.privateService.Status.TunnelName = tunnelName
-		r.privateService.Status.VirtualNetworkID = virtualNetworkID
-		r.privateService.Status.AccountID = credInfo.AccountID
-		r.privateService.Status.State = "pending"
-		r.privateService.Status.ObservedGeneration = r.privateService.Generation
-
-		r.setCondition(metav1.ConditionFalse, "Pending", "Configuration registered, waiting for sync")
-	}); err != nil {
-		r.log.Error(err, "failed to update PrivateService status")
-		return ctrl.Result{}, err
-	}
-
-	r.log.Info("PrivateService configuration registered to SyncState",
-		"network", network,
-		"tunnelId", tunnelID,
-		"virtualNetworkId", virtualNetworkID)
-	r.Recorder.Event(r.privateService, corev1.EventTypeNormal, "Registered",
-		fmt.Sprintf("Configuration registered for network %s", network))
-
-	// Requeue to check sync status
-	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	return svc.Spec.ClusterIP, nil
 }
 
-// updateStatusReady updates the PrivateService status to Ready state after successful sync.
-func (r *Reconciler) updateStatusReady(accountID, network, serviceIP, tunnelID, tunnelName, virtualNetworkID string) error {
-	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.privateService, func() {
-		r.privateService.Status.ObservedGeneration = r.privateService.Generation
-		r.privateService.Status.State = "active"
-		r.privateService.Status.Network = network
-		r.privateService.Status.ServiceIP = serviceIP
-		r.privateService.Status.TunnelID = tunnelID
-		r.privateService.Status.TunnelName = tunnelName
-		r.privateService.Status.VirtualNetworkID = virtualNetworkID
-		r.privateService.Status.AccountID = accountID
-
-		r.setCondition(metav1.ConditionTrue, "Synced", "PrivateService synced to Cloudflare")
-	})
-	if err != nil {
-		r.log.Error(err, "failed to update PrivateService status to Ready")
-		return err
-	}
-	return nil
-}
-
-// handleDeletion handles the deletion of a PrivateService.
-// Following Unified Sync Architecture:
-// Resource Controller only unregisters from SyncState.
-// PrivateService Sync Controller handles the actual Cloudflare API deletion.
-func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
-	if !controllerutil.ContainsFinalizer(r.privateService, controller.PrivateServiceFinalizer) {
-		return ctrl.Result{}, nil
-	}
-
-	r.log.Info("Unregistering PrivateService from SyncState")
-
-	// Get network and virtual network ID for SyncState lookup
-	network := r.privateService.Status.Network
-	virtualNetworkID := r.privateService.Status.VirtualNetworkID
-	if virtualNetworkID == "" {
-		virtualNetworkID = "default"
-	}
-
-	// Unregister from SyncState - this triggers Sync Controller to delete from Cloudflare
-	// Following: Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
-	source := service.Source{
-		Kind:      "PrivateService",
-		Namespace: r.privateService.Namespace,
-		Name:      r.privateService.Name,
-	}
-
-	if err := r.privateServiceService.Unregister(r.ctx, network, virtualNetworkID, source); err != nil {
-		r.log.Error(err, "Failed to unregister PrivateService from SyncState")
-		r.Recorder.Event(r.privateService, corev1.EventTypeWarning, "UnregisterFailed",
-			fmt.Sprintf("Failed to unregister from SyncState: %s", err.Error()))
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-	}
-
-	r.Recorder.Event(r.privateService, corev1.EventTypeNormal, "Unregistered",
-		"Unregistered from SyncState, Sync Controller will delete from Cloudflare")
-
-	// Remove finalizer with retry logic to handle conflicts
-	if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.privateService, func() {
-		controllerutil.RemoveFinalizer(r.privateService, controller.PrivateServiceFinalizer)
-	}); err != nil {
-		r.log.Error(err, "failed to remove finalizer")
-		return ctrl.Result{}, err
-	}
-	r.Recorder.Event(r.privateService, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
-
-	return ctrl.Result{}, nil
-}
-
-// resolveTunnelRef resolves the TunnelRef to get the tunnel ID.
-func (r *Reconciler) resolveTunnelRef() (string, string, error) {
-	ref := r.privateService.Spec.TunnelRef
+// resolveTunnelRef resolves the TunnelRef to get the tunnel ID and name.
+func (r *Reconciler) resolveTunnelRef(ctx context.Context, ps *networkingv1alpha2.PrivateService) (string, string, error) {
+	ref := ps.Spec.TunnelRef
 
 	if ref.Kind == "Tunnel" {
-		// Get Tunnel resource
 		tunnel := &networkingv1alpha2.Tunnel{}
 		namespace := ref.Namespace
 		if namespace == "" {
-			namespace = r.privateService.Namespace
+			namespace = ps.Namespace
 		}
-		if err := r.Get(r.ctx, apitypes.NamespacedName{Name: ref.Name, Namespace: namespace}, tunnel); err != nil {
+		if err := r.Get(ctx, apitypes.NamespacedName{Name: ref.Name, Namespace: namespace}, tunnel); err != nil {
 			return "", "", fmt.Errorf("failed to get Tunnel %s/%s: %w", namespace, ref.Name, err)
 		}
 		if tunnel.Status.TunnelId == "" {
@@ -361,7 +150,7 @@ func (r *Reconciler) resolveTunnelRef() (string, string, error) {
 
 	// ClusterTunnel (default)
 	clusterTunnel := &networkingv1alpha2.ClusterTunnel{}
-	if err := r.Get(r.ctx, apitypes.NamespacedName{Name: ref.Name}, clusterTunnel); err != nil {
+	if err := r.Get(ctx, apitypes.NamespacedName{Name: ref.Name}, clusterTunnel); err != nil {
 		return "", "", fmt.Errorf("failed to get ClusterTunnel %s: %w", ref.Name, err)
 	}
 	if clusterTunnel.Status.TunnelId == "" {
@@ -371,14 +160,14 @@ func (r *Reconciler) resolveTunnelRef() (string, string, error) {
 }
 
 // resolveVirtualNetworkRef resolves the VirtualNetworkRef to get the virtual network ID.
-func (r *Reconciler) resolveVirtualNetworkRef() (string, error) {
-	ref := r.privateService.Spec.VirtualNetworkRef
+func (r *Reconciler) resolveVirtualNetworkRef(ctx context.Context, ps *networkingv1alpha2.PrivateService) (string, error) {
+	ref := ps.Spec.VirtualNetworkRef
 	if ref == nil {
-		return "", nil
+		return "", nil // Will use default VNet
 	}
 
 	vnet := &networkingv1alpha2.VirtualNetwork{}
-	if err := r.Get(r.ctx, apitypes.NamespacedName{Name: ref.Name}, vnet); err != nil {
+	if err := r.Get(ctx, apitypes.NamespacedName{Name: ref.Name}, vnet); err != nil {
 		return "", fmt.Errorf("failed to get VirtualNetwork %s: %w", ref.Name, err)
 	}
 	if vnet.Status.VirtualNetworkId == "" {
@@ -387,16 +176,246 @@ func (r *Reconciler) resolveVirtualNetworkRef() (string, error) {
 	return vnet.Status.VirtualNetworkId, nil
 }
 
-// setCondition sets a condition on the PrivateService status using meta.SetStatusCondition.
-func (r *Reconciler) setCondition(status metav1.ConditionStatus, reason, message string) {
-	meta.SetStatusCondition(&r.privateService.Status.Conditions, metav1.Condition{
-		Type:               "Ready",
-		Status:             status,
-		ObservedGeneration: r.privateService.Generation,
-		LastTransitionTime: metav1.Now(),
-		Reason:             reason,
-		Message:            message,
+// handleDeletion handles the deletion of PrivateService.
+func (r *Reconciler) handleDeletion(
+	ctx context.Context,
+	ps *networkingv1alpha2.PrivateService,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	if !controllerutil.ContainsFinalizer(ps, finalizerName) {
+		return common.NoRequeue(), nil
+	}
+
+	// Only delete if we have a network in status
+	if ps.Status.Network != "" {
+		// Get API client
+		apiResult, err := r.APIFactory.GetClient(ctx, common.APIClientOptions{
+			CloudflareDetails: &ps.Spec.Cloudflare,
+			Namespace:         ps.Namespace,
+			StatusAccountID:   ps.Status.AccountID,
+		})
+		if err != nil {
+			logger.Error(err, "Failed to get API client for deletion")
+			// Continue with finalizer removal
+		} else {
+			// Determine virtual network ID for deletion
+			virtualNetworkID := ps.Status.VirtualNetworkID
+			if virtualNetworkID == "" {
+				// Try to get default virtual network
+				defaultVNet, vnetErr := apiResult.API.GetDefaultVirtualNetwork(ctx)
+				if vnetErr != nil {
+					logger.Error(vnetErr, "Failed to get default virtual network, will try empty vnet ID")
+				} else {
+					virtualNetworkID = defaultVNet.ID
+				}
+			}
+
+			// Delete tunnel route from Cloudflare
+			logger.Info("Deleting tunnel route from Cloudflare",
+				"network", ps.Status.Network,
+				"virtualNetworkId", virtualNetworkID)
+
+			if err := apiResult.API.DeleteTunnelRoute(ctx, ps.Status.Network, virtualNetworkID); err != nil {
+				if !cf.IsNotFoundError(err) {
+					logger.Error(err, "Failed to delete tunnel route from Cloudflare")
+					r.Recorder.Event(ps, corev1.EventTypeWarning, "DeleteFailed",
+						fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
+					return common.RequeueShort(), err
+				}
+				logger.Info("Tunnel route not found in Cloudflare, may have been already deleted")
+			}
+
+			r.Recorder.Event(ps, corev1.EventTypeNormal, "Deleted",
+				"Tunnel route deleted from Cloudflare")
+		}
+	}
+
+	// Remove finalizer
+	if err := controller.UpdateWithConflictRetry(ctx, r.Client, ps, func() {
+		controllerutil.RemoveFinalizer(ps, finalizerName)
+	}); err != nil {
+		logger.Error(err, "Failed to remove finalizer")
+		return common.NoRequeue(), err
+	}
+	r.Recorder.Event(ps, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
+
+	return common.NoRequeue(), nil
+}
+
+// syncTunnelRoute syncs the tunnel route to Cloudflare.
+//
+//nolint:revive // cognitive complexity is acceptable for sync logic
+func (r *Reconciler) syncTunnelRoute(
+	ctx context.Context,
+	ps *networkingv1alpha2.PrivateService,
+	apiResult *common.APIClientResult,
+	serviceIP, tunnelID, _ /* tunnelName */, virtualNetworkID string,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	// Create /32 network CIDR for the service IP
+	network := fmt.Sprintf("%s/32", serviceIP)
+
+	// Build comment with management marker
+	userComment := ps.Spec.Comment
+	if userComment == "" {
+		userComment = fmt.Sprintf("PrivateService %s/%s", ps.Namespace, ps.Name)
+	}
+	mgmtInfo := controller.NewManagementInfo(ps, "PrivateService")
+	comment := controller.BuildManagedComment(mgmtInfo, userComment)
+
+	// Get effective virtual network ID (use default if not specified)
+	effectiveVNetID := virtualNetworkID
+	if effectiveVNetID == "" {
+		defaultVNet, err := apiResult.API.GetDefaultVirtualNetwork(ctx)
+		if err != nil {
+			logger.Error(err, "Failed to get default virtual network")
+			return r.updateStatusError(ctx, ps, err, "APIError")
+		}
+		effectiveVNetID = defaultVNet.ID
+	}
+
+	// Build params
+	params := cf.TunnelRouteParams{
+		Network:          network,
+		TunnelID:         tunnelID,
+		VirtualNetworkID: effectiveVNetID,
+		Comment:          comment,
+	}
+
+	// Check if route already exists by looking for exact network match
+	existing, err := apiResult.API.GetTunnelRoute(ctx, network, effectiveVNetID)
+	if err != nil && !cf.IsNotFoundError(err) {
+		logger.Error(err, "Failed to get tunnel route from Cloudflare")
+		return r.updateStatusError(ctx, ps, err, "APIError")
+	}
+
+	if existing != nil {
+		// Route exists - check if it needs update
+		needsUpdate := existing.TunnelID != tunnelID || existing.Comment != comment
+
+		if needsUpdate {
+			// Check for adoption conflict
+			if conflict := controller.GetConflictingManager(existing.Comment, mgmtInfo); conflict != nil {
+				err := fmt.Errorf("tunnel route %s is managed by %s/%s, cannot adopt",
+					network, conflict.Kind, conflict.Name)
+				logger.Error(err, "Resource adoption conflict")
+				return r.updateStatusError(ctx, ps, err, "ConflictError")
+			}
+
+			logger.V(1).Info("Updating tunnel route in Cloudflare",
+				"network", network,
+				"tunnelId", tunnelID)
+
+			result, updateErr := apiResult.API.UpdateTunnelRoute(ctx, network, params)
+			if updateErr != nil {
+				logger.Error(updateErr, "Failed to update tunnel route")
+				return r.updateStatusError(ctx, ps, updateErr, "APIError")
+			}
+
+			r.Recorder.Event(ps, corev1.EventTypeNormal, "Updated",
+				fmt.Sprintf("Tunnel route '%s' updated in Cloudflare", network))
+
+			return r.updateStatusReady(ctx, ps, apiResult.AccountID, result, serviceIP)
+		}
+
+		// Route exists and matches - just update status
+		return r.updateStatusReady(ctx, ps, apiResult.AccountID, existing, serviceIP)
+	}
+
+	// Also check if route exists in a different VNet (for adoption)
+	existingByNetwork, err := apiResult.API.GetTunnelRouteByNetwork(ctx, network)
+	if err != nil && !cf.IsNotFoundError(err) {
+		logger.Error(err, "Failed to search for existing tunnel route")
+		return r.updateStatusError(ctx, ps, err, "APIError")
+	}
+
+	if existingByNetwork != nil {
+		// Route exists in different VNet
+		if existingByNetwork.VirtualNetworkID != effectiveVNetID {
+			err := fmt.Errorf("tunnel route %s exists in different virtual network %s",
+				network, existingByNetwork.VirtualNetworkID)
+			logger.Error(err, "Route exists in different VNet")
+			return r.updateStatusError(ctx, ps, err, "ConflictError")
+		}
+	}
+
+	// Create new route
+	logger.Info("Creating tunnel route in Cloudflare",
+		"network", network,
+		"tunnelId", tunnelID,
+		"virtualNetworkId", effectiveVNetID)
+
+	result, err := apiResult.API.CreateTunnelRoute(ctx, params)
+	if err != nil {
+		logger.Error(err, "Failed to create tunnel route")
+		return r.updateStatusError(ctx, ps, err, "APIError")
+	}
+
+	r.Recorder.Event(ps, corev1.EventTypeNormal, "Created",
+		fmt.Sprintf("Tunnel route '%s' created in Cloudflare", network))
+
+	return r.updateStatusReady(ctx, ps, apiResult.AccountID, result, serviceIP)
+}
+
+func (r *Reconciler) updateStatusError(
+	ctx context.Context,
+	ps *networkingv1alpha2.PrivateService,
+	err error,
+	reason string,
+) (ctrl.Result, error) {
+	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, ps, func() {
+		ps.Status.State = "error"
+		meta.SetStatusCondition(&ps.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: ps.Generation,
+			Reason:             reason,
+			Message:            cf.SanitizeErrorMessage(err),
+			LastTransitionTime: metav1.Now(),
+		})
+		ps.Status.ObservedGeneration = ps.Generation
 	})
+
+	if updateErr != nil {
+		return common.NoRequeue(), fmt.Errorf("failed to update status: %w", updateErr)
+	}
+
+	return common.RequeueShort(), nil
+}
+
+func (r *Reconciler) updateStatusReady(
+	ctx context.Context,
+	ps *networkingv1alpha2.PrivateService,
+	accountID string,
+	result *cf.TunnelRouteResult,
+	serviceIP string,
+) (ctrl.Result, error) {
+	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, ps, func() {
+		ps.Status.AccountID = accountID
+		ps.Status.Network = result.Network
+		ps.Status.ServiceIP = serviceIP
+		ps.Status.TunnelID = result.TunnelID
+		ps.Status.TunnelName = result.TunnelName
+		ps.Status.VirtualNetworkID = result.VirtualNetworkID
+		ps.Status.State = "active"
+		meta.SetStatusCondition(&ps.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: ps.Generation,
+			Reason:             "Synced",
+			Message:            "Tunnel route synced to Cloudflare",
+			LastTransitionTime: metav1.Now(),
+		})
+		ps.Status.ObservedGeneration = ps.Generation
+	})
+
+	if err != nil {
+		return common.NoRequeue(), fmt.Errorf("failed to update status: %w", err)
+	}
+
+	return common.NoRequeue(), nil
 }
 
 // findPrivateServicesForTunnel returns reconcile requests for PrivateServices that reference the given Tunnel
@@ -407,12 +426,11 @@ func (r *Reconciler) findPrivateServicesForTunnel(ctx context.Context, obj clien
 	if !ok {
 		return nil
 	}
-	log := ctrllog.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
-	// List all PrivateServices
 	privateServices := &networkingv1alpha2.PrivateServiceList{}
 	if err := r.List(ctx, privateServices); err != nil {
-		log.Error(err, "Failed to list PrivateServices for Tunnel watch")
+		logger.Error(err, "Failed to list PrivateServices for Tunnel watch")
 		return nil
 	}
 
@@ -420,13 +438,12 @@ func (r *Reconciler) findPrivateServicesForTunnel(ctx context.Context, obj clien
 	for _, ps := range privateServices.Items {
 		if ps.Spec.TunnelRef.Kind == "Tunnel" &&
 			ps.Spec.TunnelRef.Name == tunnel.Name {
-			// Check namespace match (use PrivateService namespace if TunnelRef namespace is empty)
 			refNamespace := ps.Spec.TunnelRef.Namespace
 			if refNamespace == "" {
 				refNamespace = ps.Namespace
 			}
 			if refNamespace == tunnel.Namespace {
-				log.Info("Tunnel changed, triggering PrivateService reconcile",
+				logger.V(1).Info("Tunnel changed, triggering PrivateService reconcile",
 					"tunnel", tunnel.Name,
 					"privateservice", ps.Name)
 				requests = append(requests, reconcile.Request{
@@ -447,21 +464,19 @@ func (r *Reconciler) findPrivateServicesForClusterTunnel(ctx context.Context, ob
 	if !ok {
 		return nil
 	}
-	log := ctrllog.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
-	// List all PrivateServices
 	privateServices := &networkingv1alpha2.PrivateServiceList{}
 	if err := r.List(ctx, privateServices); err != nil {
-		log.Error(err, "Failed to list PrivateServices for ClusterTunnel watch")
+		logger.Error(err, "Failed to list PrivateServices for ClusterTunnel watch")
 		return nil
 	}
 
 	var requests []reconcile.Request
 	for _, ps := range privateServices.Items {
-		// ClusterTunnel is the default kind or explicitly specified
 		if (ps.Spec.TunnelRef.Kind == "" || ps.Spec.TunnelRef.Kind == "ClusterTunnel") &&
 			ps.Spec.TunnelRef.Name == clusterTunnel.Name {
-			log.Info("ClusterTunnel changed, triggering PrivateService reconcile",
+			logger.V(1).Info("ClusterTunnel changed, triggering PrivateService reconcile",
 				"clustertunnel", clusterTunnel.Name,
 				"privateservice", ps.Name)
 			requests = append(requests, reconcile.Request{
@@ -481,19 +496,18 @@ func (r *Reconciler) findPrivateServicesForVirtualNetwork(ctx context.Context, o
 	if !ok {
 		return nil
 	}
-	log := ctrllog.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
-	// List all PrivateServices
 	privateServices := &networkingv1alpha2.PrivateServiceList{}
 	if err := r.List(ctx, privateServices); err != nil {
-		log.Error(err, "Failed to list PrivateServices for VirtualNetwork watch")
+		logger.Error(err, "Failed to list PrivateServices for VirtualNetwork watch")
 		return nil
 	}
 
 	var requests []reconcile.Request
 	for _, ps := range privateServices.Items {
 		if ps.Spec.VirtualNetworkRef != nil && ps.Spec.VirtualNetworkRef.Name == vnet.Name {
-			log.Info("VirtualNetwork changed, triggering PrivateService reconcile",
+			logger.V(1).Info("VirtualNetwork changed, triggering PrivateService reconcile",
 				"virtualnetwork", vnet.Name,
 				"privateservice", ps.Name)
 			requests = append(requests, reconcile.Request{
@@ -513,19 +527,18 @@ func (r *Reconciler) findPrivateServicesForService(ctx context.Context, obj clie
 	if !ok {
 		return nil
 	}
-	log := ctrllog.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
-	// List all PrivateServices in the same namespace
 	privateServices := &networkingv1alpha2.PrivateServiceList{}
 	if err := r.List(ctx, privateServices, client.InNamespace(svc.Namespace)); err != nil {
-		log.Error(err, "Failed to list PrivateServices for Service watch")
+		logger.Error(err, "Failed to list PrivateServices for Service watch")
 		return nil
 	}
 
 	var requests []reconcile.Request
 	for _, ps := range privateServices.Items {
 		if ps.Spec.ServiceRef.Name == svc.Name {
-			log.Info("Service changed, triggering PrivateService reconcile",
+			logger.V(1).Info("Service changed, triggering PrivateService reconcile",
 				"service", svc.Name,
 				"privateservice", ps.Name)
 			requests = append(requests, reconcile.Request{
@@ -542,29 +555,28 @@ func (r *Reconciler) findPrivateServicesForService(ctx context.Context, obj clie
 // SetupWithManager sets up the controller with the Manager.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("privateservice-controller")
-	// Initialize the service layer for Unified Sync Architecture
-	r.privateServiceService = pssvc.NewService(r.Client)
+
+	// Initialize APIClientFactory
+	r.APIFactory = common.NewAPIClientFactory(mgr.GetClient(), ctrl.Log.WithName("privateservice"))
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.PrivateService{}).
-		// P0 FIX: Watch Tunnel changes to trigger PrivateService reconcile when TunnelId becomes available
 		Watches(
 			&networkingv1alpha2.Tunnel{},
 			handler.EnqueueRequestsFromMapFunc(r.findPrivateServicesForTunnel),
 		).
-		// P0 FIX: Watch ClusterTunnel changes
 		Watches(
 			&networkingv1alpha2.ClusterTunnel{},
 			handler.EnqueueRequestsFromMapFunc(r.findPrivateServicesForClusterTunnel),
 		).
-		// P0 FIX: Watch VirtualNetwork changes
 		Watches(
 			&networkingv1alpha2.VirtualNetwork{},
 			handler.EnqueueRequestsFromMapFunc(r.findPrivateServicesForVirtualNetwork),
 		).
-		// P2 FIX: Watch Service changes for ClusterIP updates
 		Watches(
 			&corev1.Service{},
 			handler.EnqueueRequestsFromMapFunc(r.findPrivateServicesForService),
 		).
+		Named("privateservice").
 		Complete(r)
 }

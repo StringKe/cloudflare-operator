@@ -138,6 +138,10 @@ type DomainRegistrationStatus struct {
 	// +optional
 	State DomainRegistrationState `json:"state,omitempty"`
 
+	// AccountID is the Cloudflare account ID
+	// +optional
+	AccountID string `json:"accountId,omitempty"`
+
 	// DomainID is the Cloudflare domain ID
 	// +optional
 	DomainID string `json:"domainId,omitempty"`

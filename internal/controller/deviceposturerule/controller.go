@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2025-2026 The Cloudflare Operator Authors
 
+// Package deviceposturerule provides a controller for managing Cloudflare Device Posture Rules.
+// It directly calls Cloudflare API and writes status back to the CRD.
 package deviceposturerule
 
 import (
 	"context"
 	"fmt"
-	"time"
 
-	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -18,195 +18,242 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
-	"github.com/StringKe/cloudflare-operator/internal/service"
-	devicesvc "github.com/StringKe/cloudflare-operator/internal/service/device"
+	"github.com/StringKe/cloudflare-operator/internal/controller/common"
 )
 
 const (
-	FinalizerName = "deviceposturerule.networking.cloudflare-operator.io/finalizer"
+	finalizerName = "deviceposturerule.networking.cloudflare-operator.io/finalizer"
 )
 
-// DevicePostureRuleReconciler reconciles a DevicePostureRule object
-type DevicePostureRuleReconciler struct {
+// Reconciler reconciles a DevicePostureRule object.
+// It directly calls Cloudflare API and writes status back to the CRD.
+type Reconciler struct {
 	client.Client
-	Scheme        *runtime.Scheme
-	Recorder      record.EventRecorder
-	deviceService *devicesvc.DevicePostureRuleService
-
-	// Runtime state
-	ctx  context.Context
-	log  logr.Logger
-	rule *networkingv1alpha2.DevicePostureRule
+	Scheme     *runtime.Scheme
+	Recorder   record.EventRecorder
+	APIFactory *common.APIClientFactory
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=deviceposturerules,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=deviceposturerules/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=deviceposturerules/finalizers,verbs=update
 
-func (r *DevicePostureRuleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	r.ctx = ctx
-	r.log = ctrllog.FromContext(ctx)
+// Reconcile handles DevicePostureRule reconciliation
+func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
 
-	// Fetch the DevicePostureRule instance
-	r.rule = &networkingv1alpha2.DevicePostureRule{}
-	if err := r.Get(ctx, req.NamespacedName, r.rule); err != nil {
+	// Get the DevicePostureRule resource
+	rule := &networkingv1alpha2.DevicePostureRule{}
+	if err := r.Get(ctx, req.NamespacedName, rule); err != nil {
 		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, nil
+			return common.NoRequeue(), nil
 		}
-		return ctrl.Result{}, err
-	}
-
-	// Resolve credentials
-	credInfo, err := r.resolveCredentials()
-	if err != nil {
-		r.log.Error(err, "Failed to resolve credentials")
-		return r.updateStatusError(err)
+		logger.Error(err, "Unable to fetch DevicePostureRule")
+		return common.NoRequeue(), err
 	}
 
 	// Handle deletion
-	if !r.rule.DeletionTimestamp.IsZero() {
-		return r.handleDeletion(credInfo)
+	if !rule.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, rule)
 	}
 
-	// Add finalizer if not present
-	if !controllerutil.ContainsFinalizer(r.rule, FinalizerName) {
-		controllerutil.AddFinalizer(r.rule, FinalizerName)
-		if err := r.Update(ctx, r.rule); err != nil {
-			return ctrl.Result{}, err
+	// Ensure finalizer
+	if added, err := controller.EnsureFinalizer(ctx, r.Client, rule, finalizerName); err != nil {
+		return common.NoRequeue(), err
+	} else if added {
+		return ctrl.Result{Requeue: true}, nil
+	}
+
+	// Get API client
+	// DevicePostureRule is cluster-scoped, use operator namespace for legacy inline secrets
+	apiResult, err := r.APIFactory.GetClient(ctx, common.APIClientOptions{
+		CloudflareDetails: &rule.Spec.Cloudflare,
+		Namespace:         common.OperatorNamespace,
+		StatusAccountID:   rule.Status.AccountID,
+	})
+	if err != nil {
+		logger.Error(err, "Failed to get API client")
+		return r.updateStatusError(ctx, rule, err)
+	}
+
+	// Sync Device Posture Rule to Cloudflare
+	return r.syncDevicePostureRule(ctx, rule, apiResult)
+}
+
+// handleDeletion handles the deletion of DevicePostureRule.
+func (r *Reconciler) handleDeletion(
+	ctx context.Context,
+	rule *networkingv1alpha2.DevicePostureRule,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	if !controllerutil.ContainsFinalizer(rule, finalizerName) {
+		return common.NoRequeue(), nil
+	}
+
+	// Get API client
+	apiResult, err := r.APIFactory.GetClient(ctx, common.APIClientOptions{
+		CloudflareDetails: &rule.Spec.Cloudflare,
+		Namespace:         common.OperatorNamespace,
+		StatusAccountID:   rule.Status.AccountID,
+	})
+	if err != nil {
+		logger.Error(err, "Failed to get API client for deletion")
+		// Continue with finalizer removal
+	} else if rule.Status.RuleID != "" {
+		// Delete Device Posture Rule from Cloudflare
+		logger.Info("Deleting Device Posture Rule from Cloudflare",
+			"ruleId", rule.Status.RuleID)
+
+		if err := apiResult.API.DeleteDevicePostureRule(ctx, rule.Status.RuleID); err != nil {
+			if !cf.IsNotFoundError(err) {
+				logger.Error(err, "Failed to delete Device Posture Rule from Cloudflare")
+				r.Recorder.Event(rule, corev1.EventTypeWarning, "DeleteFailed",
+					fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
+				return common.RequeueShort(), err
+			}
+			logger.Info("Device Posture Rule not found in Cloudflare, may have been already deleted")
+		}
+
+		r.Recorder.Event(rule, corev1.EventTypeNormal, "Deleted",
+			"Device Posture Rule deleted from Cloudflare")
+	}
+
+	// Remove finalizer
+	if err := controller.UpdateWithConflictRetry(ctx, r.Client, rule, func() {
+		controllerutil.RemoveFinalizer(rule, finalizerName)
+	}); err != nil {
+		logger.Error(err, "Failed to remove finalizer")
+		return common.NoRequeue(), err
+	}
+	r.Recorder.Event(rule, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
+
+	return common.NoRequeue(), nil
+}
+
+// syncDevicePostureRule syncs the Device Posture Rule to Cloudflare.
+func (r *Reconciler) syncDevicePostureRule(
+	ctx context.Context,
+	rule *networkingv1alpha2.DevicePostureRule,
+	apiResult *common.APIClientResult,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	// Determine rule name
+	ruleName := rule.GetRuleName()
+
+	// Build params
+	params := r.buildParams(rule, ruleName)
+
+	// Check if rule already exists by ID
+	if rule.Status.RuleID != "" {
+		existing, err := apiResult.API.GetDevicePostureRule(ctx, rule.Status.RuleID)
+		if err != nil {
+			if !cf.IsNotFoundError(err) {
+				logger.Error(err, "Failed to get Device Posture Rule from Cloudflare")
+				return r.updateStatusError(ctx, rule, err)
+			}
+			// Rule doesn't exist, will create
+			logger.Info("Device Posture Rule not found in Cloudflare, will recreate",
+				"ruleId", rule.Status.RuleID)
+		} else {
+			// Rule exists, update it
+			logger.V(1).Info("Updating Device Posture Rule in Cloudflare",
+				"ruleId", existing.ID,
+				"name", ruleName)
+
+			result, err := apiResult.API.UpdateDevicePostureRule(ctx, existing.ID, params)
+			if err != nil {
+				logger.Error(err, "Failed to update Device Posture Rule")
+				return r.updateStatusError(ctx, rule, err)
+			}
+
+			r.Recorder.Event(rule, corev1.EventTypeNormal, "Updated",
+				fmt.Sprintf("Device Posture Rule '%s' updated in Cloudflare", ruleName))
+
+			return r.updateStatusReady(ctx, rule, apiResult.AccountID, result.ID)
 		}
 	}
 
-	// Register Device Posture Rule configuration to SyncState
-	return r.registerDevicePostureRule(credInfo)
-}
+	// Try to find existing rule by name
+	existingByName, err := apiResult.API.ListDevicePostureRulesByName(ctx, ruleName)
+	if err != nil && !cf.IsNotFoundError(err) {
+		logger.Error(err, "Failed to search for existing Device Posture Rule")
+		return r.updateStatusError(ctx, rule, err)
+	}
 
-// resolveCredentials resolves the credentials reference and returns the credentials info.
-// Following Unified Sync Architecture, the Resource Controller only needs
-// credential metadata (accountID, credRef) - it does not create a Cloudflare API client.
-func (r *DevicePostureRuleReconciler) resolveCredentials() (*controller.CredentialsInfo, error) {
-	// DevicePostureRule is cluster-scoped, use operator namespace for legacy inline secrets
-	info, err := controller.ResolveCredentialsForService(
-		r.ctx,
-		r.Client,
-		r.log,
-		r.rule.Spec.Cloudflare,
-		controller.OperatorNamespace,
-		r.rule.Status.AccountID,
-	)
+	if existingByName != nil {
+		// Rule already exists with this name, adopt it
+		logger.Info("Device Posture Rule already exists with same name, adopting it",
+			"ruleId", existingByName.ID,
+			"name", ruleName)
+
+		// Update the existing rule
+		result, err := apiResult.API.UpdateDevicePostureRule(ctx, existingByName.ID, params)
+		if err != nil {
+			logger.Error(err, "Failed to update existing Device Posture Rule")
+			return r.updateStatusError(ctx, rule, err)
+		}
+
+		r.Recorder.Event(rule, corev1.EventTypeNormal, "Adopted",
+			fmt.Sprintf("Adopted existing Device Posture Rule '%s'", ruleName))
+
+		return r.updateStatusReady(ctx, rule, apiResult.AccountID, result.ID)
+	}
+
+	// Create new rule
+	logger.Info("Creating Device Posture Rule in Cloudflare",
+		"name", ruleName)
+
+	result, err := apiResult.API.CreateDevicePostureRule(ctx, params)
 	if err != nil {
-		r.log.Error(err, "failed to resolve credentials")
-		r.Recorder.Event(r.rule, corev1.EventTypeWarning, controller.EventReasonAPIError,
-			"Failed to resolve credentials: "+err.Error())
-		return nil, err
+		logger.Error(err, "Failed to create Device Posture Rule")
+		return r.updateStatusError(ctx, rule, err)
 	}
 
-	return info, nil
+	r.Recorder.Event(rule, corev1.EventTypeNormal, "Created",
+		fmt.Sprintf("Device Posture Rule '%s' created in Cloudflare", ruleName))
+
+	return r.updateStatusReady(ctx, rule, apiResult.AccountID, result.ID)
 }
 
-// handleDeletion handles the deletion of a DevicePostureRule.
-// Following Unified Sync Architecture: Resource Controller only unregisters from SyncState,
-// the L5 Sync Controller handles actual Cloudflare API deletion.
-func (r *DevicePostureRuleReconciler) handleDeletion(
-	_ *controller.CredentialsInfo,
-) (ctrl.Result, error) {
-	if !controllerutil.ContainsFinalizer(r.rule, FinalizerName) {
-		return ctrl.Result{}, nil
-	}
-
-	// Unregister from SyncState - L5 Sync Controller will handle Cloudflare deletion
-	source := service.Source{
-		Kind:      "DevicePostureRule",
-		Namespace: "",
-		Name:      r.rule.Name,
-	}
-	if err := r.deviceService.Unregister(r.ctx, r.rule.Status.RuleID, source); err != nil {
-		r.log.Error(err, "Failed to unregister Device Posture Rule from SyncState")
-		r.Recorder.Event(r.rule, corev1.EventTypeWarning, "UnregisterFailed",
-			fmt.Sprintf("Failed to unregister from SyncState: %s", err.Error()))
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-
-	r.log.Info("Unregistered Device Posture Rule from SyncState, L5 Sync Controller will handle Cloudflare deletion")
-	r.Recorder.Event(r.rule, corev1.EventTypeNormal, "Unregistered", "Unregistered from SyncState")
-
-	// Remove finalizer with retry logic
-	if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.rule, func() {
-		controllerutil.RemoveFinalizer(r.rule, FinalizerName)
-	}); err != nil {
-		r.log.Error(err, "failed to remove finalizer")
-		return ctrl.Result{}, err
-	}
-	r.Recorder.Event(r.rule, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
-
-	return ctrl.Result{}, nil
-}
-
-// registerDevicePostureRule registers the Device Posture Rule configuration to SyncState.
-func (r *DevicePostureRuleReconciler) registerDevicePostureRule(
-	credInfo *controller.CredentialsInfo,
-) (ctrl.Result, error) {
-	// Build device posture rule configuration
-	config := devicesvc.DevicePostureRuleConfig{
-		Name:        r.rule.GetRuleName(),
-		Type:        r.rule.Spec.Type,
-		Description: r.rule.Spec.Description,
-		Schedule:    r.rule.Spec.Schedule,
-		Expiration:  r.rule.Spec.Expiration,
+// buildParams builds the DevicePostureRuleParams from the spec.
+func (r *Reconciler) buildParams(rule *networkingv1alpha2.DevicePostureRule, ruleName string) cf.DevicePostureRuleParams {
+	params := cf.DevicePostureRuleParams{
+		Name:        ruleName,
+		Type:        rule.Spec.Type,
+		Description: rule.Spec.Description,
+		Schedule:    rule.Spec.Schedule,
+		Expiration:  rule.Spec.Expiration,
 	}
 
 	// Build match rules
-	for _, m := range r.rule.Spec.Match {
-		config.Match = append(config.Match, devicesvc.DevicePostureMatch{
+	for _, m := range rule.Spec.Match {
+		params.Match = append(params.Match, cf.DevicePostureMatchParams{
 			Platform: m.Platform,
 		})
 	}
 
 	// Build input
-	if r.rule.Spec.Input != nil {
-		config.Input = r.buildInput(r.rule.Spec.Input)
+	if rule.Spec.Input != nil {
+		params.Input = r.buildInput(rule.Spec.Input)
 	}
 
-	// Create source reference
-	source := service.Source{
-		Kind:      "DevicePostureRule",
-		Namespace: "",
-		Name:      r.rule.Name,
-	}
-
-	// Register to SyncState
-	opts := devicesvc.DevicePostureRuleRegisterOptions{
-		AccountID:      credInfo.AccountID,
-		RuleID:         r.rule.Status.RuleID,
-		Source:         source,
-		Config:         config,
-		CredentialsRef: credInfo.CredentialsRef,
-	}
-
-	if err := r.deviceService.Register(r.ctx, opts); err != nil {
-		r.log.Error(err, "Failed to register Device Posture Rule configuration")
-		r.Recorder.Event(r.rule, corev1.EventTypeWarning, "RegisterFailed",
-			fmt.Sprintf("Failed to register Device Posture Rule: %s", err.Error()))
-		return r.updateStatusError(err)
-	}
-
-	r.Recorder.Event(r.rule, corev1.EventTypeNormal, "Registered",
-		fmt.Sprintf("Registered Device Posture Rule '%s' configuration to SyncState", config.Name))
-
-	// Update status to Pending - actual sync happens via DeviceSyncController
-	return r.updateStatusPending(credInfo.AccountID)
+	return params
 }
 
-func (*DevicePostureRuleReconciler) buildInput(input *networkingv1alpha2.DevicePostureInput) *devicesvc.DevicePostureInput {
+// buildInput builds the DevicePostureInputParams from the spec input.
+func (r *Reconciler) buildInput(input *networkingv1alpha2.DevicePostureInput) *cf.DevicePostureInputParams {
 	if input == nil {
 		return nil
 	}
 
-	return &devicesvc.DevicePostureInput{
+	result := &cf.DevicePostureInputParams{
 		ID:               input.ID,
 		Path:             input.Path,
 		Exists:           input.Exists,
@@ -247,79 +294,84 @@ func (*DevicePostureRuleReconciler) buildInput(input *networkingv1alpha2.DeviceP
 		Cn:               input.Cn,
 		CheckPrivateKey:  input.CheckPrivateKey,
 		ExtendedKeyUsage: input.ExtendedKeyUsage,
-		Locations:        buildLocations(input.Locations),
 		CheckDisks:       input.CheckDisks,
 	}
-}
 
-func buildLocations(locations []networkingv1alpha2.DevicePostureLocation) []devicesvc.DevicePostureLocation {
-	if locations == nil {
-		return nil
-	}
-	result := make([]devicesvc.DevicePostureLocation, len(locations))
-	for i, loc := range locations {
-		result[i] = devicesvc.DevicePostureLocation{
-			Paths:       loc.Paths,
-			TrustStores: loc.TrustStores,
+	// Convert locations
+	if len(input.Locations) > 0 {
+		result.Locations = make([]cf.DevicePostureLocationParams, len(input.Locations))
+		for i, loc := range input.Locations {
+			result.Locations[i] = cf.DevicePostureLocationParams{
+				Paths:       loc.Paths,
+				TrustStores: loc.TrustStores,
+			}
 		}
 	}
+
 	return result
 }
 
-func (r *DevicePostureRuleReconciler) updateStatusError(err error) (ctrl.Result, error) {
-	updateErr := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.rule, func() {
-		r.rule.Status.State = "Error"
-		meta.SetStatusCondition(&r.rule.Status.Conditions, metav1.Condition{
+func (r *Reconciler) updateStatusError(
+	ctx context.Context,
+	rule *networkingv1alpha2.DevicePostureRule,
+	err error,
+) (ctrl.Result, error) {
+	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, rule, func() {
+		rule.Status.State = "Error"
+		meta.SetStatusCondition(&rule.Status.Conditions, metav1.Condition{
 			Type:               "Ready",
 			Status:             metav1.ConditionFalse,
-			ObservedGeneration: r.rule.Generation,
-			Reason:             "ReconcileError",
+			ObservedGeneration: rule.Generation,
+			Reason:             "Error",
 			Message:            cf.SanitizeErrorMessage(err),
 			LastTransitionTime: metav1.Now(),
 		})
-		r.rule.Status.ObservedGeneration = r.rule.Generation
+		rule.Status.ObservedGeneration = rule.Generation
 	})
+
 	if updateErr != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
+		return common.NoRequeue(), fmt.Errorf("failed to update status: %w", updateErr)
 	}
 
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	return common.RequeueShort(), nil
 }
 
-func (r *DevicePostureRuleReconciler) updateStatusPending(
-	accountID string,
+func (r *Reconciler) updateStatusReady(
+	ctx context.Context,
+	rule *networkingv1alpha2.DevicePostureRule,
+	accountID, ruleID string,
 ) (ctrl.Result, error) {
-	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.rule, func() {
-		if r.rule.Status.AccountID == "" {
-			r.rule.Status.AccountID = accountID
-		}
-		r.rule.Status.State = "Pending"
-		meta.SetStatusCondition(&r.rule.Status.Conditions, metav1.Condition{
+	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, rule, func() {
+		rule.Status.AccountID = accountID
+		rule.Status.RuleID = ruleID
+		rule.Status.State = "Ready"
+		meta.SetStatusCondition(&rule.Status.Conditions, metav1.Condition{
 			Type:               "Ready",
-			Status:             metav1.ConditionFalse,
-			ObservedGeneration: r.rule.Generation,
-			Reason:             "Pending",
-			Message:            "Device Posture Rule configuration registered, waiting for sync",
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: rule.Generation,
+			Reason:             "Synced",
+			Message:            "Device Posture Rule synced to Cloudflare",
 			LastTransitionTime: metav1.Now(),
 		})
-		r.rule.Status.ObservedGeneration = r.rule.Generation
+		rule.Status.ObservedGeneration = rule.Generation
 	})
 
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
+		return common.NoRequeue(), fmt.Errorf("failed to update status: %w", err)
 	}
 
-	// Requeue to check for sync completion
-	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	return common.NoRequeue(), nil
 }
 
-func (r *DevicePostureRuleReconciler) SetupWithManager(mgr ctrl.Manager) error {
+// SetupWithManager sets up the controller with the Manager.
+func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("deviceposturerule-controller")
 
-	// Initialize DevicePostureRuleService
-	r.deviceService = devicesvc.NewDevicePostureRuleService(mgr.GetClient())
+	// Initialize APIClientFactory
+	r.APIFactory = common.NewAPIClientFactory(mgr.GetClient(), ctrl.Log.WithName("deviceposturerule"))
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.DevicePostureRule{}).
+		Named("deviceposturerule").
 		Complete(r)
 }

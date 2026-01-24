@@ -6,6 +6,8 @@
 package tunnel
 
 import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 )
 
@@ -16,6 +18,10 @@ type Interface interface {
 	GetNamespace() string
 	GetSpec() networkingv1alpha2.TunnelSpec
 	GetStatus() networkingv1alpha2.TunnelStatus
+	// GetObject returns the underlying metav1.Object for owner references
+	GetObject() metav1.Object
+	// GetKind returns the resource kind ("Tunnel" or "ClusterTunnel")
+	GetKind() string
 }
 
 // TunnelWrapper wraps a Tunnel to implement Interface
@@ -43,6 +49,16 @@ func (w *TunnelWrapper) GetStatus() networkingv1alpha2.TunnelStatus {
 	return w.Tunnel.Status
 }
 
+// GetObject returns the underlying metav1.Object
+func (w *TunnelWrapper) GetObject() metav1.Object {
+	return w.Tunnel
+}
+
+// GetKind returns the resource kind
+func (w *TunnelWrapper) GetKind() string {
+	return "Tunnel"
+}
+
 // ClusterTunnelWrapper wraps a ClusterTunnel to implement Interface
 type ClusterTunnelWrapper struct {
 	ClusterTunnel     *networkingv1alpha2.ClusterTunnel
@@ -67,4 +83,14 @@ func (w *ClusterTunnelWrapper) GetSpec() networkingv1alpha2.TunnelSpec {
 // GetStatus returns the cluster tunnel status
 func (w *ClusterTunnelWrapper) GetStatus() networkingv1alpha2.TunnelStatus {
 	return w.ClusterTunnel.Status
+}
+
+// GetObject returns the underlying metav1.Object
+func (w *ClusterTunnelWrapper) GetObject() metav1.Object {
+	return w.ClusterTunnel
+}
+
+// GetKind returns the resource kind
+func (w *ClusterTunnelWrapper) GetKind() string {
+	return "ClusterTunnel"
 }

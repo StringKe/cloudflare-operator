@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2025-2026 The Cloudflare Operator Authors
 
+// Package dnsrecord implements the Controller for DNSRecord CRD.
+// This controller directly calls Cloudflare API and writes status back to CRD,
+// following the simplified 3-layer architecture (CRD → Controller → CF API).
 package dnsrecord
 
 import (
@@ -11,7 +14,7 @@ import (
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -26,62 +29,83 @@ import (
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
+	"github.com/StringKe/cloudflare-operator/internal/controller/common"
 	"github.com/StringKe/cloudflare-operator/internal/resolver"
-	"github.com/StringKe/cloudflare-operator/internal/service"
-	dnssvc "github.com/StringKe/cloudflare-operator/internal/service/dns"
 )
 
 const (
 	FinalizerName = "dnsrecord.networking.cloudflare-operator.io/finalizer"
 )
 
-// DNSRecordReconciler reconciles a DNSRecord object
+// DNSRecordReconciler reconciles a DNSRecord object.
+// It directly calls Cloudflare API and writes status back to CRD,
+// following the simplified 3-layer architecture.
 type DNSRecordReconciler struct {
 	client.Client
 	Scheme         *runtime.Scheme
 	Recorder       record.EventRecorder
+	APIFactory     *common.APIClientFactory
 	domainResolver *resolver.DomainResolver
-	dnsService     *dnssvc.Service
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=dnsrecords,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=dnsrecords/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=dnsrecords/finalizers,verbs=update
 
+//nolint:revive // cognitive complexity is acceptable for this reconcile loop
 func (r *DNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	// Fetch the DNSRecord instance
-	record := &networkingv1alpha2.DNSRecord{}
-	if err := r.Get(ctx, req.NamespacedName, record); err != nil {
-		if errors.IsNotFound(err) {
+	dnsRecord := &networkingv1alpha2.DNSRecord{}
+	if err := r.Get(ctx, req.NamespacedName, dnsRecord); err != nil {
+		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
 	}
 
 	// Resolve Zone ID and credentials
-	zoneID, accountID, credRef, err := r.resolveZoneAndCredentials(ctx, record)
+	zoneInfo, err := r.resolveZoneAndCredentials(ctx, dnsRecord)
 	if err != nil {
 		logger.Error(err, "Failed to resolve zone and credentials")
-		return r.updateStatusError(ctx, record, err)
+		return r.setErrorStatus(ctx, dnsRecord, err)
 	}
 
 	// Handle deletion
-	if !record.DeletionTimestamp.IsZero() {
-		return r.handleDeletion(ctx, record, zoneID, credRef)
+	if !dnsRecord.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, dnsRecord, zoneInfo)
 	}
 
-	// Add finalizer if not present
-	if !controllerutil.ContainsFinalizer(record, FinalizerName) {
-		controllerutil.AddFinalizer(record, FinalizerName)
-		if err := r.Update(ctx, record); err != nil {
+	// Get API client
+	apiResult, err := r.getAPIClient(ctx, dnsRecord, zoneInfo)
+	if err != nil {
+		logger.Error(err, "Failed to get API client")
+		return r.setErrorStatus(ctx, dnsRecord, err)
+	}
+
+	// Ensure finalizer
+	if !controllerutil.ContainsFinalizer(dnsRecord, FinalizerName) {
+		controllerutil.AddFinalizer(dnsRecord, FinalizerName)
+		if err := r.Update(ctx, dnsRecord); err != nil {
+			return ctrl.Result{}, err
+		}
+		// Re-fetch to get updated version
+		if err := r.Get(ctx, req.NamespacedName, dnsRecord); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
 
-	// Register DNS record configuration to SyncState
-	return r.registerDNSRecord(ctx, record, zoneID, accountID, credRef)
+	// Sync DNS record to Cloudflare
+	return r.syncDNSRecord(ctx, dnsRecord, zoneInfo, apiResult)
+}
+
+// zoneResolutionInfo contains the resolved zone information.
+type zoneResolutionInfo struct {
+	ZoneID    string
+	AccountID string
+	CredRef   networkingv1alpha2.CredentialsReference
+	Domain    string
 }
 
 // resolveZoneAndCredentials resolves the Zone ID, Account ID, and credentials reference.
@@ -89,14 +113,15 @@ func (r *DNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 //nolint:revive // cognitive complexity is acceptable for this resolution function
 func (r *DNSRecordReconciler) resolveZoneAndCredentials(
 	ctx context.Context,
-	record *networkingv1alpha2.DNSRecord,
-) (zoneID, accountID string, credRef networkingv1alpha2.CredentialsReference, err error) {
+	dnsRecord *networkingv1alpha2.DNSRecord,
+) (*zoneResolutionInfo, error) {
 	logger := log.FromContext(ctx)
+	info := &zoneResolutionInfo{}
 
 	// Get credentials reference
-	if record.Spec.Cloudflare.CredentialsRef != nil {
-		credRef = networkingv1alpha2.CredentialsReference{
-			Name: record.Spec.Cloudflare.CredentialsRef.Name,
+	if dnsRecord.Spec.Cloudflare.CredentialsRef != nil {
+		info.CredRef = networkingv1alpha2.CredentialsReference{
+			Name: dnsRecord.Spec.Cloudflare.CredentialsRef.Name,
 		}
 	}
 
@@ -104,136 +129,104 @@ func (r *DNSRecordReconciler) resolveZoneAndCredentials(
 	// 1. Explicit ZoneId in spec.cloudflare.zoneId
 	// 2. Explicit Domain in spec.cloudflare.domain -> resolve via CloudflareDomain
 	// 3. Use DomainResolver to find CloudflareDomain matching the record name
-	zoneID = record.Spec.Cloudflare.ZoneId
-	var resolvedDomain string
+	info.ZoneID = dnsRecord.Spec.Cloudflare.ZoneId
 
-	if zoneID == "" && record.Spec.Cloudflare.Domain != "" {
+	if info.ZoneID == "" && dnsRecord.Spec.Cloudflare.Domain != "" {
 		// Priority 2: Use explicit domain from spec to find CloudflareDomain
-		domainInfo, err := r.domainResolver.Resolve(ctx, record.Spec.Cloudflare.Domain)
+		domainInfo, err := r.domainResolver.Resolve(ctx, dnsRecord.Spec.Cloudflare.Domain)
 		if err != nil {
-			logger.Error(err, "Failed to resolve explicit domain", "domain", record.Spec.Cloudflare.Domain)
+			logger.Error(err, "Failed to resolve explicit domain", "domain", dnsRecord.Spec.Cloudflare.Domain)
 		} else if domainInfo != nil {
-			zoneID = domainInfo.ZoneID
-			accountID = domainInfo.AccountID
-			resolvedDomain = domainInfo.Domain
-			if credRef.Name == "" && domainInfo.CredentialsRef != nil {
-				credRef.Name = domainInfo.CredentialsRef.Name
+			info.ZoneID = domainInfo.ZoneID
+			info.AccountID = domainInfo.AccountID
+			info.Domain = domainInfo.Domain
+			if info.CredRef.Name == "" && domainInfo.CredentialsRef != nil {
+				info.CredRef.Name = domainInfo.CredentialsRef.Name
 			}
 			logger.V(1).Info("Resolved Zone ID via explicit spec.cloudflare.domain",
-				"name", record.Spec.Name,
-				"specDomain", record.Spec.Cloudflare.Domain,
+				"name", dnsRecord.Spec.Name,
+				"specDomain", dnsRecord.Spec.Cloudflare.Domain,
 				"resolvedDomain", domainInfo.Domain,
-				"zoneId", zoneID)
+				"zoneId", info.ZoneID)
 		}
 	}
 
-	if zoneID == "" {
+	if info.ZoneID == "" {
 		// Priority 3: Try DomainResolver using record name suffix matching
-		domainInfo, err := r.domainResolver.Resolve(ctx, record.Spec.Name)
+		domainInfo, err := r.domainResolver.Resolve(ctx, dnsRecord.Spec.Name)
 		if err != nil {
-			logger.Error(err, "Failed to resolve domain for DNS record", "name", record.Spec.Name)
+			logger.Error(err, "Failed to resolve domain for DNS record", "name", dnsRecord.Spec.Name)
 		} else if domainInfo != nil {
-			zoneID = domainInfo.ZoneID
-			accountID = domainInfo.AccountID
-			resolvedDomain = domainInfo.Domain
-			if credRef.Name == "" && domainInfo.CredentialsRef != nil {
-				credRef.Name = domainInfo.CredentialsRef.Name
+			info.ZoneID = domainInfo.ZoneID
+			info.AccountID = domainInfo.AccountID
+			info.Domain = domainInfo.Domain
+			if info.CredRef.Name == "" && domainInfo.CredentialsRef != nil {
+				info.CredRef.Name = domainInfo.CredentialsRef.Name
 			}
 			logger.V(1).Info("Resolved Zone ID via CloudflareDomain (name suffix match)",
-				"name", record.Spec.Name,
+				"name", dnsRecord.Spec.Name,
 				"domain", domainInfo.Domain,
-				"zoneId", zoneID)
+				"zoneId", info.ZoneID)
 		}
 	}
 
-	if zoneID == "" {
-		return "", "", credRef, fmt.Errorf(
+	if info.ZoneID == "" {
+		return nil, fmt.Errorf(
 			"unable to determine Zone ID for DNS record %s: specify cloudflare.zoneId or create a CloudflareDomain resource",
-			record.Spec.Name)
+			dnsRecord.Spec.Name)
 	}
 
 	// Validate that the record name belongs to the resolved domain
-	if resolvedDomain != "" {
-		if err := validateRecordBelongsToDomain(record.Spec.Name, resolvedDomain); err != nil {
-			return "", "", credRef, fmt.Errorf(
+	if info.Domain != "" {
+		if err := validateRecordBelongsToDomain(dnsRecord.Spec.Name, info.Domain); err != nil {
+			return nil, fmt.Errorf(
 				"DNS record validation failed: %w. "+
 					"Hint: create a CloudflareDomain resource for the correct domain or specify cloudflare.zoneId explicitly",
 				err)
 		}
 	}
 
-	return zoneID, accountID, credRef, nil
+	return info, nil
 }
 
-// handleDeletion handles the deletion of a DNSRecord.
-// Following Unified Sync Architecture:
-// Resource Controller only unregisters from SyncState.
-// DNS Sync Controller handles the actual Cloudflare API deletion.
-func (r *DNSRecordReconciler) handleDeletion(
+// getAPIClient returns a Cloudflare API client for the DNS record.
+func (r *DNSRecordReconciler) getAPIClient(
 	ctx context.Context,
 	dnsRecord *networkingv1alpha2.DNSRecord,
-	_ string, // zoneID - not used, Sync Controller handles deletion
-	_ networkingv1alpha2.CredentialsReference, // credRef - not used
-) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
-
-	if !controllerutil.ContainsFinalizer(dnsRecord, FinalizerName) {
-		return ctrl.Result{}, nil
+	zoneInfo *zoneResolutionInfo,
+) (*common.APIClientResult, error) {
+	opts := common.APIClientOptions{
+		Namespace:      dnsRecord.Namespace,
+		StatusZoneID:   zoneInfo.ZoneID,
+		CredentialsRef: &zoneInfo.CredRef,
 	}
 
-	// Unregister from SyncState - this triggers Sync Controller to delete from Cloudflare
-	// Following: Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
-	source := service.Source{
-		Kind:      "DNSRecord",
-		Namespace: dnsRecord.Namespace,
-		Name:      dnsRecord.Name,
+	// If CloudflareDetails is specified, use it
+	if dnsRecord.Spec.Cloudflare.CredentialsRef != nil {
+		opts.CloudflareDetails = &networkingv1alpha2.CloudflareDetails{
+			CredentialsRef: dnsRecord.Spec.Cloudflare.CredentialsRef,
+			ZoneId:         zoneInfo.ZoneID,
+			AccountId:      zoneInfo.AccountID,
+		}
 	}
 
-	logger.Info("Unregistering DNS record from SyncState",
-		"recordId", dnsRecord.Status.RecordID,
-		"source", fmt.Sprintf("%s/%s", dnsRecord.Namespace, dnsRecord.Name))
-
-	if err := r.dnsService.Unregister(ctx, dnsRecord.Status.RecordID, source); err != nil {
-		logger.Error(err, "Failed to unregister DNS record from SyncState")
-		r.Recorder.Event(dnsRecord, corev1.EventTypeWarning, "UnregisterFailed",
-			fmt.Sprintf("Failed to unregister from SyncState: %s", err.Error()))
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-	}
-
-	r.Recorder.Event(dnsRecord, corev1.EventTypeNormal, "Unregistered",
-		"Unregistered from SyncState, Sync Controller will delete from Cloudflare")
-
-	// Remove finalizer with retry logic
-	if err := controller.UpdateWithConflictRetry(ctx, r.Client, dnsRecord, func() {
-		controllerutil.RemoveFinalizer(dnsRecord, FinalizerName)
-	}); err != nil {
-		logger.Error(err, "failed to remove finalizer")
-		return ctrl.Result{}, err
-	}
-	r.Recorder.Event(dnsRecord, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
-
-	return ctrl.Result{}, nil
+	return r.APIFactory.GetClient(ctx, opts)
 }
 
-// registerDNSRecord registers the DNS record configuration to SyncState.
-// The actual sync to Cloudflare is handled by DNSSyncController.
-func (r *DNSRecordReconciler) registerDNSRecord(
+// syncDNSRecord syncs the DNS record to Cloudflare.
+//
+//nolint:revive // cognitive complexity acceptable for sync logic
+func (r *DNSRecordReconciler) syncDNSRecord(
 	ctx context.Context,
 	dnsRecord *networkingv1alpha2.DNSRecord,
-	zoneID, accountID string,
-	credRef networkingv1alpha2.CredentialsReference,
+	zoneInfo *zoneResolutionInfo,
+	apiResult *common.APIClientResult,
 ) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
+	api := apiResult.API
 
-	// Create source reference (used for both registration and sync status check)
-	source := service.Source{
-		Kind:      "DNSRecord",
-		Namespace: dnsRecord.Namespace,
-		Name:      dnsRecord.Name,
-	}
-
-	// Build DNS record configuration
-	config := dnssvc.DNSRecordConfig{
+	// Build DNS record params
+	params := cf.DNSRecordParams{
 		Name:    dnsRecord.Spec.Name,
 		Type:    dnsRecord.Spec.Type,
 		Content: dnsRecord.Spec.Content,
@@ -244,57 +237,179 @@ func (r *DNSRecordReconciler) registerDNSRecord(
 	}
 
 	if dnsRecord.Spec.Priority != nil {
-		config.Priority = dnsRecord.Spec.Priority
+		params.Priority = dnsRecord.Spec.Priority
 	}
 
-	// Build data for special record types
 	if dnsRecord.Spec.Data != nil {
-		config.Data = r.buildRecordData(dnsRecord.Spec.Data)
+		params.Data = r.buildRecordData(dnsRecord.Spec.Data)
 	}
 
-	// Register to SyncState
-	opts := dnssvc.RegisterOptions{
-		ZoneID:         zoneID,
-		AccountID:      accountID,
-		RecordID:       dnsRecord.Status.RecordID, // May be empty for new records
-		Source:         source,
-		Config:         config,
-		CredentialsRef: credRef,
+	var result *cf.DNSRecordResult
+	var err error
+
+	if dnsRecord.Status.RecordID != "" {
+		// Update existing record
+		logger.Info("Updating DNS record",
+			"recordId", dnsRecord.Status.RecordID,
+			"name", params.Name,
+			"type", params.Type)
+		result, err = api.UpdateDNSRecordInZone(ctx, zoneInfo.ZoneID, dnsRecord.Status.RecordID, params)
+		if err != nil {
+			if cf.IsNotFoundError(err) {
+				// Record was deleted externally, create new one
+				logger.Info("Record not found, creating new one")
+				result, err = api.CreateDNSRecordInZone(ctx, zoneInfo.ZoneID, params)
+			}
+		}
+	} else {
+		// Check if record already exists (adoption scenario)
+		existingID, lookupErr := api.GetDNSRecordIDInZone(ctx, zoneInfo.ZoneID, dnsRecord.Spec.Name, dnsRecord.Spec.Type)
+		if lookupErr != nil && !cf.IsNotFoundError(lookupErr) {
+			logger.Error(lookupErr, "Failed to check for existing DNS record")
+			return r.setErrorStatus(ctx, dnsRecord, lookupErr)
+		}
+
+		if existingID != "" {
+			// Adopt existing record
+			logger.Info("Adopting existing DNS record", "recordId", existingID)
+			result, err = api.UpdateDNSRecordInZone(ctx, zoneInfo.ZoneID, existingID, params)
+		} else {
+			// Create new record
+			logger.Info("Creating DNS record", "name", params.Name, "type", params.Type)
+			result, err = api.CreateDNSRecordInZone(ctx, zoneInfo.ZoneID, params)
+		}
 	}
 
-	if err := r.dnsService.Register(ctx, opts); err != nil {
-		logger.Error(err, "Failed to register DNS record configuration")
-		r.Recorder.Event(dnsRecord, corev1.EventTypeWarning, "RegisterFailed",
-			fmt.Sprintf("Failed to register DNS record: %s", err.Error()))
-		return r.updateStatusError(ctx, dnsRecord, err)
-	}
-
-	r.Recorder.Event(dnsRecord, corev1.EventTypeNormal, "Registered",
-		fmt.Sprintf("Registered DNS Record '%s' configuration to SyncState", dnsRecord.Spec.Name))
-
-	// Check if already synced (SyncState may have been created and synced in a previous reconcile)
-	syncStatus, err := r.dnsService.GetSyncStatus(ctx, source, dnsRecord.Status.RecordID)
 	if err != nil {
-		logger.Error(err, "Failed to get sync status")
-		return r.updateStatusPending(ctx, dnsRecord, zoneID)
+		logger.Error(err, "Failed to sync DNS record")
+		r.Recorder.Event(dnsRecord, corev1.EventTypeWarning, controller.EventReasonSyncFailed,
+			cf.SanitizeErrorMessage(err))
+		return r.setErrorStatus(ctx, dnsRecord, err)
 	}
 
-	if syncStatus != nil && syncStatus.IsSynced && syncStatus.RecordID != "" {
-		// Already synced, update status to Ready
-		return r.updateStatusReady(ctx, dnsRecord, zoneID, syncStatus.RecordID)
-	}
-
-	// Update status to Pending - actual sync happens via DNSSyncController
-	return r.updateStatusPending(ctx, dnsRecord, zoneID)
+	// Update status with result
+	return r.setSuccessStatus(ctx, dnsRecord, zoneInfo.ZoneID, result)
 }
 
-// buildRecordData converts DNSRecordData from API type to service layer type.
-func (*DNSRecordReconciler) buildRecordData(data *networkingv1alpha2.DNSRecordData) *dnssvc.DNSRecordData {
+// handleDeletion handles the deletion of a DNSRecord.
+func (r *DNSRecordReconciler) handleDeletion(
+	ctx context.Context,
+	dnsRecord *networkingv1alpha2.DNSRecord,
+	zoneInfo *zoneResolutionInfo,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	if !controllerutil.ContainsFinalizer(dnsRecord, FinalizerName) {
+		return ctrl.Result{}, nil
+	}
+
+	// Delete DNS record from Cloudflare
+	if dnsRecord.Status.RecordID != "" && zoneInfo.ZoneID != "" {
+		apiResult, err := r.getAPIClient(ctx, dnsRecord, zoneInfo)
+		if err != nil {
+			logger.Error(err, "Failed to get API client for deletion")
+			// Continue with finalizer removal - record might not exist anyway
+		} else {
+			if err := apiResult.API.DeleteDNSRecordInZone(ctx, zoneInfo.ZoneID, dnsRecord.Status.RecordID); err != nil {
+				if !cf.IsNotFoundError(err) {
+					logger.Error(err, "Failed to delete DNS record from Cloudflare")
+					r.Recorder.Event(dnsRecord, corev1.EventTypeWarning, controller.EventReasonDeleteFailed,
+						cf.SanitizeErrorMessage(err))
+					return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+				}
+				// Record already deleted, continue with finalizer removal
+			} else {
+				r.Recorder.Event(dnsRecord, corev1.EventTypeNormal, controller.EventReasonDeleted,
+					fmt.Sprintf("Deleted DNS record %s from Cloudflare", dnsRecord.Status.RecordID))
+			}
+		}
+	}
+
+	// Remove finalizer
+	if err := controller.UpdateWithConflictRetry(ctx, r.Client, dnsRecord, func() {
+		controllerutil.RemoveFinalizer(dnsRecord, FinalizerName)
+	}); err != nil {
+		logger.Error(err, "Failed to remove finalizer")
+		return ctrl.Result{}, err
+	}
+
+	r.Recorder.Event(dnsRecord, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
+	return ctrl.Result{}, nil
+}
+
+// setSuccessStatus updates the DNS record status to indicate success.
+func (r *DNSRecordReconciler) setSuccessStatus(
+	ctx context.Context,
+	dnsRecord *networkingv1alpha2.DNSRecord,
+	zoneID string,
+	result *cf.DNSRecordResult,
+) (ctrl.Result, error) {
+	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, dnsRecord, func() {
+		dnsRecord.Status.ZoneID = zoneID
+		dnsRecord.Status.RecordID = result.ID
+		dnsRecord.Status.FQDN = result.Name
+		dnsRecord.Status.State = "Active"
+		meta.SetStatusCondition(&dnsRecord.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: dnsRecord.Generation,
+			Reason:             "Synced",
+			Message:            "DNS record synced to Cloudflare",
+			LastTransitionTime: metav1.Now(),
+		})
+		dnsRecord.Status.ObservedGeneration = dnsRecord.Generation
+	})
+
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
+	}
+
+	r.Recorder.Event(dnsRecord, corev1.EventTypeNormal, controller.EventReasonSynced,
+		fmt.Sprintf("DNS record %s synced to Cloudflare (ID: %s)", dnsRecord.Spec.Name, result.ID))
+
+	return ctrl.Result{}, nil
+}
+
+// setErrorStatus updates the DNS record status to indicate an error.
+func (r *DNSRecordReconciler) setErrorStatus(
+	ctx context.Context,
+	dnsRecord *networkingv1alpha2.DNSRecord,
+	err error,
+) (ctrl.Result, error) {
+	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, dnsRecord, func() {
+		dnsRecord.Status.State = "Error"
+		meta.SetStatusCondition(&dnsRecord.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: dnsRecord.Generation,
+			Reason:             "ReconcileError",
+			Message:            cf.SanitizeErrorMessage(err),
+			LastTransitionTime: metav1.Now(),
+		})
+		dnsRecord.Status.ObservedGeneration = dnsRecord.Generation
+	})
+
+	if updateErr != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
+	}
+
+	r.Recorder.Event(dnsRecord, corev1.EventTypeWarning, controller.EventReasonReconcileFailed,
+		cf.SanitizeErrorMessage(err))
+
+	// Determine requeue based on error type
+	if cf.IsPermanentError(err) {
+		return ctrl.Result{}, nil
+	}
+	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+}
+
+// buildRecordData converts DNSRecordData from API type to cf type.
+func (*DNSRecordReconciler) buildRecordData(data *networkingv1alpha2.DNSRecordData) *cf.DNSRecordDataParams {
 	if data == nil {
 		return nil
 	}
 
-	return &dnssvc.DNSRecordData{
+	return &cf.DNSRecordDataParams{
 		// SRV record data
 		Service: data.Service,
 		Proto:   data.Proto,
@@ -334,90 +449,7 @@ func (*DNSRecordReconciler) buildRecordData(data *networkingv1alpha2.DNSRecordDa
 	}
 }
 
-func (r *DNSRecordReconciler) updateStatusError(
-	ctx context.Context,
-	dnsRecord *networkingv1alpha2.DNSRecord,
-	err error,
-) (ctrl.Result, error) {
-	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, dnsRecord, func() {
-		dnsRecord.Status.State = "Error"
-		meta.SetStatusCondition(&dnsRecord.Status.Conditions, metav1.Condition{
-			Type:               "Ready",
-			Status:             metav1.ConditionFalse,
-			ObservedGeneration: dnsRecord.Generation,
-			Reason:             "ReconcileError",
-			Message:            cf.SanitizeErrorMessage(err),
-			LastTransitionTime: metav1.Now(),
-		})
-		dnsRecord.Status.ObservedGeneration = dnsRecord.Generation
-	})
-
-	if updateErr != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
-	}
-
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-}
-
-func (r *DNSRecordReconciler) updateStatusPending(
-	ctx context.Context,
-	dnsRecord *networkingv1alpha2.DNSRecord,
-	zoneID string,
-) (ctrl.Result, error) {
-	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, dnsRecord, func() {
-		// Keep existing RecordID and FQDN if available
-		if dnsRecord.Status.ZoneID == "" {
-			dnsRecord.Status.ZoneID = zoneID
-		}
-		dnsRecord.Status.State = "Pending"
-		meta.SetStatusCondition(&dnsRecord.Status.Conditions, metav1.Condition{
-			Type:               "Ready",
-			Status:             metav1.ConditionFalse,
-			ObservedGeneration: dnsRecord.Generation,
-			Reason:             "Pending",
-			Message:            "DNS record configuration registered, waiting for sync",
-			LastTransitionTime: metav1.Now(),
-		})
-		dnsRecord.Status.ObservedGeneration = dnsRecord.Generation
-	})
-
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
-	}
-
-	// Requeue to check for sync completion
-	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-}
-
-func (r *DNSRecordReconciler) updateStatusReady(
-	ctx context.Context,
-	dnsRecord *networkingv1alpha2.DNSRecord,
-	zoneID, recordID string,
-) (ctrl.Result, error) {
-	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, dnsRecord, func() {
-		dnsRecord.Status.ZoneID = zoneID
-		dnsRecord.Status.RecordID = recordID
-		dnsRecord.Status.FQDN = dnsRecord.Spec.Name
-		dnsRecord.Status.State = "Active"
-		meta.SetStatusCondition(&dnsRecord.Status.Conditions, metav1.Condition{
-			Type:               "Ready",
-			Status:             metav1.ConditionTrue,
-			ObservedGeneration: dnsRecord.Generation,
-			Reason:             "Synced",
-			Message:            "DNS record synced to Cloudflare",
-			LastTransitionTime: metav1.Now(),
-		})
-		dnsRecord.Status.ObservedGeneration = dnsRecord.Generation
-	})
-
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
-	}
-
-	return ctrl.Result{}, nil
-}
-
-// findDNSRecordsForDomain returns DNSRecords that may need reconciliation when a CloudflareDomain changes
+// findDNSRecordsForDomain returns DNSRecords that may need reconciliation when a CloudflareDomain changes.
 func (r *DNSRecordReconciler) findDNSRecordsForDomain(ctx context.Context, obj client.Object) []reconcile.Request {
 	domain, ok := obj.(*networkingv1alpha2.CloudflareDomain)
 	if !ok {
@@ -431,13 +463,13 @@ func (r *DNSRecordReconciler) findDNSRecordsForDomain(ctx context.Context, obj c
 	}
 
 	var requests []reconcile.Request
-	for _, record := range recordList.Items {
+	for _, dnsRecord := range recordList.Items {
 		// Check if this record's name is a suffix of the domain or equals the domain
-		if record.Spec.Name == domain.Spec.Domain ||
-			len(record.Spec.Name) > len(domain.Spec.Domain) &&
-				record.Spec.Name[len(record.Spec.Name)-len(domain.Spec.Domain)-1:] == "."+domain.Spec.Domain {
+		if dnsRecord.Spec.Name == domain.Spec.Domain ||
+			len(dnsRecord.Spec.Name) > len(domain.Spec.Domain) &&
+				dnsRecord.Spec.Name[len(dnsRecord.Spec.Name)-len(domain.Spec.Domain)-1:] == "."+domain.Spec.Domain {
 			requests = append(requests, reconcile.Request{
-				NamespacedName: client.ObjectKeyFromObject(&record),
+				NamespacedName: client.ObjectKeyFromObject(&dnsRecord),
 			})
 		}
 	}
@@ -468,12 +500,8 @@ func validateRecordBelongsToDomain(recordName, domainName string) error {
 
 func (r *DNSRecordReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("dnsrecord-controller")
-
-	// Initialize DomainResolver
+	r.APIFactory = common.NewAPIClientFactory(mgr.GetClient(), mgr.GetLogger())
 	r.domainResolver = resolver.NewDomainResolver(mgr.GetClient(), logr.Discard())
-
-	// Initialize DNSService
-	r.dnsService = dnssvc.NewService(mgr.GetClient())
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.DNSRecord{}).

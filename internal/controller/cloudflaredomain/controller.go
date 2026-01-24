@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2025-2026 The Cloudflare Operator Authors
 
-// Package cloudflaredomain implements the controller for CloudflareDomain resources.
+// Package cloudflaredomain provides a controller for managing CloudflareDomain resources.
+// It verifies domains with Cloudflare API and writes status back to the CRD.
 package cloudflaredomain
 
 import (
@@ -11,7 +12,6 @@ import (
 	"time"
 
 	"github.com/cloudflare/cloudflare-go"
-	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -22,161 +22,138 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	cfclient "github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
-	"github.com/StringKe/cloudflare-operator/internal/service"
-	domainsvc "github.com/StringKe/cloudflare-operator/internal/service/domain"
 )
 
 const (
 	finalizerName = "cloudflare.com/domain-finalizer"
 )
 
-// Reconciler reconciles a CloudflareDomain object
+// Reconciler reconciles a CloudflareDomain object.
+// It verifies domains with Cloudflare API and writes status back to the CRD.
 type Reconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
-	Service  *domainsvc.CloudflareDomainService
-
-	// Internal state
-	ctx    context.Context
-	log    logr.Logger
-	domain *networkingv1alpha2.CloudflareDomain
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=cloudflaredomains,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=cloudflaredomains/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=cloudflaredomains/finalizers,verbs=update
+// +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=cloudflarecredentials,verbs=get;list;watch
+// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile handles CloudflareDomain reconciliation
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	r.ctx = ctx
-	r.log = ctrl.LoggerFrom(ctx)
+	logger := log.FromContext(ctx)
 
 	// Get the CloudflareDomain resource
-	r.domain = &networkingv1alpha2.CloudflareDomain{}
-	if err := r.Get(ctx, req.NamespacedName, r.domain); err != nil {
+	domain := &networkingv1alpha2.CloudflareDomain{}
+	if err := r.Get(ctx, req.NamespacedName, domain); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
-		r.log.Error(err, "unable to fetch CloudflareDomain")
+		logger.Error(err, "Unable to fetch CloudflareDomain")
 		return ctrl.Result{}, err
 	}
 
 	// Handle deletion
-	if !r.domain.DeletionTimestamp.IsZero() {
-		return r.handleDeletion()
+	if !domain.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, domain)
 	}
 
-	// Add finalizer if not present
-	if !controllerutil.ContainsFinalizer(r.domain, finalizerName) {
-		controllerutil.AddFinalizer(r.domain, finalizerName)
-		if err := r.Update(ctx, r.domain); err != nil {
-			return ctrl.Result{}, err
-		}
+	// Ensure finalizer
+	if added, err := controller.EnsureFinalizer(ctx, r.Client, domain, finalizerName); err != nil {
+		return ctrl.Result{}, err
+	} else if added {
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	// Only set Verifying state if this is a new domain or was in error state
-	// This prevents race conditions where DomainResolver skips the domain
-	// during periodic re-verification
-	needsFullVerification := r.domain.Status.ZoneID == "" ||
-		r.domain.Status.State == networkingv1alpha2.CloudflareDomainStateError ||
-		r.domain.Status.State == networkingv1alpha2.CloudflareDomainStatePending ||
-		r.domain.Status.State == ""
+	needsFullVerification := domain.Status.ZoneID == "" ||
+		domain.Status.State == networkingv1alpha2.CloudflareDomainStateError ||
+		domain.Status.State == networkingv1alpha2.CloudflareDomainStatePending ||
+		domain.Status.State == ""
 
 	if needsFullVerification {
-		r.updateState(networkingv1alpha2.CloudflareDomainStateVerifying, "Verifying domain with Cloudflare API")
+		r.updateState(ctx, domain, networkingv1alpha2.CloudflareDomainStateVerifying, "Verifying domain with Cloudflare API")
 	}
 
 	// Get credentials
-	creds, err := r.getCredentials()
+	creds, err := r.getCredentials(ctx, domain)
 	if err != nil {
-		r.updateState(networkingv1alpha2.CloudflareDomainStateError, fmt.Sprintf("Failed to get credentials: %v", err))
-		r.Recorder.Event(r.domain, corev1.EventTypeWarning, controller.EventReasonAPIError, err.Error())
+		r.updateState(ctx, domain, networkingv1alpha2.CloudflareDomainStateError, fmt.Sprintf("Failed to get credentials: %v", err))
+		r.Recorder.Event(domain, corev1.EventTypeWarning, controller.EventReasonAPIError, err.Error())
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	}
 
 	// Verify domain and get zone info
-	if err := r.verifyDomain(creds); err != nil {
-		r.updateState(networkingv1alpha2.CloudflareDomainStateError, fmt.Sprintf("Failed to verify domain: %v", err))
-		r.Recorder.Event(r.domain, corev1.EventTypeWarning, controller.EventReasonAPIError, err.Error())
+	if err := r.verifyDomain(ctx, domain, creds); err != nil {
+		r.updateState(ctx, domain, networkingv1alpha2.CloudflareDomainStateError, fmt.Sprintf("Failed to verify domain: %v", err))
+		r.Recorder.Event(domain, corev1.EventTypeWarning, controller.EventReasonAPIError, err.Error())
 		return ctrl.Result{RequeueAfter: time.Minute * 5}, nil
 	}
 
 	// Check for duplicate default
-	if r.domain.Spec.IsDefault {
-		if err := r.ensureSingleDefault(); err != nil {
-			r.updateState(networkingv1alpha2.CloudflareDomainStateError, err.Error())
-			r.Recorder.Event(r.domain, corev1.EventTypeWarning, "DuplicateDefault", err.Error())
+	if domain.Spec.IsDefault {
+		if err := r.ensureSingleDefault(ctx, domain); err != nil {
+			r.updateState(ctx, domain, networkingv1alpha2.CloudflareDomainStateError, err.Error())
+			r.Recorder.Event(domain, corev1.EventTypeWarning, "DuplicateDefault", err.Error())
 			return ctrl.Result{}, nil
 		}
 	}
 
-	// Register zone settings via Service (following six-layer architecture)
-	// L2 Controller registers configuration, L5 Sync Controller performs actual API sync
-	if r.domain.Spec.SSL != nil || r.domain.Spec.Cache != nil ||
-		r.domain.Spec.Security != nil || r.domain.Spec.Performance != nil {
-		if err := r.registerZoneSettings(creds); err != nil {
-			r.log.Error(err, "Failed to register zone settings")
-			r.Recorder.Event(r.domain, corev1.EventTypeWarning, "SettingsRegisterFailed", err.Error())
-			// Don't fail the entire reconciliation, just log the error
-			// Settings sync will be retried by Sync Controller
-		} else {
-			r.Recorder.Event(r.domain, corev1.EventTypeNormal, "SettingsRegistered", "Zone settings registered to SyncState")
-		}
-	}
-
 	// Update status to Ready
-	r.updateState(networkingv1alpha2.CloudflareDomainStateReady, "Domain verified successfully")
-	r.Recorder.Event(r.domain, corev1.EventTypeNormal, controller.EventReasonReconciled, "Domain verified successfully")
+	r.updateState(ctx, domain, networkingv1alpha2.CloudflareDomainStateReady, "Domain verified successfully")
+	r.Recorder.Event(domain, corev1.EventTypeNormal, controller.EventReasonReconciled, "Domain verified successfully")
 
 	// Requeue periodically to re-verify
 	return ctrl.Result{RequeueAfter: time.Hour}, nil
 }
 
 // handleDeletion handles the deletion of CloudflareDomain
-func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
-	if controllerutil.ContainsFinalizer(r.domain, finalizerName) {
-		// Unregister from SyncState via Service
-		if r.Service != nil && r.domain.Status.ZoneID != "" {
-			source := service.Source{
-				Kind:      "CloudflareDomain",
-				Namespace: "", // Cluster-scoped
-				Name:      r.domain.Name,
-			}
-			if err := r.Service.Unregister(r.ctx, r.domain.Status.ZoneID, source); err != nil {
-				r.log.Error(err, "Failed to unregister from SyncState, continuing with deletion")
-			}
-		}
+func (r *Reconciler) handleDeletion(ctx context.Context, domain *networkingv1alpha2.CloudflareDomain) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
 
-		// Remove finalizer with conflict retry
-		if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.domain, func() {
-			controllerutil.RemoveFinalizer(r.domain, finalizerName)
-		}); err != nil {
-			return ctrl.Result{}, err
-		}
+	if !controllerutil.ContainsFinalizer(domain, finalizerName) {
+		return ctrl.Result{}, nil
 	}
+
+	// CloudflareDomain is a verification resource - we don't delete zones from Cloudflare
+	logger.Info("Removing finalizer for CloudflareDomain (zones are not deleted from CF)")
+
+	// Remove finalizer
+	if err := controller.UpdateWithConflictRetry(ctx, r.Client, domain, func() {
+		controllerutil.RemoveFinalizer(domain, finalizerName)
+	}); err != nil {
+		logger.Error(err, "Failed to remove finalizer")
+		return ctrl.Result{}, err
+	}
+	r.Recorder.Event(domain, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
+
 	return ctrl.Result{}, nil
 }
 
 // getCredentials retrieves the CloudflareCredentials to use
-func (r *Reconciler) getCredentials() (*networkingv1alpha2.CloudflareCredentials, error) {
+func (r *Reconciler) getCredentials(ctx context.Context, domain *networkingv1alpha2.CloudflareDomain) (*networkingv1alpha2.CloudflareCredentials, error) {
 	// If credentialsRef is specified, use it
-	if r.domain.Spec.CredentialsRef != nil {
+	if domain.Spec.CredentialsRef != nil {
 		creds := &networkingv1alpha2.CloudflareCredentials{}
-		if err := r.Get(r.ctx, types.NamespacedName{Name: r.domain.Spec.CredentialsRef.Name}, creds); err != nil {
-			return nil, fmt.Errorf("failed to get CloudflareCredentials '%s': %w", r.domain.Spec.CredentialsRef.Name, err)
+		if err := r.Get(ctx, types.NamespacedName{Name: domain.Spec.CredentialsRef.Name}, creds); err != nil {
+			return nil, fmt.Errorf("failed to get CloudflareCredentials '%s': %w", domain.Spec.CredentialsRef.Name, err)
 		}
 		return creds, nil
 	}
 
 	// Otherwise, find the default CloudflareCredentials
 	credsList := &networkingv1alpha2.CloudflareCredentialsList{}
-	if err := r.List(r.ctx, credsList); err != nil {
+	if err := r.List(ctx, credsList); err != nil {
 		return nil, fmt.Errorf("failed to list CloudflareCredentials: %w", err)
 	}
 
@@ -190,74 +167,76 @@ func (r *Reconciler) getCredentials() (*networkingv1alpha2.CloudflareCredentials
 }
 
 // verifyDomain verifies the domain exists in Cloudflare and retrieves zone information
-func (r *Reconciler) verifyDomain(creds *networkingv1alpha2.CloudflareCredentials) error {
+func (r *Reconciler) verifyDomain(ctx context.Context, domain *networkingv1alpha2.CloudflareDomain, creds *networkingv1alpha2.CloudflareCredentials) error {
+	logger := log.FromContext(ctx)
+
 	// If ZoneID is manually specified, use it directly
-	if r.domain.Spec.ZoneID != "" {
-		r.domain.Status.ZoneID = r.domain.Spec.ZoneID
-		r.log.Info("Using manually specified Zone ID", "zoneId", r.domain.Spec.ZoneID)
-		return r.fetchZoneDetails(creds, r.domain.Spec.ZoneID)
+	if domain.Spec.ZoneID != "" {
+		domain.Status.ZoneID = domain.Spec.ZoneID
+		logger.Info("Using manually specified Zone ID", "zoneId", domain.Spec.ZoneID)
+		return r.fetchZoneDetails(ctx, domain, creds, domain.Spec.ZoneID)
 	}
 
 	// Create Cloudflare client
-	cfClient, err := r.createCloudflareClient(creds)
+	cfClient, err := r.createCloudflareClient(ctx, creds)
 	if err != nil {
 		return err
 	}
 
 	// Look up zone by name
-	zones, err := cfClient.ListZonesContext(r.ctx, cloudflare.WithZoneFilters(r.domain.Spec.Domain, creds.Spec.AccountID, ""))
+	zones, err := cfClient.ListZonesContext(ctx, cloudflare.WithZoneFilters(domain.Spec.Domain, creds.Spec.AccountID, ""))
 	if err != nil {
 		return fmt.Errorf("failed to list zones: %w", err)
 	}
 
 	if len(zones.Result) == 0 {
-		return fmt.Errorf("zone not found for domain '%s' in account '%s'", r.domain.Spec.Domain, creds.Spec.AccountID)
+		return fmt.Errorf("zone not found for domain '%s' in account '%s'", domain.Spec.Domain, creds.Spec.AccountID)
 	}
 
 	zone := zones.Result[0]
 
 	// Update status with zone information
-	r.domain.Status.ZoneID = zone.ID
-	r.domain.Status.ZoneName = zone.Name
-	r.domain.Status.AccountID = zone.Account.ID
-	r.domain.Status.NameServers = zone.NameServers
-	r.domain.Status.ZoneStatus = zone.Status
+	domain.Status.ZoneID = zone.ID
+	domain.Status.ZoneName = zone.Name
+	domain.Status.AccountID = zone.Account.ID
+	domain.Status.NameServers = zone.NameServers
+	domain.Status.ZoneStatus = zone.Status
 
 	now := metav1.Now()
-	r.domain.Status.LastVerifiedTime = &now
+	domain.Status.LastVerifiedTime = &now
 
-	r.log.Info("Domain verified", "domain", r.domain.Spec.Domain, "zoneId", zone.ID, "zoneStatus", zone.Status)
+	logger.Info("Domain verified", "domain", domain.Spec.Domain, "zoneId", zone.ID, "zoneStatus", zone.Status)
 
 	return nil
 }
 
 // fetchZoneDetails fetches zone details for a given zone ID
-func (r *Reconciler) fetchZoneDetails(creds *networkingv1alpha2.CloudflareCredentials, zoneID string) error {
-	cfClient, err := r.createCloudflareClient(creds)
+func (r *Reconciler) fetchZoneDetails(ctx context.Context, domain *networkingv1alpha2.CloudflareDomain, creds *networkingv1alpha2.CloudflareCredentials, zoneID string) error {
+	cfClient, err := r.createCloudflareClient(ctx, creds)
 	if err != nil {
 		return err
 	}
 
-	zone, err := cfClient.ZoneDetails(r.ctx, zoneID)
+	zone, err := cfClient.ZoneDetails(ctx, zoneID)
 	if err != nil {
 		return fmt.Errorf("failed to get zone details for ID '%s': %w", zoneID, err)
 	}
 
 	// Update status with zone information
-	r.domain.Status.ZoneID = zone.ID
-	r.domain.Status.ZoneName = zone.Name
-	r.domain.Status.AccountID = zone.Account.ID
-	r.domain.Status.NameServers = zone.NameServers
-	r.domain.Status.ZoneStatus = zone.Status
+	domain.Status.ZoneID = zone.ID
+	domain.Status.ZoneName = zone.Name
+	domain.Status.AccountID = zone.Account.ID
+	domain.Status.NameServers = zone.NameServers
+	domain.Status.ZoneStatus = zone.Status
 
 	now := metav1.Now()
-	r.domain.Status.LastVerifiedTime = &now
+	domain.Status.LastVerifiedTime = &now
 
 	return nil
 }
 
 // createCloudflareClient creates a Cloudflare API client from credentials
-func (r *Reconciler) createCloudflareClient(creds *networkingv1alpha2.CloudflareCredentials) (*cloudflare.API, error) {
+func (r *Reconciler) createCloudflareClient(ctx context.Context, creds *networkingv1alpha2.CloudflareCredentials) (*cloudflare.API, error) {
 	// Get the secret
 	secret := &corev1.Secret{}
 	secretNamespace := creds.Spec.SecretRef.Namespace
@@ -265,7 +244,7 @@ func (r *Reconciler) createCloudflareClient(creds *networkingv1alpha2.Cloudflare
 		secretNamespace = "cloudflare-operator-system"
 	}
 
-	if err := r.Get(r.ctx, types.NamespacedName{
+	if err := r.Get(ctx, types.NamespacedName{
 		Name:      creds.Spec.SecretRef.Name,
 		Namespace: secretNamespace,
 	}, secret); err != nil {
@@ -273,7 +252,7 @@ func (r *Reconciler) createCloudflareClient(creds *networkingv1alpha2.Cloudflare
 	}
 
 	// Create Cloudflare client based on auth type
-	var cfClient *cloudflare.API
+	var cfAPI *cloudflare.API
 	var err error
 
 	// Build options list - add custom base URL if configured
@@ -292,7 +271,7 @@ func (r *Reconciler) createCloudflareClient(creds *networkingv1alpha2.Cloudflare
 		if token == "" {
 			return nil, fmt.Errorf("API token not found in secret (key: %s)", tokenKey)
 		}
-		cfClient, err = cloudflare.NewWithAPIToken(token, opts...)
+		cfAPI, err = cloudflare.NewWithAPIToken(token, opts...)
 
 	case networkingv1alpha2.AuthTypeGlobalAPIKey:
 		keyKey := creds.Spec.SecretRef.APIKeyKey
@@ -313,7 +292,7 @@ func (r *Reconciler) createCloudflareClient(creds *networkingv1alpha2.Cloudflare
 		if email == "" {
 			return nil, fmt.Errorf("email not found in secret (key: %s)", emailKey)
 		}
-		cfClient, err = cloudflare.New(apiKey, email, opts...)
+		cfAPI, err = cloudflare.New(apiKey, email, opts...)
 
 	default:
 		return nil, fmt.Errorf("unknown auth type: %s", creds.Spec.AuthType)
@@ -323,19 +302,19 @@ func (r *Reconciler) createCloudflareClient(creds *networkingv1alpha2.Cloudflare
 		return nil, fmt.Errorf("failed to create Cloudflare client: %w", err)
 	}
 
-	return cfClient, nil
+	return cfAPI, nil
 }
 
 // ensureSingleDefault ensures only one CloudflareDomain is marked as default
-func (r *Reconciler) ensureSingleDefault() error {
+func (r *Reconciler) ensureSingleDefault(ctx context.Context, domain *networkingv1alpha2.CloudflareDomain) error {
 	domainList := &networkingv1alpha2.CloudflareDomainList{}
-	if err := r.List(r.ctx, domainList); err != nil {
+	if err := r.List(ctx, domainList); err != nil {
 		return fmt.Errorf("failed to list CloudflareDomains: %w", err)
 	}
 
-	for _, domain := range domainList.Items {
-		if domain.Name != r.domain.Name && domain.Spec.IsDefault {
-			return fmt.Errorf("another CloudflareDomain '%s' is already marked as default", domain.Name)
+	for _, d := range domainList.Items {
+		if d.Name != domain.Name && d.Spec.IsDefault {
+			return fmt.Errorf("another CloudflareDomain '%s' is already marked as default", d.Name)
 		}
 	}
 
@@ -343,16 +322,14 @@ func (r *Reconciler) ensureSingleDefault() error {
 }
 
 // updateState updates the state and status of the CloudflareDomain
-func (r *Reconciler) updateState(state networkingv1alpha2.CloudflareDomainState, message string) {
-	r.domain.Status.State = state
-	r.domain.Status.Message = message
-	r.domain.Status.ObservedGeneration = r.domain.Generation
+func (r *Reconciler) updateState(ctx context.Context, domain *networkingv1alpha2.CloudflareDomain, state networkingv1alpha2.CloudflareDomainState, message string) {
+	logger := log.FromContext(ctx)
 
 	// Update conditions
 	condition := metav1.Condition{
 		Type:               "Ready",
 		Status:             metav1.ConditionFalse,
-		ObservedGeneration: r.domain.Generation,
+		ObservedGeneration: domain.Generation,
 		LastTransitionTime: metav1.Now(),
 		Reason:             string(state),
 		Message:            message,
@@ -363,16 +340,13 @@ func (r *Reconciler) updateState(state networkingv1alpha2.CloudflareDomainState,
 		condition.Reason = "Verified"
 	}
 
-	// Use helper to set condition
-	controller.SetCondition(&r.domain.Status.Conditions, condition.Type, condition.Status, condition.Reason, condition.Message)
-
-	if err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.domain, func() {
-		r.domain.Status.State = state
-		r.domain.Status.Message = message
-		r.domain.Status.ObservedGeneration = r.domain.Generation
-		controller.SetCondition(&r.domain.Status.Conditions, condition.Type, condition.Status, condition.Reason, condition.Message)
+	if err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, domain, func() {
+		domain.Status.State = state
+		domain.Status.Message = message
+		domain.Status.ObservedGeneration = domain.Generation
+		controller.SetCondition(&domain.Status.Conditions, condition.Type, condition.Status, condition.Reason, condition.Message)
 	}); err != nil {
-		r.log.Error(err, "failed to update status")
+		logger.Error(err, "failed to update status")
 	}
 }
 
@@ -382,10 +356,12 @@ func (r *Reconciler) findDomainsForCredentials(ctx context.Context, obj client.O
 	if !ok {
 		return nil
 	}
+	logger := log.FromContext(ctx)
 
 	// List all CloudflareDomains
 	domainList := &networkingv1alpha2.CloudflareDomainList{}
 	if err := r.List(ctx, domainList); err != nil {
+		logger.Error(err, "Failed to list CloudflareDomains for credentials watch")
 		return nil
 	}
 
@@ -409,184 +385,14 @@ func (r *Reconciler) findDomainsForCredentials(ctx context.Context, obj client.O
 	return requests
 }
 
-// registerZoneSettings registers zone settings configuration via Service.
-// Following six-layer architecture: L2 Controller registers config, L5 Sync Controller syncs to API.
-//
-//nolint:revive // cognitive complexity is acceptable for building config
-func (r *Reconciler) registerZoneSettings(creds *networkingv1alpha2.CloudflareCredentials) error {
-	if r.Service == nil {
-		return errors.New("CloudflareDomainService not initialized")
-	}
-
-	// Build configuration from spec
-	config := domainsvc.CloudflareDomainConfig{
-		Domain: r.domain.Spec.Domain,
-	}
-
-	// Convert SSL settings
-	if r.domain.Spec.SSL != nil {
-		ssl := r.domain.Spec.SSL
-		config.SSL = &domainsvc.SSLConfig{
-			Mode:       string(ssl.Mode),
-			MinVersion: string(ssl.MinTLSVersion),
-			TLS13:      string(ssl.TLS13),
-		}
-		if ssl.AlwaysUseHTTPS != nil {
-			config.SSL.AlwaysUseHTTPS = ssl.AlwaysUseHTTPS
-		}
-		if ssl.AutomaticHTTPSRewrites != nil {
-			config.SSL.AutomaticHTTPSRewrites = ssl.AutomaticHTTPSRewrites
-		}
-		if ssl.OpportunisticEncryption != nil {
-			config.SSL.OpportunisticEncryption = ssl.OpportunisticEncryption
-		}
-		if ssl.AuthenticatedOriginPull != nil {
-			config.SSL.AuthenticatedOriginPull = &domainsvc.AuthenticatedOriginPullConfig{
-				Enabled: ssl.AuthenticatedOriginPull.Enabled,
-			}
-		}
-	}
-
-	// Convert Cache settings
-	if r.domain.Spec.Cache != nil {
-		cache := r.domain.Spec.Cache
-		config.Cache = &domainsvc.CacheConfig{
-			Level:                   string(cache.CacheLevel),
-			CacheByDeviceType:       &cache.CacheByDeviceType,
-			SortQueryStringForCache: &cache.SortQueryStringForCache,
-		}
-		if cache.BrowserTTL != nil {
-			config.Cache.BrowserTTL = *cache.BrowserTTL
-		}
-		config.Cache.DevelopmentMode = &cache.DevelopmentMode
-		if cache.AlwaysOnline != nil {
-			config.Cache.AlwaysOnline = cache.AlwaysOnline
-		}
-		if cache.TieredCache != nil {
-			config.Cache.TieredCache = &domainsvc.TieredCacheConfig{
-				Enabled:  cache.TieredCache.Enabled,
-				Topology: string(cache.TieredCache.Topology),
-			}
-		}
-		if cache.CacheReserve != nil {
-			config.Cache.CacheReserve = &domainsvc.CacheReserveConfig{
-				Enabled: cache.CacheReserve.Enabled,
-			}
-		}
-	}
-
-	// Convert Security settings
-	if r.domain.Spec.Security != nil {
-		security := r.domain.Spec.Security
-		config.Security = &domainsvc.SecurityConfig{
-			Level:             string(security.Level),
-			HotlinkProtection: &security.HotlinkProtection,
-		}
-		if security.BrowserCheck != nil {
-			config.Security.BrowserIntegrityCheck = security.BrowserCheck
-		}
-		if security.EmailObfuscation != nil {
-			config.Security.EmailObfuscation = security.EmailObfuscation
-		}
-		if security.ServerSideExclude != nil {
-			config.Security.ServerSideExclude = security.ServerSideExclude
-		}
-		if security.ChallengePassage != nil {
-			config.Security.ChallengePassage = security.ChallengePassage
-		}
-		if security.WAF != nil {
-			config.Security.WAF = &domainsvc.WAFConfig{
-				Enabled: &security.WAF.Enabled,
-			}
-		}
-	}
-
-	// Convert Performance settings
-	if r.domain.Spec.Performance != nil {
-		perf := r.domain.Spec.Performance
-		config.Performance = &domainsvc.PerformanceConfig{
-			Polish:       string(perf.Polish),
-			WebP:         &perf.WebP,
-			Mirage:       &perf.Mirage,
-			RocketLoader: &perf.RocketLoader,
-		}
-		if perf.Brotli != nil {
-			config.Performance.Brotli = perf.Brotli
-		}
-		if perf.HTTP2 != nil {
-			config.Performance.HTTP2 = perf.HTTP2
-		}
-		if perf.HTTP3 != nil {
-			config.Performance.HTTP3 = perf.HTTP3
-		}
-		if perf.ZeroRTT != nil {
-			config.Performance.ZeroRTT = perf.ZeroRTT
-		}
-		if perf.EarlyHints != nil {
-			config.Performance.EarlyHints = perf.EarlyHints
-		}
-		if perf.PrefetchPreload != nil {
-			config.Performance.PrefetchPreload = perf.PrefetchPreload
-		}
-		if perf.IPGeolocation != nil {
-			config.Performance.IPGeolocation = perf.IPGeolocation
-		}
-		if perf.Websockets != nil {
-			config.Performance.Websockets = perf.Websockets
-		}
-		if perf.Minify != nil {
-			config.Performance.Minify = &domainsvc.MinifyConfig{
-				HTML: &perf.Minify.HTML,
-				CSS:  &perf.Minify.CSS,
-				JS:   &perf.Minify.JavaScript,
-			}
-		}
-	}
-
-	// Build credentials reference
-	credRef := networkingv1alpha2.CredentialsReference{
-		Name: creds.Name,
-	}
-
-	// Register via Service
-	opts := domainsvc.CloudflareDomainRegisterOptions{
-		AccountID:      creds.Spec.AccountID,
-		ZoneID:         r.domain.Status.ZoneID,
-		CredentialsRef: credRef,
-		Source: service.Source{
-			Kind:      "CloudflareDomain",
-			Namespace: "", // Cluster-scoped
-			Name:      r.domain.Name,
-		},
-		Config: config,
-	}
-
-	if err := r.Service.Register(r.ctx, opts); err != nil {
-		return fmt.Errorf("register zone settings: %w", err)
-	}
-
-	// Update ZoneID in SyncState if we just got it
-	if r.domain.Status.ZoneID != "" {
-		source := service.Source{
-			Kind:      "CloudflareDomain",
-			Namespace: "", // Cluster-scoped
-			Name:      r.domain.Name,
-		}
-		if err := r.Service.UpdateZoneID(r.ctx, source, r.domain.Status.ZoneID, creds.Spec.AccountID); err != nil {
-			r.log.V(1).Info("Failed to update ZoneID in SyncState", "error", err)
-		}
-	}
-
-	r.log.Info("Zone settings registered to SyncState", "domain", r.domain.Spec.Domain, "zoneId", r.domain.Status.ZoneID)
-	return nil
-}
-
 // SetupWithManager sets up the controller with the Manager.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.Recorder = mgr.GetEventRecorderFor("cloudflaredomain-controller")
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.CloudflareDomain{}).
 		Watches(&networkingv1alpha2.CloudflareCredentials{},
 			handler.EnqueueRequestsFromMapFunc(r.findDomainsForCredentials)).
-		Named("cloudflareDomain").
+		Named("cloudflaredomain").
 		Complete(r)
 }

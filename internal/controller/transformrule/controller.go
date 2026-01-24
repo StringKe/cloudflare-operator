@@ -2,13 +2,14 @@
 // Copyright 2025-2026 The Cloudflare Operator Authors
 
 // Package transformrule provides a controller for managing Cloudflare Transform Rules.
+// It directly calls Cloudflare API and writes status back to the CRD.
 package transformrule
 
 import (
 	"context"
 	"fmt"
-	"time"
 
+	"github.com/cloudflare/cloudflare-go"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -26,22 +27,20 @@ import (
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
-	"github.com/StringKe/cloudflare-operator/internal/service"
-	rulesetsvc "github.com/StringKe/cloudflare-operator/internal/service/ruleset"
+	"github.com/StringKe/cloudflare-operator/internal/controller/common"
 )
 
 const (
 	finalizerName = "cloudflare.com/transform-rule-finalizer"
 )
 
-// Reconciler reconciles a TransformRule object
+// Reconciler reconciles a TransformRule object.
+// It directly calls Cloudflare API and writes status back to the CRD.
 type Reconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
-
-	// Services
-	transformRuleService *rulesetsvc.TransformRuleService
+	Scheme     *runtime.Scheme
+	Recorder   record.EventRecorder
+	APIFactory *common.APIClientFactory
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=transformrules,verbs=get;list;watch;create;update;patch;delete
@@ -56,174 +55,136 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	rule := &networkingv1alpha2.TransformRule{}
 	if err := r.Get(ctx, req.NamespacedName, rule); err != nil {
 		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, nil
+			return common.NoRequeue(), nil
 		}
-		logger.Error(err, "unable to fetch TransformRule")
-		return ctrl.Result{}, err
+		logger.Error(err, "Unable to fetch TransformRule")
+		return common.NoRequeue(), err
 	}
-
-	// Resolve credentials and zone ID
-	creds, err := r.resolveCredentials(ctx, rule)
-	if err != nil {
-		logger.Error(err, "Failed to resolve credentials")
-		return r.updateStatusError(ctx, rule, err)
-	}
-	credRef := networkingv1alpha2.CredentialsReference{Name: creds.CredentialsName}
 
 	// Handle deletion
 	if !rule.DeletionTimestamp.IsZero() {
-		return r.handleDeletion(ctx, rule, credRef)
+		return r.handleDeletion(ctx, rule)
 	}
 
-	// Add finalizer if not present
-	if !controllerutil.ContainsFinalizer(rule, finalizerName) {
-		controllerutil.AddFinalizer(rule, finalizerName)
-		if err := r.Update(ctx, rule); err != nil {
-			return ctrl.Result{}, err
-		}
+	// Ensure finalizer
+	if added, err := controller.EnsureFinalizer(ctx, r.Client, rule, finalizerName); err != nil {
+		return common.NoRequeue(), err
+	} else if added {
+		return ctrl.Result{Requeue: true}, nil
 	}
 
-	// Register TransformRule configuration to SyncState
-	return r.registerRule(ctx, rule, creds.AccountID, creds.ZoneID, credRef)
-}
-
-// resolveCredentials resolves the credentials reference, account ID and zone ID.
-// Following Unified Sync Architecture, the Resource Controller only needs
-// credential metadata (accountID, credRef) - it does not create a Cloudflare API client.
-// Zone ID resolution is deferred to the Sync Controller.
-func (r *Reconciler) resolveCredentials(
-	ctx context.Context,
-	rule *networkingv1alpha2.TransformRule,
-) (controller.CredentialsResult, error) {
-	logger := log.FromContext(ctx)
-
-	// Resolve credentials using the unified controller helper
-	credInfo, err := controller.ResolveCredentialsFromRef(ctx, r.Client, logger, rule.Spec.CredentialsRef)
+	// Get API client
+	apiResult, err := r.APIFactory.GetClient(ctx, common.APIClientOptions{
+		CredentialsRef: rule.Spec.CredentialsRef,
+		Namespace:      rule.Namespace,
+		StatusZoneID:   rule.Status.ZoneID,
+	})
 	if err != nil {
-		return controller.CredentialsResult{}, fmt.Errorf("failed to resolve credentials: %w", err)
-	}
-
-	if credInfo.AccountID == "" {
-		logger.V(1).Info("Account ID not available from credentials, will be resolved during sync")
-	}
-
-	// Build result - Zone ID resolution is deferred to Sync Controller
-	// The zone name is stored in the config, Sync Controller will resolve it
-	result := controller.CredentialsResult{
-		CredentialsName: credInfo.CredentialsRef.Name,
-		AccountID:       credInfo.AccountID,
-		// ZoneID is left empty - Sync Controller will resolve it from zone name
-	}
-
-	return result, nil
-}
-
-// handleDeletion handles the deletion of TransformRule.
-// Following Unified Sync Architecture:
-// Resource Controller only unregisters from SyncState.
-// TransformRule Sync Controller handles the actual Cloudflare API deletion.
-func (r *Reconciler) handleDeletion(
-	ctx context.Context,
-	rule *networkingv1alpha2.TransformRule,
-	_ networkingv1alpha2.CredentialsReference,
-) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
-
-	if !controllerutil.ContainsFinalizer(rule, finalizerName) {
-		return ctrl.Result{}, nil
-	}
-
-	logger.Info("Unregistering TransformRule from SyncState")
-
-	// Unregister from SyncState - this triggers Sync Controller to delete from Cloudflare
-	// Following: Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
-	source := service.Source{
-		Kind:      "TransformRule",
-		Namespace: rule.Namespace,
-		Name:      rule.Name,
-	}
-
-	if err := r.transformRuleService.Unregister(ctx, rule.Status.RulesetID, source); err != nil {
-		logger.Error(err, "Failed to unregister TransformRule from SyncState")
-		r.Recorder.Event(rule, corev1.EventTypeWarning, "UnregisterFailed",
-			fmt.Sprintf("Failed to unregister from SyncState: %s", err.Error()))
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-	}
-
-	r.Recorder.Event(rule, corev1.EventTypeNormal, "Unregistered",
-		"Unregistered from SyncState, Sync Controller will delete from Cloudflare")
-
-	// Remove finalizer with retry logic to handle conflicts
-	if err := controller.UpdateWithConflictRetry(ctx, r.Client, rule, func() {
-		controllerutil.RemoveFinalizer(rule, finalizerName)
-	}); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	r.Recorder.Event(rule, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
-	return ctrl.Result{}, nil
-}
-
-// registerRule registers the TransformRule configuration to SyncState.
-// The actual sync to Cloudflare is handled by TransformRuleSyncController.
-func (r *Reconciler) registerRule(
-	ctx context.Context,
-	rule *networkingv1alpha2.TransformRule,
-	accountID, zoneID string,
-	credRef networkingv1alpha2.CredentialsReference,
-) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
-
-	// Build rules configuration
-	rules := make([]rulesetsvc.TransformRuleDefinitionConfig, len(rule.Spec.Rules))
-	for i, ruleSpec := range rule.Spec.Rules {
-		rules[i] = rulesetsvc.TransformRuleDefinitionConfig{
-			Name:       ruleSpec.Name,
-			Expression: ruleSpec.Expression,
-			Enabled:    ruleSpec.Enabled,
-			URLRewrite: ruleSpec.URLRewrite,
-			Headers:    ruleSpec.Headers,
-		}
-	}
-
-	// Build transform rule configuration
-	config := rulesetsvc.TransformRuleConfig{
-		Zone:        rule.Spec.Zone,
-		Type:        string(rule.Spec.Type),
-		Description: rule.Spec.Description,
-		Rules:       rules,
-	}
-
-	// Create source reference
-	source := service.Source{
-		Kind:      "TransformRule",
-		Namespace: rule.Namespace,
-		Name:      rule.Name,
-	}
-
-	// Register to SyncState
-	opts := rulesetsvc.TransformRuleRegisterOptions{
-		AccountID:      accountID,
-		ZoneID:         zoneID,
-		RulesetID:      rule.Status.RulesetID, // May be empty for new rulesets
-		Source:         source,
-		Config:         config,
-		CredentialsRef: credRef,
-	}
-
-	if err := r.transformRuleService.Register(ctx, opts); err != nil {
-		logger.Error(err, "Failed to register TransformRule configuration")
-		r.Recorder.Event(rule, corev1.EventTypeWarning, "RegisterFailed",
-			fmt.Sprintf("Failed to register TransformRule: %s", err.Error()))
+		logger.Error(err, "Failed to get API client")
 		return r.updateStatusError(ctx, rule, err)
 	}
 
-	r.Recorder.Event(rule, corev1.EventTypeNormal, "Registered",
-		fmt.Sprintf("Registered TransformRule for zone '%s' type '%s' to SyncState",
-			rule.Spec.Zone, rule.Spec.Type))
+	// Resolve Zone ID from domain name
+	zoneID, zoneName, err := apiResult.API.GetZoneIDForDomain(ctx, rule.Spec.Zone)
+	if err != nil {
+		logger.Error(err, "Failed to resolve zone ID", "zone", rule.Spec.Zone)
+		return r.updateStatusError(ctx, rule, fmt.Errorf("failed to resolve zone '%s': %w", rule.Spec.Zone, err))
+	}
 
-	// Update status to Pending - actual sync happens via TransformRuleSyncController
-	return r.updateStatusPending(ctx, rule, zoneID)
+	// Sync TransformRule to Cloudflare
+	return r.syncTransformRule(ctx, rule, apiResult, zoneID, zoneName)
+}
+
+// handleDeletion handles the deletion of TransformRule.
+func (r *Reconciler) handleDeletion(
+	ctx context.Context,
+	rule *networkingv1alpha2.TransformRule,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	if !controllerutil.ContainsFinalizer(rule, finalizerName) {
+		return common.NoRequeue(), nil
+	}
+
+	// Get API client for deletion
+	apiResult, err := r.APIFactory.GetClient(ctx, common.APIClientOptions{
+		CredentialsRef: rule.Spec.CredentialsRef,
+		Namespace:      rule.Namespace,
+		StatusZoneID:   rule.Status.ZoneID,
+	})
+	if err != nil {
+		logger.Error(err, "Failed to get API client for deletion")
+		// Continue with finalizer removal
+	} else if rule.Status.RulesetID != "" && rule.Status.ZoneID != "" {
+		// Delete ruleset from Cloudflare
+		logger.Info("Deleting TransformRule from Cloudflare",
+			"rulesetId", rule.Status.RulesetID,
+			"zone", rule.Spec.Zone)
+
+		if err := apiResult.API.DeleteRuleset(ctx, rule.Status.ZoneID, rule.Status.RulesetID); err != nil {
+			if !cf.IsNotFoundError(err) {
+				logger.Error(err, "Failed to delete TransformRule from Cloudflare")
+				r.Recorder.Event(rule, corev1.EventTypeWarning, "DeleteFailed",
+					fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
+				return common.RequeueShort(), err
+			}
+			logger.Info("TransformRule not found in Cloudflare, may have been already deleted")
+		}
+
+		r.Recorder.Event(rule, corev1.EventTypeNormal, "Deleted",
+			"TransformRule deleted from Cloudflare")
+	}
+
+	// Remove finalizer
+	if err := controller.UpdateWithConflictRetry(ctx, r.Client, rule, func() {
+		controllerutil.RemoveFinalizer(rule, finalizerName)
+	}); err != nil {
+		logger.Error(err, "Failed to remove finalizer")
+		return common.NoRequeue(), err
+	}
+	r.Recorder.Event(rule, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
+
+	return common.NoRequeue(), nil
+}
+
+// syncTransformRule syncs the TransformRule to Cloudflare.
+func (r *Reconciler) syncTransformRule(
+	ctx context.Context,
+	rule *networkingv1alpha2.TransformRule,
+	apiResult *common.APIClientResult,
+	zoneID, zoneName string,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	// Determine the phase based on transform type
+	phase := r.getPhase(rule)
+
+	// Build rules
+	rules := r.buildRules(rule)
+
+	// Build description
+	description := rule.Spec.Description
+	if description == "" {
+		description = fmt.Sprintf("Managed by cloudflare-operator: %s/%s", rule.Namespace, rule.Name)
+	}
+
+	// Update the entrypoint ruleset
+	logger.V(1).Info("Updating transform ruleset in Cloudflare",
+		"zoneId", zoneID,
+		"phase", phase,
+		"type", rule.Spec.Type,
+		"rulesCount", len(rules))
+
+	result, err := apiResult.API.UpdateEntrypointRuleset(ctx, zoneID, phase, description, rules)
+	if err != nil {
+		logger.Error(err, "Failed to update transform ruleset")
+		return r.updateStatusError(ctx, rule, err)
+	}
+
+	r.Recorder.Event(rule, corev1.EventTypeNormal, "Updated",
+		fmt.Sprintf("TransformRule for zone '%s' type '%s' updated in Cloudflare", zoneName, rule.Spec.Type))
+
+	return r.updateStatusReady(ctx, rule, zoneID, result.ID, len(rules))
 }
 
 // getPhase returns the Cloudflare ruleset phase based on rule type
@@ -238,6 +199,95 @@ func (*Reconciler) getPhase(rule *networkingv1alpha2.TransformRule) string {
 	}
 }
 
+// buildRules builds Cloudflare ruleset rules from the spec.
+//
+//nolint:revive // cognitive complexity is acceptable for rule building
+func (*Reconciler) buildRules(rule *networkingv1alpha2.TransformRule) []cloudflare.RulesetRule {
+	rules := make([]cloudflare.RulesetRule, len(rule.Spec.Rules))
+
+	for i, ruleSpec := range rule.Spec.Rules {
+		cfRule := cloudflare.RulesetRule{
+			Expression:  ruleSpec.Expression,
+			Description: ruleSpec.Name,
+			Enabled:     &ruleSpec.Enabled,
+		}
+
+		// Set action based on transform type
+		switch rule.Spec.Type {
+		case networkingv1alpha2.TransformRuleTypeURLRewrite:
+			cfRule.Action = "rewrite"
+			if ruleSpec.URLRewrite != nil {
+				cfRule.ActionParameters = buildURLRewriteParams(ruleSpec.URLRewrite)
+			}
+		case networkingv1alpha2.TransformRuleTypeRequestHeader:
+			cfRule.Action = "rewrite"
+			if len(ruleSpec.Headers) > 0 {
+				cfRule.ActionParameters = buildHeaderParams(ruleSpec.Headers)
+			}
+		case networkingv1alpha2.TransformRuleTypeResponseHeader:
+			cfRule.Action = "rewrite"
+			if len(ruleSpec.Headers) > 0 {
+				cfRule.ActionParameters = buildHeaderParams(ruleSpec.Headers)
+			}
+		}
+
+		rules[i] = cfRule
+	}
+
+	return rules
+}
+
+// buildURLRewriteParams builds action parameters for URL rewrite.
+func buildURLRewriteParams(rewrite *networkingv1alpha2.URLRewriteConfig) *cloudflare.RulesetRuleActionParameters {
+	params := &cloudflare.RulesetRuleActionParameters{}
+
+	if rewrite.Path != nil {
+		uri := &cloudflare.RulesetRuleActionParametersURI{
+			Path: &cloudflare.RulesetRuleActionParametersURIPath{},
+		}
+		if rewrite.Path.Static != "" {
+			uri.Path.Value = rewrite.Path.Static
+		}
+		if rewrite.Path.Expression != "" {
+			uri.Path.Expression = rewrite.Path.Expression
+		}
+		params.URI = uri
+	}
+
+	if rewrite.Query != nil {
+		if params.URI == nil {
+			params.URI = &cloudflare.RulesetRuleActionParametersURI{}
+		}
+		query := &cloudflare.RulesetRuleActionParametersURIQuery{}
+		if rewrite.Query.Static != "" {
+			query.Value = &rewrite.Query.Static
+		}
+		if rewrite.Query.Expression != "" {
+			query.Expression = rewrite.Query.Expression
+		}
+		params.URI.Query = query
+	}
+
+	return params
+}
+
+// buildHeaderParams builds action parameters for header modification.
+func buildHeaderParams(headers []networkingv1alpha2.HeaderModification) *cloudflare.RulesetRuleActionParameters {
+	params := &cloudflare.RulesetRuleActionParameters{
+		Headers: make(map[string]cloudflare.RulesetRuleActionParametersHTTPHeader),
+	}
+
+	for _, h := range headers {
+		params.Headers[h.Name] = cloudflare.RulesetRuleActionParametersHTTPHeader{
+			Operation:  string(h.Operation),
+			Value:      h.Value,
+			Expression: h.Expression,
+		}
+	}
+
+	return params
+}
+
 func (r *Reconciler) updateStatusError(
 	ctx context.Context,
 	rule *networkingv1alpha2.TransformRule,
@@ -250,7 +300,7 @@ func (r *Reconciler) updateStatusError(
 			Type:               "Ready",
 			Status:             metav1.ConditionFalse,
 			ObservedGeneration: rule.Generation,
-			Reason:             "ReconcileError",
+			Reason:             "Error",
 			Message:            cf.SanitizeErrorMessage(err),
 			LastTransitionTime: metav1.Now(),
 		})
@@ -258,38 +308,40 @@ func (r *Reconciler) updateStatusError(
 	})
 
 	if updateErr != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
+		return common.NoRequeue(), fmt.Errorf("failed to update status: %w", updateErr)
 	}
 
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	return common.RequeueShort(), nil
 }
 
-func (r *Reconciler) updateStatusPending(
+func (r *Reconciler) updateStatusReady(
 	ctx context.Context,
 	rule *networkingv1alpha2.TransformRule,
-	zoneID string,
+	zoneID, rulesetID string,
+	rulesCount int,
 ) (ctrl.Result, error) {
 	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, rule, func() {
-		rule.Status.State = networkingv1alpha2.TransformRuleStateSyncing
-		rule.Status.Message = "TransformRule configuration registered, waiting for sync"
 		rule.Status.ZoneID = zoneID
+		rule.Status.RulesetID = rulesetID
+		rule.Status.RuleCount = rulesCount
+		rule.Status.State = networkingv1alpha2.TransformRuleStateReady
+		rule.Status.Message = "TransformRule synced to Cloudflare"
 		meta.SetStatusCondition(&rule.Status.Conditions, metav1.Condition{
 			Type:               "Ready",
-			Status:             metav1.ConditionFalse,
+			Status:             metav1.ConditionTrue,
 			ObservedGeneration: rule.Generation,
-			Reason:             "Pending",
-			Message:            "TransformRule configuration registered, waiting for sync",
+			Reason:             "Synced",
+			Message:            "TransformRule synced to Cloudflare",
 			LastTransitionTime: metav1.Now(),
 		})
 		rule.Status.ObservedGeneration = rule.Generation
 	})
 
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
+		return common.NoRequeue(), fmt.Errorf("failed to update status: %w", err)
 	}
 
-	// Requeue to check for sync completion
-	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	return common.NoRequeue(), nil
 }
 
 // findRulesForCredentials returns TransformRules that reference the given credentials
@@ -332,52 +384,17 @@ func (r *Reconciler) findRulesForCredentials(
 	return requests
 }
 
-// findRulesForSyncState returns TransformRules that are sources for the given SyncState
-func (*Reconciler) findRulesForSyncState(ctx context.Context, obj client.Object) []reconcile.Request {
-	logger := log.FromContext(ctx)
-
-	syncState, ok := obj.(*networkingv1alpha2.CloudflareSyncState)
-	if !ok {
-		return nil
-	}
-
-	// Only process TransformRule type SyncStates
-	if syncState.Spec.ResourceType != networkingv1alpha2.SyncResourceTransformRule {
-		return nil
-	}
-
-	var requests []reconcile.Request
-	for _, source := range syncState.Spec.Sources {
-		if source.Ref.Kind == "TransformRule" {
-			requests = append(requests, reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Name:      source.Ref.Name,
-					Namespace: source.Ref.Namespace,
-				},
-			})
-		}
-	}
-
-	logger.V(1).Info("Found TransformRules for SyncState update",
-		"syncState", syncState.Name,
-		"ruleCount", len(requests))
-
-	return requests
-}
-
 // SetupWithManager sets up the controller with the Manager.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("transformrule-controller")
 
-	// Initialize TransformRuleService
-	r.transformRuleService = rulesetsvc.NewTransformRuleService(mgr.GetClient())
+	// Initialize APIClientFactory
+	r.APIFactory = common.NewAPIClientFactory(mgr.GetClient(), ctrl.Log.WithName("transformrule"))
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.TransformRule{}).
 		Watches(&networkingv1alpha2.CloudflareCredentials{},
 			handler.EnqueueRequestsFromMapFunc(r.findRulesForCredentials)).
-		Watches(&networkingv1alpha2.CloudflareSyncState{},
-			handler.EnqueueRequestsFromMapFunc(r.findRulesForSyncState)).
 		Named("transformrule").
 		Complete(r)
 }

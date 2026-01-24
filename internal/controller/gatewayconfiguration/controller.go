@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2025-2026 The Cloudflare Operator Authors
 
+// Package gatewayconfiguration provides a controller for managing Cloudflare Gateway Configuration.
+// It directly calls Cloudflare API and writes status back to the CRD.
 package gatewayconfiguration
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -23,196 +23,157 @@ import (
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
-	"github.com/StringKe/cloudflare-operator/internal/service"
-	gatewaysvc "github.com/StringKe/cloudflare-operator/internal/service/gateway"
+	"github.com/StringKe/cloudflare-operator/internal/controller/common"
 )
 
 const (
-	FinalizerName = "gatewayconfiguration.networking.cloudflare-operator.io/finalizer"
+	finalizerName = "gatewayconfiguration.networking.cloudflare-operator.io/finalizer"
 )
 
-// GatewayConfigurationReconciler reconciles a GatewayConfiguration object
-type GatewayConfigurationReconciler struct {
+// Reconciler reconciles a GatewayConfiguration object.
+// It directly calls Cloudflare API and writes status back to the CRD.
+type Reconciler struct {
 	client.Client
-	Scheme         *runtime.Scheme
-	Recorder       record.EventRecorder
-	gatewayService *gatewaysvc.GatewayConfigurationService
+	Scheme     *runtime.Scheme
+	Recorder   record.EventRecorder
+	APIFactory *common.APIClientFactory
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=gatewayconfigurations,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=gatewayconfigurations/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=gatewayconfigurations/finalizers,verbs=update
 
-func (r *GatewayConfigurationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+// Reconcile handles GatewayConfiguration reconciliation
+func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	// Fetch the GatewayConfiguration instance
+	// Get the GatewayConfiguration resource
 	config := &networkingv1alpha2.GatewayConfiguration{}
 	if err := r.Get(ctx, req.NamespacedName, config); err != nil {
 		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, nil
+			return common.NoRequeue(), nil
 		}
-		return ctrl.Result{}, err
+		logger.Error(err, "Unable to fetch GatewayConfiguration")
+		return common.NoRequeue(), err
 	}
 
-	// Resolve credentials
-	credRef, accountID, err := r.resolveCredentials(ctx, config)
-	if err != nil {
-		logger.Error(err, "Failed to resolve credentials")
-		return r.updateStatusError(ctx, config, err)
-	}
-
-	// Handle deletion - for gateway config, we don't delete, just remove finalizer
+	// Handle deletion - Gateway config is account-level, don't delete from CF
 	if !config.DeletionTimestamp.IsZero() {
 		return r.handleDeletion(ctx, config)
 	}
 
-	// Add finalizer if not present
-	if !controllerutil.ContainsFinalizer(config, FinalizerName) {
-		controllerutil.AddFinalizer(config, FinalizerName)
-		if err := r.Update(ctx, config); err != nil {
-			return ctrl.Result{}, err
-		}
+	// Ensure finalizer
+	if added, err := controller.EnsureFinalizer(ctx, r.Client, config, finalizerName); err != nil {
+		return common.NoRequeue(), err
+	} else if added {
+		return ctrl.Result{Requeue: true}, nil
 	}
 
-	// Register Gateway configuration to SyncState
-	return r.registerGatewayConfiguration(ctx, config, accountID, credRef)
-}
-
-// resolveCredentials resolves the credentials reference and account ID.
-func (r *GatewayConfigurationReconciler) resolveCredentials(
-	ctx context.Context,
-	config *networkingv1alpha2.GatewayConfiguration,
-) (credRef networkingv1alpha2.CredentialsReference, accountID string, err error) {
-	// Get credentials reference
-	if config.Spec.Cloudflare.CredentialsRef != nil {
-		credRef = networkingv1alpha2.CredentialsReference{
-			Name: config.Spec.Cloudflare.CredentialsRef.Name,
-		}
-
-		// Get account ID from credentials if available
-		creds := &networkingv1alpha2.CloudflareCredentials{}
-		if err := r.Get(ctx, client.ObjectKey{Name: credRef.Name}, creds); err != nil {
-			return credRef, "", fmt.Errorf("get credentials: %w", err)
-		}
-		accountID = creds.Spec.AccountID
-	}
-
-	if credRef.Name == "" {
-		return credRef, "", errors.New("credentials reference is required")
-	}
-
-	return credRef, accountID, nil
-}
-
-func (r *GatewayConfigurationReconciler) handleDeletion(ctx context.Context, config *networkingv1alpha2.GatewayConfiguration) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
-
-	if !controllerutil.ContainsFinalizer(config, FinalizerName) {
-		return ctrl.Result{}, nil
-	}
-
-	// Gateway configuration is account-level, we don't delete it from Cloudflare
-	// Just unregister from SyncState and remove the finalizer
-
-	// Unregister from SyncState
-	source := service.Source{
-		Kind:      "GatewayConfiguration",
-		Namespace: "",
-		Name:      config.Name,
-	}
-	if err := r.gatewayService.Unregister(ctx, config.Status.AccountID, source); err != nil {
-		logger.Error(err, "Failed to unregister Gateway configuration from SyncState")
-		// Non-fatal - continue with finalizer removal
-	}
-
-	// Remove finalizer with retry logic
-	if err := controller.UpdateWithConflictRetry(ctx, r.Client, config, func() {
-		controllerutil.RemoveFinalizer(config, FinalizerName)
-	}); err != nil {
-		logger.Error(err, "failed to remove finalizer")
-		return ctrl.Result{}, err
-	}
-	r.Recorder.Event(config, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
-
-	return ctrl.Result{}, nil
-}
-
-// registerGatewayConfiguration registers the Gateway configuration to SyncState.
-func (r *GatewayConfigurationReconciler) registerGatewayConfiguration(
-	ctx context.Context,
-	config *networkingv1alpha2.GatewayConfiguration,
-	accountID string,
-	credRef networkingv1alpha2.CredentialsReference,
-) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
-
-	// Build Gateway configuration
-	svcConfig := r.buildConfigParams(config.Spec.Settings)
-
-	// Create source reference
-	source := service.Source{
-		Kind:      "GatewayConfiguration",
-		Namespace: "",
-		Name:      config.Name,
-	}
-
-	// Register to SyncState
-	opts := gatewaysvc.GatewayConfigurationRegisterOptions{
-		AccountID:      accountID,
-		Source:         source,
-		Config:         svcConfig,
-		CredentialsRef: credRef,
-	}
-
-	if err := r.gatewayService.Register(ctx, opts); err != nil {
-		logger.Error(err, "Failed to register Gateway configuration")
-		r.Recorder.Event(config, corev1.EventTypeWarning, "RegisterFailed",
-			fmt.Sprintf("Failed to register Gateway configuration: %s", err.Error()))
+	// Get API client
+	// GatewayConfiguration is cluster-scoped, use operator namespace for legacy inline secrets
+	apiResult, err := r.APIFactory.GetClient(ctx, common.APIClientOptions{
+		CloudflareDetails: &config.Spec.Cloudflare,
+		Namespace:         common.OperatorNamespace,
+		StatusAccountID:   config.Status.AccountID,
+	})
+	if err != nil {
+		logger.Error(err, "Failed to get API client")
 		return r.updateStatusError(ctx, config, err)
 	}
 
-	r.Recorder.Event(config, corev1.EventTypeNormal, "Registered",
-		"Registered Gateway Configuration to SyncState")
-
-	// Update status to Pending - actual sync happens via GatewaySyncController
-	return r.updateStatusPending(ctx, config, accountID)
+	// Sync Gateway configuration to Cloudflare
+	return r.syncGatewayConfiguration(ctx, config, apiResult)
 }
 
+// handleDeletion handles the deletion of GatewayConfiguration.
+func (r *Reconciler) handleDeletion(
+	ctx context.Context,
+	config *networkingv1alpha2.GatewayConfiguration,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	if !controllerutil.ContainsFinalizer(config, finalizerName) {
+		return common.NoRequeue(), nil
+	}
+
+	// Gateway configuration is account-level, we don't delete it from Cloudflare
+	// Just remove the finalizer
+	logger.Info("Removing finalizer for GatewayConfiguration (account-level config not deleted from CF)")
+
+	// Remove finalizer
+	if err := controller.UpdateWithConflictRetry(ctx, r.Client, config, func() {
+		controllerutil.RemoveFinalizer(config, finalizerName)
+	}); err != nil {
+		logger.Error(err, "Failed to remove finalizer")
+		return common.NoRequeue(), err
+	}
+	r.Recorder.Event(config, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
+
+	return common.NoRequeue(), nil
+}
+
+// syncGatewayConfiguration syncs the Gateway Configuration to Cloudflare.
+func (r *Reconciler) syncGatewayConfiguration(
+	ctx context.Context,
+	config *networkingv1alpha2.GatewayConfiguration,
+	apiResult *common.APIClientResult,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	// Build params from spec
+	params := r.buildParams(config.Spec.Settings)
+
+	// Update Gateway configuration in Cloudflare
+	logger.V(1).Info("Updating Gateway Configuration in Cloudflare")
+
+	result, err := apiResult.API.UpdateGatewayConfiguration(ctx, params)
+	if err != nil {
+		logger.Error(err, "Failed to update Gateway Configuration")
+		return r.updateStatusError(ctx, config, err)
+	}
+
+	r.Recorder.Event(config, corev1.EventTypeNormal, "Updated",
+		"Gateway Configuration updated in Cloudflare")
+
+	return r.updateStatusReady(ctx, config, result.AccountID)
+}
+
+// buildParams builds the GatewayConfigurationParams from the GatewaySettings.
+//
 //nolint:revive // cognitive complexity is acceptable for config construction
-func (*GatewayConfigurationReconciler) buildConfigParams(settings networkingv1alpha2.GatewaySettings) gatewaysvc.GatewayConfigurationConfig {
-	config := gatewaysvc.GatewayConfigurationConfig{}
+func (r *Reconciler) buildParams(settings networkingv1alpha2.GatewaySettings) cf.GatewayConfigurationParams {
+	params := cf.GatewayConfigurationParams{}
 
 	if settings.TLSDecrypt != nil {
-		config.TLSDecrypt = &gatewaysvc.TLSDecryptSettings{
+		params.TLSDecrypt = &cf.TLSDecryptSettings{
 			Enabled: settings.TLSDecrypt.Enabled,
 		}
 	}
 
 	if settings.ActivityLog != nil {
-		config.ActivityLog = &gatewaysvc.ActivityLogSettings{
+		params.ActivityLog = &cf.ActivityLogSettings{
 			Enabled: settings.ActivityLog.Enabled,
 		}
 	}
 
 	if settings.AntiVirus != nil {
-		av := &gatewaysvc.AntiVirusSettings{
+		av := &cf.AntiVirusSettings{
 			EnabledDownloadPhase: settings.AntiVirus.EnabledDownloadPhase,
 			EnabledUploadPhase:   settings.AntiVirus.EnabledUploadPhase,
 			FailClosed:           settings.AntiVirus.FailClosed,
 		}
 		if settings.AntiVirus.NotificationSettings != nil {
-			av.NotificationSettings = &gatewaysvc.NotificationSettings{
+			av.NotificationSettings = &cf.NotificationSettings{
 				Enabled:    settings.AntiVirus.NotificationSettings.Enabled,
 				Message:    settings.AntiVirus.NotificationSettings.Message,
 				SupportURL: settings.AntiVirus.NotificationSettings.SupportURL,
 			}
 		}
-		config.AntiVirus = av
+		params.AntiVirus = av
 	}
 
 	if settings.BlockPage != nil {
-		config.BlockPage = &gatewaysvc.BlockPageSettings{
+		params.BlockPage = &cf.BlockPageSettings{
 			Enabled:         settings.BlockPage.Enabled,
 			Name:            settings.BlockPage.Name,
 			FooterText:      settings.BlockPage.FooterText,
@@ -226,32 +187,32 @@ func (*GatewayConfigurationReconciler) buildConfigParams(settings networkingv1al
 	}
 
 	if settings.BodyScanning != nil {
-		config.BodyScanning = &gatewaysvc.BodyScanningSettings{
+		params.BodyScanning = &cf.BodyScanningSettings{
 			InspectionMode: settings.BodyScanning.InspectionMode,
 		}
 	}
 
 	if settings.BrowserIsolation != nil {
-		config.BrowserIsolation = &gatewaysvc.BrowserIsolationSettings{
+		params.BrowserIsolation = &cf.BrowserIsolationSettings{
 			URLBrowserIsolationEnabled: settings.BrowserIsolation.URLBrowserIsolationEnabled,
 			NonIdentityEnabled:         settings.BrowserIsolation.NonIdentityEnabled,
 		}
 	}
 
 	if settings.FIPS != nil {
-		config.FIPS = &gatewaysvc.FIPSSettings{
+		params.FIPS = &cf.FIPSSettings{
 			TLS: settings.FIPS.TLS,
 		}
 	}
 
 	if settings.ProtocolDetection != nil {
-		config.ProtocolDetection = &gatewaysvc.ProtocolDetectionSettings{
+		params.ProtocolDetection = &cf.ProtocolDetectionSettings{
 			Enabled: settings.ProtocolDetection.Enabled,
 		}
 	}
 
 	if settings.CustomCertificate != nil {
-		config.CustomCertificate = &gatewaysvc.CustomCertificateSettings{
+		params.CustomCertificate = &cf.CustomCertificateSettings{
 			Enabled: settings.CustomCertificate.Enabled,
 			ID:      settings.CustomCertificate.ID,
 		}
@@ -259,73 +220,76 @@ func (*GatewayConfigurationReconciler) buildConfigParams(settings networkingv1al
 
 	// Merge deprecated NonIdentityBrowserIsolation into BrowserIsolation.NonIdentityEnabled
 	// This maintains backward compatibility while the field is deprecated.
-	// See: BrowserIsolation.NonIdentityEnabled is the canonical field for this setting.
 	if settings.NonIdentityBrowserIsolation != nil && settings.NonIdentityBrowserIsolation.Enabled {
-		if config.BrowserIsolation == nil {
-			config.BrowserIsolation = &gatewaysvc.BrowserIsolationSettings{}
+		if params.BrowserIsolation == nil {
+			params.BrowserIsolation = &cf.BrowserIsolationSettings{}
 		}
-		config.BrowserIsolation.NonIdentityEnabled = true
+		params.BrowserIsolation.NonIdentityEnabled = true
 	}
 
-	return config
+	return params
 }
 
-func (r *GatewayConfigurationReconciler) updateStatusError(ctx context.Context, config *networkingv1alpha2.GatewayConfiguration, err error) (ctrl.Result, error) {
+func (r *Reconciler) updateStatusError(
+	ctx context.Context,
+	config *networkingv1alpha2.GatewayConfiguration,
+	err error,
+) (ctrl.Result, error) {
 	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, config, func() {
 		config.Status.State = "Error"
 		meta.SetStatusCondition(&config.Status.Conditions, metav1.Condition{
 			Type:               "Ready",
 			Status:             metav1.ConditionFalse,
 			ObservedGeneration: config.Generation,
-			Reason:             "ReconcileError",
+			Reason:             "Error",
 			Message:            cf.SanitizeErrorMessage(err),
 			LastTransitionTime: metav1.Now(),
 		})
 		config.Status.ObservedGeneration = config.Generation
 	})
+
 	if updateErr != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
+		return common.NoRequeue(), fmt.Errorf("failed to update status: %w", updateErr)
 	}
 
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	return common.RequeueShort(), nil
 }
 
-func (r *GatewayConfigurationReconciler) updateStatusPending(
+func (r *Reconciler) updateStatusReady(
 	ctx context.Context,
 	config *networkingv1alpha2.GatewayConfiguration,
 	accountID string,
 ) (ctrl.Result, error) {
 	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, config, func() {
-		if config.Status.AccountID == "" {
-			config.Status.AccountID = accountID
-		}
-		config.Status.State = "Pending"
+		config.Status.AccountID = accountID
+		config.Status.State = "Ready"
 		meta.SetStatusCondition(&config.Status.Conditions, metav1.Condition{
 			Type:               "Ready",
-			Status:             metav1.ConditionFalse,
+			Status:             metav1.ConditionTrue,
 			ObservedGeneration: config.Generation,
-			Reason:             "Pending",
-			Message:            "Gateway configuration registered, waiting for sync",
+			Reason:             "Synced",
+			Message:            "Gateway Configuration synced to Cloudflare",
 			LastTransitionTime: metav1.Now(),
 		})
 		config.Status.ObservedGeneration = config.Generation
 	})
 
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
+		return common.NoRequeue(), fmt.Errorf("failed to update status: %w", err)
 	}
 
-	// Requeue to check for sync completion
-	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	return common.NoRequeue(), nil
 }
 
-func (r *GatewayConfigurationReconciler) SetupWithManager(mgr ctrl.Manager) error {
+// SetupWithManager sets up the controller with the Manager.
+func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("gatewayconfiguration-controller")
 
-	// Initialize GatewayConfigurationService
-	r.gatewayService = gatewaysvc.NewGatewayConfigurationService(mgr.GetClient())
+	// Initialize APIClientFactory
+	r.APIFactory = common.NewAPIClientFactory(mgr.GetClient(), ctrl.Log.WithName("gatewayconfiguration"))
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.GatewayConfiguration{}).
+		Named("gatewayconfiguration").
 		Complete(r)
 }

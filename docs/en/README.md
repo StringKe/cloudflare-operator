@@ -27,10 +27,10 @@ The Cloudflare Operator provides Kubernetes-native management of:
 
 ## Architecture
 
-The operator uses a **Unified Sync Architecture** with six layers:
+The operator uses a **Three-Layer Architecture**:
 
 ```
-K8s Resources → Resource Controllers → Core Services → SyncState CRD → Sync Controllers → Cloudflare API
+L1: K8s CRD → L2: Controller → L3: Cloudflare API
 ```
 
 ```mermaid
@@ -45,25 +45,15 @@ flowchart TB
     end
 
     subgraph K8s["Kubernetes Cluster"]
-        subgraph Layer1["Layer 1: K8s Resources"]
+        subgraph Layer1["Layer 1: K8s CRDs"]
             CRDs["Custom Resources"]
             K8sNative["Ingress / Gateway API"]
         end
 
-        subgraph Layer2["Layer 2: Resource Controllers"]
-            RC["Resource Controllers"]
-        end
-
-        subgraph Layer3["Layer 3: Core Services"]
-            SVC["Core Services"]
-        end
-
-        subgraph Layer4["Layer 4: SyncState CRD"]
-            SyncState["CloudflareSyncState"]
-        end
-
-        subgraph Layer5["Layer 5: Sync Controllers"]
-            SC["Sync Controllers"]
+        subgraph Layer2["Layer 2: Controllers"]
+            RC["1:1 Controllers"]
+            TC["TunnelConfig Controller"]
+            CM["ConfigMap (aggregation)"]
         end
 
         subgraph Managed["Managed Resources"]
@@ -78,11 +68,12 @@ flowchart TB
 
     CRDs -.->|watch| RC
     K8sNative -.->|watch| RC
-    RC -->|register config| SVC
-    SVC -->|update| SyncState
-    SyncState -.->|watch| SC
-    SC -->|"API calls (single sync point)"| API
-    SC -->|creates| Managed
+    RC -->|direct API calls| API
+    CRDs -.->|watch| TC
+    K8sNative -->|write config| CM
+    CM -.->|watch| TC
+    TC -->|aggregated API calls| API
+    TC -->|creates| Managed
     Managed -->|proxy| Service
     Service --> Pod
     Users -->|HTTPS/WARP| Edge
@@ -93,12 +84,12 @@ flowchart TB
 
 | Feature | Description |
 |---------|-------------|
-| **Single Sync Point** | Only Sync Controllers call Cloudflare API |
-| **Race Condition Free** | SyncState CRD uses K8s optimistic locking |
-| **Debouncing** | 500ms delay aggregates multiple changes |
-| **Hash Detection** | Skip sync when config unchanged |
+| **Simple Data Flow** | Controllers directly call Cloudflare API |
+| **Direct Status Updates** | Status written back to CRD immediately |
+| **Independent Informers** | Each CRD has isolated controller, no interference |
+| **ConfigMap Aggregation** | Tunnel config aggregated via ConfigMap |
 
-> See [Unified Sync Architecture](../design/UNIFIED_SYNC_ARCHITECTURE.md) for details.
+> See [Three-Layer Architecture](../design/THREE_LAYER_ARCHITECTURE.md) for details.
 
 ## CRD Summary (34 Total)
 
@@ -222,7 +213,7 @@ See [Namespace Restrictions](namespace-restrictions.md) for detailed information
 
 ## Version Information
 
-- Current Version: v0.27.x (Alpha)
+- Current Version: v0.34.x (Alpha)
 - API Version: `networking.cloudflare-operator.io/v1alpha2`
 - Kubernetes: v1.28+
 - Go: 1.25
@@ -231,6 +222,13 @@ See [Namespace Restrictions](namespace-restrictions.md) for detailed information
 - gateway-api: v1.4.1
 
 ## Recent Changes
+
+### v0.34.x - Three-Layer Architecture
+- **Architecture Simplification**: Migrated from six-layer SyncState architecture to three-layer ConfigMap architecture
+- **Direct API Calls**: 1:1 resource controllers now call Cloudflare API directly
+- **ConfigMap Aggregation**: Tunnel configuration aggregated via ConfigMap instead of SyncState
+- **Eliminated Service Layer**: Removed intermediate service and sync layers for most resources
+- **Improved Polling**: Each CRD has independent controller with isolated Informer
 
 ### v0.27.x - AccessApplication Inline Policies & NetworkRoute Improvements
 - **AccessApplication Inline Policies**: Define include/exclude/require rules directly in AccessApplication spec without creating separate AccessPolicy resources

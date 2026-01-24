@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2025-2026 The Cloudflare Operator Authors
 
-// Package pagesproject implements the L2 Controller for PagesProject CRD.
-// It registers project configurations to the Core Service for sync.
+// Package pagesproject implements the Controller for PagesProject CRD.
+// It directly manages Cloudflare Pages projects.
 package pagesproject
 
 import (
@@ -11,7 +11,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -24,16 +24,16 @@ import (
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
-	"github.com/StringKe/cloudflare-operator/internal/service"
-	pagessvc "github.com/StringKe/cloudflare-operator/internal/service/pages"
+	"github.com/StringKe/cloudflare-operator/internal/controller/common"
 )
 
-// PagesProjectReconciler reconciles a PagesProject object
+// PagesProjectReconciler reconciles a PagesProject object.
+// It directly calls Cloudflare API and writes status back to the CRD.
 type PagesProjectReconciler struct {
 	client.Client
 	Scheme         *runtime.Scheme
 	Recorder       record.EventRecorder
-	projectService *pagessvc.ProjectService
+	APIFactory     *common.APIClientFactory
 	versionManager *VersionManager
 }
 
@@ -49,17 +49,10 @@ func (r *PagesProjectReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// Fetch the PagesProject instance
 	project := &networkingv1alpha2.PagesProject{}
 	if err := r.Get(ctx, req.NamespacedName, project); err != nil {
-		if errors.IsNotFound(err) {
-			return ctrl.Result{}, nil
+		if apierrors.IsNotFound(err) {
+			return common.NoRequeue(), nil
 		}
-		return ctrl.Result{}, err
-	}
-
-	// Resolve credentials
-	credInfo, err := r.resolveCredentials(ctx, project)
-	if err != nil {
-		logger.Error(err, "Failed to resolve credentials")
-		return r.updateStatusError(ctx, project, err)
+		return common.NoRequeue(), err
 	}
 
 	// Handle deletion
@@ -67,16 +60,26 @@ func (r *PagesProjectReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return r.handleDeletion(ctx, project)
 	}
 
-	// Add finalizer if not present
-	if !controllerutil.ContainsFinalizer(project, FinalizerName) {
-		controllerutil.AddFinalizer(project, FinalizerName)
-		if err := r.Update(ctx, project); err != nil {
-			return ctrl.Result{}, err
-		}
+	// Ensure finalizer
+	if added, err := controller.EnsureFinalizer(ctx, r.Client, project, FinalizerName); err != nil {
+		return common.NoRequeue(), err
+	} else if added {
+		return ctrl.Result{Requeue: true}, nil
 	}
 
-	// Register Pages project configuration to SyncState
-	result, err := r.registerPagesProject(ctx, project, credInfo)
+	// Get API client
+	apiResult, err := r.APIFactory.GetClient(ctx, common.APIClientOptions{
+		CloudflareDetails: &project.Spec.Cloudflare,
+		Namespace:         project.Namespace,
+		StatusAccountID:   project.Status.AccountID,
+	})
+	if err != nil {
+		logger.Error(err, "Failed to get API client")
+		return r.updateStatusError(ctx, project, err)
+	}
+
+	// Sync project to Cloudflare
+	result, err := r.syncProject(ctx, project, apiResult)
 	if err != nil {
 		return result, err
 	}
@@ -110,22 +113,7 @@ func (r *PagesProjectReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 	}
 
-	return result, err
-}
-
-// resolveCredentials resolves the credentials for the Pages project.
-func (r *PagesProjectReconciler) resolveCredentials(
-	ctx context.Context,
-	project *networkingv1alpha2.PagesProject,
-) (*controller.CredentialsInfo, error) {
-	return controller.ResolveCredentialsForService(
-		ctx,
-		r.Client,
-		log.FromContext(ctx),
-		project.Spec.Cloudflare,
-		project.Namespace,
-		project.Status.AccountID,
-	)
+	return result, nil
 }
 
 // handleDeletion handles the deletion of a PagesProject.
@@ -136,100 +124,121 @@ func (r *PagesProjectReconciler) handleDeletion(
 	logger := log.FromContext(ctx)
 
 	if !controllerutil.ContainsFinalizer(project, FinalizerName) {
-		return ctrl.Result{}, nil
+		return common.NoRequeue(), nil
 	}
 
 	// Check deletion policy
 	if project.Spec.DeletionPolicy == "Orphan" {
 		logger.Info("Orphan deletion policy, skipping Cloudflare deletion")
 	} else {
-		// Unregister from SyncState - this triggers Sync Controller to delete from Cloudflare
-		source := service.Source{
-			Kind:      "PagesProject",
-			Namespace: project.Namespace,
-			Name:      project.Name,
+		// Get API client
+		apiResult, err := r.APIFactory.GetClient(ctx, common.APIClientOptions{
+			CloudflareDetails: &project.Spec.Cloudflare,
+			Namespace:         project.Namespace,
+			StatusAccountID:   project.Status.AccountID,
+		})
+		if err != nil {
+			logger.Error(err, "Failed to get API client for deletion")
+			// Continue with finalizer removal
+		} else {
+			// Delete project from Cloudflare
+			projectName := r.getProjectName(project)
+			logger.Info("Deleting Pages project from Cloudflare",
+				"projectName", projectName)
+
+			if err := apiResult.API.DeletePagesProject(ctx, projectName); err != nil {
+				if !cf.IsNotFoundError(err) {
+					logger.Error(err, "Failed to delete Pages project from Cloudflare")
+					r.Recorder.Event(project, corev1.EventTypeWarning, "DeleteFailed",
+						fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
+					return common.RequeueShort(), err
+				}
+				logger.Info("Pages project not found in Cloudflare, may have been already deleted")
+			}
+
+			r.Recorder.Event(project, corev1.EventTypeNormal, "Deleted",
+				"Pages project deleted from Cloudflare")
 		}
-
-		projectName := r.getProjectName(project)
-		logger.Info("Unregistering Pages project from SyncState",
-			"projectName", projectName,
-			"source", fmt.Sprintf("%s/%s", project.Namespace, project.Name))
-
-		if err := r.projectService.Unregister(ctx, projectName, source); err != nil {
-			logger.Error(err, "Failed to unregister Pages project from SyncState")
-			r.Recorder.Event(project, corev1.EventTypeWarning, "UnregisterFailed",
-				fmt.Sprintf("Failed to unregister from SyncState: %s", err.Error()))
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-		}
-
-		r.Recorder.Event(project, corev1.EventTypeNormal, "Unregistered",
-			"Unregistered from SyncState, Sync Controller will delete from Cloudflare")
 	}
 
-	// Remove finalizer with retry logic
+	// Remove finalizer
 	if err := controller.UpdateWithConflictRetry(ctx, r.Client, project, func() {
 		controllerutil.RemoveFinalizer(project, FinalizerName)
 	}); err != nil {
-		logger.Error(err, "failed to remove finalizer")
-		return ctrl.Result{}, err
+		logger.Error(err, "Failed to remove finalizer")
+		return common.NoRequeue(), err
 	}
 	r.Recorder.Event(project, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
 
-	return ctrl.Result{}, nil
+	return common.NoRequeue(), nil
 }
 
-// registerPagesProject registers the Pages project configuration to SyncState.
-func (r *PagesProjectReconciler) registerPagesProject(
+// syncProject syncs the Pages project configuration to Cloudflare.
+func (r *PagesProjectReconciler) syncProject(
 	ctx context.Context,
 	project *networkingv1alpha2.PagesProject,
-	credInfo *controller.CredentialsInfo,
+	apiResult *common.APIClientResult,
 ) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
-
-	// Create source reference
-	source := service.Source{
-		Kind:      "PagesProject",
-		Namespace: project.Namespace,
-		Name:      project.Name,
-	}
-
-	// Build Pages project configuration
-	config := r.buildProjectConfig(project)
 	projectName := r.getProjectName(project)
 
-	// Register to SyncState
-	opts := pagessvc.ProjectRegisterOptions{
-		ProjectName:    projectName,
-		AccountID:      credInfo.AccountID,
-		Source:         source,
-		Config:         config,
-		CredentialsRef: credInfo.CredentialsRef,
-	}
+	// Build API parameters
+	params := r.buildProjectParams(project)
 
-	if err := r.projectService.Register(ctx, opts); err != nil {
-		logger.Error(err, "Failed to register Pages project configuration")
-		r.Recorder.Event(project, corev1.EventTypeWarning, "RegisterFailed",
-			fmt.Sprintf("Failed to register Pages project: %s", err.Error()))
-		return r.updateStatusError(ctx, project, err)
-	}
-
-	r.Recorder.Event(project, corev1.EventTypeNormal, "Registered",
-		fmt.Sprintf("Registered Pages Project '%s' configuration to SyncState", projectName))
-
-	// Check if already synced
-	syncStatus, err := r.projectService.GetSyncStatus(ctx, projectName)
+	// Check if project exists
+	existing, err := apiResult.API.GetPagesProject(ctx, projectName)
 	if err != nil {
-		logger.Error(err, "Failed to get sync status")
-		return r.updateStatusPending(ctx, project, credInfo.AccountID)
+		if !cf.IsNotFoundError(err) {
+			logger.Error(err, "Failed to get Pages project from Cloudflare")
+			return r.updateStatusError(ctx, project, err)
+		}
+		// Project doesn't exist, create it
+		existing = nil
 	}
 
-	if syncStatus != nil && syncStatus.IsSynced {
-		// Already synced, update status to Ready
-		return r.updateStatusReady(ctx, project, credInfo.AccountID, syncStatus.Subdomain)
+	var result *cf.PagesProjectResult
+	if existing != nil {
+		// Update existing project
+		result, err = apiResult.API.UpdatePagesProject(ctx, projectName, params)
+		if err != nil {
+			logger.Error(err, "Failed to update Pages project")
+			return r.updateStatusError(ctx, project, err)
+		}
+		logger.V(1).Info("Pages project updated in Cloudflare",
+			"projectName", projectName)
+	} else {
+		// Create new project
+		result, err = apiResult.API.CreatePagesProject(ctx, params)
+		if err != nil {
+			// Check adoption policy
+			if cf.IsConflictError(err) && project.Spec.AdoptionPolicy == "Adopt" {
+				// Try to adopt existing project
+				logger.Info("Pages project already exists, attempting to adopt",
+					"projectName", projectName)
+				existing, err = apiResult.API.GetPagesProject(ctx, projectName)
+				if err != nil {
+					logger.Error(err, "Failed to get existing project for adoption")
+					return r.updateStatusError(ctx, project, err)
+				}
+				result, err = apiResult.API.UpdatePagesProject(ctx, projectName, params)
+				if err != nil {
+					logger.Error(err, "Failed to update adopted project")
+					return r.updateStatusError(ctx, project, err)
+				}
+				r.Recorder.Event(project, corev1.EventTypeNormal, "Adopted",
+					fmt.Sprintf("Adopted existing Pages project '%s'", projectName))
+			} else {
+				logger.Error(err, "Failed to create Pages project")
+				return r.updateStatusError(ctx, project, err)
+			}
+		} else {
+			r.Recorder.Event(project, corev1.EventTypeNormal, "Created",
+				fmt.Sprintf("Pages project '%s' created in Cloudflare", projectName))
+		}
 	}
 
-	// Update status to Pending - actual sync happens via PagesSyncController
-	return r.updateStatusPending(ctx, project, credInfo.AccountID)
+	// Update status
+	return r.updateStatusReady(ctx, project, apiResult.AccountID, result.Subdomain)
 }
 
 // getProjectName returns the project name from spec or uses K8s resource name.
@@ -240,22 +249,22 @@ func (*PagesProjectReconciler) getProjectName(project *networkingv1alpha2.PagesP
 	return project.Name
 }
 
-// buildProjectConfig builds the Pages project configuration from the spec.
+// buildProjectParams builds the Cloudflare API parameters from the spec.
 //
 //nolint:revive // cognitive complexity is acceptable for building complex config
-func (r *PagesProjectReconciler) buildProjectConfig(project *networkingv1alpha2.PagesProject) pagessvc.PagesProjectConfig {
-	config := pagessvc.PagesProjectConfig{
+func (r *PagesProjectReconciler) buildProjectParams(project *networkingv1alpha2.PagesProject) cf.PagesProjectParams {
+	params := cf.PagesProjectParams{
 		Name:             r.getProjectName(project),
 		ProductionBranch: project.Spec.ProductionBranch,
 	}
 
 	// Convert source configuration
 	if project.Spec.Source != nil {
-		config.Source = &pagessvc.PagesSourceConfig{
+		params.Source = &cf.PagesSourceConfig{
 			Type: string(project.Spec.Source.Type),
 		}
 		if project.Spec.Source.GitHub != nil {
-			config.Source.GitHub = &pagessvc.PagesGitHubConfig{
+			params.Source.GitHub = &cf.PagesGitHubConfig{
 				Owner:                        project.Spec.Source.GitHub.Owner,
 				Repo:                         project.Spec.Source.GitHub.Repo,
 				ProductionDeploymentsEnabled: project.Spec.Source.GitHub.ProductionDeploymentsEnabled,
@@ -265,7 +274,7 @@ func (r *PagesProjectReconciler) buildProjectConfig(project *networkingv1alpha2.
 			}
 		}
 		if project.Spec.Source.GitLab != nil {
-			config.Source.GitLab = &pagessvc.PagesGitLabConfig{
+			params.Source.GitLab = &cf.PagesGitLabConfig{
 				Owner:                        project.Spec.Source.GitLab.Owner,
 				Repo:                         project.Spec.Source.GitLab.Repo,
 				ProductionDeploymentsEnabled: project.Spec.Source.GitLab.ProductionDeploymentsEnabled,
@@ -277,7 +286,7 @@ func (r *PagesProjectReconciler) buildProjectConfig(project *networkingv1alpha2.
 
 	// Convert build configuration
 	if project.Spec.BuildConfig != nil {
-		config.BuildConfig = &pagessvc.PagesBuildConfig{
+		params.BuildConfig = &cf.PagesBuildConfig{
 			BuildCommand:      project.Spec.BuildConfig.BuildCommand,
 			DestinationDir:    project.Spec.BuildConfig.DestinationDir,
 			RootDir:           project.Spec.BuildConfig.RootDir,
@@ -289,147 +298,125 @@ func (r *PagesProjectReconciler) buildProjectConfig(project *networkingv1alpha2.
 
 	// Convert deployment configurations
 	if project.Spec.DeploymentConfigs != nil {
-		config.DeploymentConfigs = &pagessvc.PagesDeploymentConfigs{}
+		params.DeploymentConfig = &cf.PagesDeploymentConfigs{}
 		if project.Spec.DeploymentConfigs.Preview != nil {
-			config.DeploymentConfigs.Preview = r.convertDeploymentConfig(project.Spec.DeploymentConfigs.Preview)
+			params.DeploymentConfig.Preview = r.convertDeploymentEnvConfig(project.Spec.DeploymentConfigs.Preview)
 		}
 		if project.Spec.DeploymentConfigs.Production != nil {
-			config.DeploymentConfigs.Production = r.convertDeploymentConfig(project.Spec.DeploymentConfigs.Production)
+			params.DeploymentConfig.Production = r.convertDeploymentEnvConfig(project.Spec.DeploymentConfigs.Production)
 		}
 	}
 
-	// Set adoption policy and deployment history limit
-	config.AdoptionPolicy = project.Spec.AdoptionPolicy
-	if project.Spec.DeploymentHistoryLimit != nil {
-		config.DeploymentHistoryLimit = *project.Spec.DeploymentHistoryLimit
-	}
-
-	// Enable Web Analytics (default true)
-	config.EnableWebAnalytics = project.Spec.EnableWebAnalytics
-
-	return config
+	return params
 }
 
-// convertDeploymentConfig converts a deployment environment configuration.
+// convertDeploymentEnvConfig converts a deployment environment configuration.
 //
 //nolint:revive // cognitive complexity is acceptable for this conversion function
-func (r *PagesProjectReconciler) convertDeploymentConfig(spec *networkingv1alpha2.PagesDeploymentConfig) *pagessvc.PagesDeploymentEnvConfig {
-	config := &pagessvc.PagesDeploymentEnvConfig{
-		CompatibilityDate:                spec.CompatibilityDate,
-		CompatibilityFlags:               spec.CompatibilityFlags,
-		UsageModel:                       spec.UsageModel,
-		FailOpen:                         spec.FailOpen,
-		AlwaysUseLatestCompatibilityDate: spec.AlwaysUseLatestCompatibilityDate,
+func (r *PagesProjectReconciler) convertDeploymentEnvConfig(spec *networkingv1alpha2.PagesDeploymentConfig) *cf.PagesDeploymentEnvConfig {
+	config := &cf.PagesDeploymentEnvConfig{
+		CompatibilityDate:       spec.CompatibilityDate,
+		CompatibilityFlags:      spec.CompatibilityFlags,
+		UsageModel:              spec.UsageModel,
+		FailOpen:                spec.FailOpen,
+		AlwaysUseLatestCompDate: spec.AlwaysUseLatestCompatibilityDate,
 	}
 
 	// Convert environment variables
 	if len(spec.EnvironmentVariables) > 0 {
-		config.EnvironmentVariables = make(map[string]pagessvc.PagesEnvVar)
+		config.EnvironmentVariables = make(map[string]cf.PagesEnvVar)
 		for name, envVar := range spec.EnvironmentVariables {
-			config.EnvironmentVariables[name] = pagessvc.PagesEnvVar{
+			config.EnvironmentVariables[name] = cf.PagesEnvVar{
 				Value: envVar.Value,
 				Type:  string(envVar.Type),
 			}
 		}
 	}
 
-	// Convert D1 bindings
+	// Convert D1 bindings (map: name -> databaseID)
 	if len(spec.D1Bindings) > 0 {
+		config.D1Bindings = make(map[string]string)
 		for _, b := range spec.D1Bindings {
-			config.D1Bindings = append(config.D1Bindings, pagessvc.PagesBinding{
-				Name: b.Name,
-				ID:   b.DatabaseID,
-			})
+			config.D1Bindings[b.Name] = b.DatabaseID
 		}
 	}
 
-	// Convert KV bindings
+	// Convert KV bindings (map: name -> namespaceID)
 	if len(spec.KVBindings) > 0 {
+		config.KVBindings = make(map[string]string)
 		for _, b := range spec.KVBindings {
-			config.KVBindings = append(config.KVBindings, pagessvc.PagesBinding{
-				Name: b.Name,
-				ID:   b.NamespaceID,
-			})
+			config.KVBindings[b.Name] = b.NamespaceID
 		}
 	}
 
-	// Convert R2 bindings
+	// Convert R2 bindings (map: name -> bucketName)
 	if len(spec.R2Bindings) > 0 {
+		config.R2Bindings = make(map[string]string)
 		for _, b := range spec.R2Bindings {
-			config.R2Bindings = append(config.R2Bindings, pagessvc.PagesBinding{
-				Name: b.Name,
-				ID:   b.BucketName,
-			})
+			config.R2Bindings[b.Name] = b.BucketName
 		}
 	}
 
-	// Convert service bindings
+	// Convert service bindings (map: name -> config)
 	if len(spec.ServiceBindings) > 0 {
+		config.ServiceBindings = make(map[string]cf.PagesServiceBindingConfig)
 		for _, b := range spec.ServiceBindings {
-			config.ServiceBindings = append(config.ServiceBindings, pagessvc.PagesServiceBinding{
-				Name:        b.Name,
+			config.ServiceBindings[b.Name] = cf.PagesServiceBindingConfig{
 				Service:     b.Service,
 				Environment: b.Environment,
-			})
+			}
 		}
 	}
 
-	// Convert Durable Object bindings
+	// Convert Durable Object bindings (map: name -> config)
 	if len(spec.DurableObjectBindings) > 0 {
+		config.DurableObjectBindings = make(map[string]cf.PagesDurableObjectBindingConfig)
 		for _, b := range spec.DurableObjectBindings {
-			config.DurableObjectBindings = append(config.DurableObjectBindings, pagessvc.PagesDurableObjectBinding{
-				Name:            b.Name,
+			config.DurableObjectBindings[b.Name] = cf.PagesDurableObjectBindingConfig{
 				ClassName:       b.ClassName,
 				ScriptName:      b.ScriptName,
 				EnvironmentName: b.EnvironmentName,
-			})
+			}
 		}
 	}
 
-	// Convert Queue bindings
+	// Convert Queue bindings (map: name -> queueName)
 	if len(spec.QueueBindings) > 0 {
+		config.QueueBindings = make(map[string]string)
 		for _, b := range spec.QueueBindings {
-			config.QueueBindings = append(config.QueueBindings, pagessvc.PagesBinding{
-				Name: b.Name,
-				ID:   b.QueueName,
-			})
+			config.QueueBindings[b.Name] = b.QueueName
 		}
 	}
 
-	// Convert AI bindings
+	// Convert AI bindings (slice of binding names)
 	if len(spec.AIBindings) > 0 {
-		for _, b := range spec.AIBindings {
-			config.AIBindings = append(config.AIBindings, b.Name)
+		config.AIBindings = make([]string, len(spec.AIBindings))
+		for i, b := range spec.AIBindings {
+			config.AIBindings[i] = b.Name
 		}
 	}
 
-	// Convert Vectorize bindings
+	// Convert Vectorize bindings (map: name -> indexName)
 	if len(spec.VectorizeBindings) > 0 {
+		config.VectorizeBindings = make(map[string]string)
 		for _, b := range spec.VectorizeBindings {
-			config.VectorizeBindings = append(config.VectorizeBindings, pagessvc.PagesBinding{
-				Name: b.Name,
-				ID:   b.IndexName,
-			})
+			config.VectorizeBindings[b.Name] = b.IndexName
 		}
 	}
 
-	// Convert Hyperdrive bindings
+	// Convert Hyperdrive bindings (map: name -> configID)
 	if len(spec.HyperdriveBindings) > 0 {
+		config.HyperdriveBindings = make(map[string]string)
 		for _, b := range spec.HyperdriveBindings {
-			config.HyperdriveBindings = append(config.HyperdriveBindings, pagessvc.PagesBinding{
-				Name: b.Name,
-				ID:   b.ID,
-			})
+			config.HyperdriveBindings[b.Name] = b.ID
 		}
 	}
 
-	// Convert mTLS certificates
+	// Convert mTLS certificates (map: name -> certificateID)
 	if len(spec.MTLSCertificates) > 0 {
+		config.MTLSCertificates = make(map[string]string)
 		for _, c := range spec.MTLSCertificates {
-			config.MTLSCertificates = append(config.MTLSCertificates, pagessvc.PagesBinding{
-				Name: c.Name,
-				ID:   c.CertificateID,
-			})
+			config.MTLSCertificates[c.Name] = c.CertificateID
 		}
 	}
 
@@ -465,40 +452,10 @@ func (r *PagesProjectReconciler) updateStatusError(
 	})
 
 	if updateErr != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
+		return common.NoRequeue(), fmt.Errorf("failed to update status: %w", updateErr)
 	}
 
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-}
-
-func (r *PagesProjectReconciler) updateStatusPending(
-	ctx context.Context,
-	project *networkingv1alpha2.PagesProject,
-	accountID string,
-) (ctrl.Result, error) {
-	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, project, func() {
-		if project.Status.AccountID == "" {
-			project.Status.AccountID = accountID
-		}
-		project.Status.ProjectID = r.getProjectName(project)
-		project.Status.State = networkingv1alpha2.PagesProjectStatePending
-		meta.SetStatusCondition(&project.Status.Conditions, metav1.Condition{
-			Type:               "Ready",
-			Status:             metav1.ConditionFalse,
-			ObservedGeneration: project.Generation,
-			Reason:             "Pending",
-			Message:            "Pages project configuration registered, waiting for sync",
-			LastTransitionTime: metav1.Now(),
-		})
-		project.Status.ObservedGeneration = project.Generation
-	})
-
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
-	}
-
-	// Requeue to check for sync completion
-	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	return common.RequeueShort(), nil
 }
 
 func (r *PagesProjectReconciler) updateStatusReady(
@@ -523,17 +480,17 @@ func (r *PagesProjectReconciler) updateStatusReady(
 	})
 
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
+		return common.NoRequeue(), fmt.Errorf("failed to update status: %w", err)
 	}
 
-	return ctrl.Result{}, nil
+	return common.NoRequeue(), nil
 }
 
 func (r *PagesProjectReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("pagesproject-controller")
 
-	// Initialize ProjectService
-	r.projectService = pagessvc.NewProjectService(mgr.GetClient())
+	// Initialize APIClientFactory
+	r.APIFactory = common.NewAPIClientFactory(mgr.GetClient(), ctrl.Log.WithName("pagesproject"))
 
 	// Initialize VersionManager
 	r.versionManager = NewVersionManager(

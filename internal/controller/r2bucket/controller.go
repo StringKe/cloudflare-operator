@@ -2,12 +2,12 @@
 // Copyright 2025-2026 The Cloudflare Operator Authors
 
 // Package r2bucket provides a controller for managing Cloudflare R2 storage buckets.
+// It directly calls Cloudflare API and writes status back to the CRD.
 package r2bucket
 
 import (
 	"context"
 	"fmt"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -26,22 +26,20 @@ import (
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
-	"github.com/StringKe/cloudflare-operator/internal/service"
-	r2svc "github.com/StringKe/cloudflare-operator/internal/service/r2"
+	"github.com/StringKe/cloudflare-operator/internal/controller/common"
 )
 
 const (
 	finalizerName = "cloudflare.com/r2-bucket-finalizer"
 )
 
-// Reconciler reconciles an R2Bucket object
+// Reconciler reconciles an R2Bucket object.
+// It directly calls Cloudflare API and writes status back to the CRD.
 type Reconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
-
-	// Services
-	bucketService *r2svc.BucketService
+	Scheme     *runtime.Scheme
+	Recorder   record.EventRecorder
+	APIFactory *common.APIClientFactory
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=r2buckets,verbs=get;list;watch;create;update;patch;delete
@@ -56,64 +54,39 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	bucket := &networkingv1alpha2.R2Bucket{}
 	if err := r.Get(ctx, req.NamespacedName, bucket); err != nil {
 		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, nil
+			return common.NoRequeue(), nil
 		}
-		logger.Error(err, "unable to fetch R2Bucket")
-		return ctrl.Result{}, err
-	}
-
-	// Resolve credentials and account ID
-	credRef, accountID, err := r.resolveCredentials(ctx, bucket)
-	if err != nil {
-		logger.Error(err, "Failed to resolve credentials")
-		return r.updateStatusError(ctx, bucket, err)
+		logger.Error(err, "Unable to fetch R2Bucket")
+		return common.NoRequeue(), err
 	}
 
 	// Handle deletion
-	// Following Unified Sync Architecture: only unregister from SyncState
-	// Sync Controller handles actual Cloudflare API deletion
 	if !bucket.DeletionTimestamp.IsZero() {
 		return r.handleDeletion(ctx, bucket)
 	}
 
-	// Add finalizer if not present
-	if !controllerutil.ContainsFinalizer(bucket, finalizerName) {
-		controllerutil.AddFinalizer(bucket, finalizerName)
-		if err := r.Update(ctx, bucket); err != nil {
-			return ctrl.Result{}, err
-		}
+	// Ensure finalizer
+	if added, err := controller.EnsureFinalizer(ctx, r.Client, bucket, finalizerName); err != nil {
+		return common.NoRequeue(), err
+	} else if added {
+		return ctrl.Result{Requeue: true}, nil
 	}
 
-	// Register R2 bucket configuration to SyncState
-	return r.registerBucket(ctx, bucket, accountID, credRef)
-}
-
-// resolveCredentials resolves the credentials reference and account ID.
-// Following Unified Sync Architecture, the Resource Controller only needs
-// credential metadata (accountID, credRef) - it does not create a Cloudflare API client.
-func (r *Reconciler) resolveCredentials(
-	ctx context.Context,
-	bucket *networkingv1alpha2.R2Bucket,
-) (credRef networkingv1alpha2.CredentialsReference, accountID string, err error) {
-	logger := log.FromContext(ctx)
-
-	// Resolve credentials using the unified controller helper
-	credInfo, err := controller.ResolveCredentialsFromRef(ctx, r.Client, logger, bucket.Spec.CredentialsRef)
+	// Get API client
+	apiResult, err := r.APIFactory.GetClient(ctx, common.APIClientOptions{
+		CredentialsRef: bucket.Spec.CredentialsRef,
+		Namespace:      bucket.Namespace,
+	})
 	if err != nil {
-		return networkingv1alpha2.CredentialsReference{}, "", fmt.Errorf("failed to resolve credentials: %w", err)
+		logger.Error(err, "Failed to get API client")
+		return r.updateStatusError(ctx, bucket, err)
 	}
 
-	if credInfo.AccountID == "" {
-		logger.V(1).Info("Account ID not available from credentials, will be resolved during sync")
-	}
-
-	return credInfo.CredentialsRef, credInfo.AccountID, nil
+	// Sync bucket to Cloudflare
+	return r.syncBucket(ctx, bucket, apiResult)
 }
 
 // handleDeletion handles the deletion of R2Bucket.
-// Following Unified Sync Architecture:
-// Resource Controller only unregisters from SyncState.
-// R2Bucket Sync Controller handles the actual Cloudflare API deletion.
 func (r *Reconciler) handleDeletion(
 	ctx context.Context,
 	bucket *networkingv1alpha2.R2Bucket,
@@ -121,47 +94,58 @@ func (r *Reconciler) handleDeletion(
 	logger := log.FromContext(ctx)
 
 	if !controllerutil.ContainsFinalizer(bucket, finalizerName) {
-		return ctrl.Result{}, nil
+		return common.NoRequeue(), nil
 	}
 
-	logger.Info("Unregistering R2Bucket from SyncState")
+	// Check deletion policy
+	if bucket.Spec.DeletionPolicy == "Orphan" {
+		logger.Info("Orphan deletion policy, skipping Cloudflare deletion")
+	} else {
+		// Get API client
+		apiResult, err := r.APIFactory.GetClient(ctx, common.APIClientOptions{
+			CredentialsRef: bucket.Spec.CredentialsRef,
+			Namespace:      bucket.Namespace,
+		})
+		if err != nil {
+			logger.Error(err, "Failed to get API client for deletion")
+			// Continue with finalizer removal
+		} else if bucket.Status.BucketName != "" {
+			// Delete bucket from Cloudflare
+			logger.Info("Deleting R2 bucket from Cloudflare",
+				"bucketName", bucket.Status.BucketName)
 
-	// Unregister from SyncState - this triggers Sync Controller to delete from Cloudflare
-	// Following: Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
-	source := service.Source{
-		Kind:      "R2Bucket",
-		Namespace: bucket.Namespace,
-		Name:      bucket.Name,
+			if err := apiResult.API.DeleteR2Bucket(ctx, bucket.Status.BucketName); err != nil {
+				if !cf.IsNotFoundError(err) {
+					logger.Error(err, "Failed to delete R2 bucket from Cloudflare")
+					r.Recorder.Event(bucket, corev1.EventTypeWarning, "DeleteFailed",
+						fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
+					return common.RequeueShort(), err
+				}
+				logger.Info("R2 bucket not found in Cloudflare, may have been already deleted")
+			}
+
+			r.Recorder.Event(bucket, corev1.EventTypeNormal, "Deleted",
+				"R2 bucket deleted from Cloudflare")
+		}
 	}
-
-	if err := r.bucketService.Unregister(ctx, bucket.Status.BucketName, source); err != nil {
-		logger.Error(err, "Failed to unregister R2 bucket from SyncState")
-		r.Recorder.Event(bucket, corev1.EventTypeWarning, "UnregisterFailed",
-			fmt.Sprintf("Failed to unregister from SyncState: %s", err.Error()))
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-	}
-
-	r.Recorder.Event(bucket, corev1.EventTypeNormal, "Unregistered",
-		"Unregistered from SyncState, Sync Controller will delete from Cloudflare")
 
 	// Remove finalizer
 	if err := controller.UpdateWithConflictRetry(ctx, r.Client, bucket, func() {
 		controllerutil.RemoveFinalizer(bucket, finalizerName)
 	}); err != nil {
-		return ctrl.Result{}, err
+		logger.Error(err, "Failed to remove finalizer")
+		return common.NoRequeue(), err
 	}
-
 	r.Recorder.Event(bucket, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
-	return ctrl.Result{}, nil
+
+	return common.NoRequeue(), nil
 }
 
-// registerBucket registers the R2 bucket configuration to SyncState.
-// The actual sync to Cloudflare is handled by R2BucketSyncController.
-func (r *Reconciler) registerBucket(
+// syncBucket syncs the R2 bucket to Cloudflare.
+func (r *Reconciler) syncBucket(
 	ctx context.Context,
 	bucket *networkingv1alpha2.R2Bucket,
-	accountID string,
-	credRef networkingv1alpha2.CredentialsReference,
+	apiResult *common.APIClientResult,
 ) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
@@ -171,53 +155,57 @@ func (r *Reconciler) registerBucket(
 		bucketName = bucket.Name
 	}
 
-	// Build bucket configuration
-	config := r2svc.R2BucketConfig{
+	// Check if bucket exists
+	existing, err := apiResult.API.GetR2Bucket(ctx, bucketName)
+	if err != nil {
+		if !cf.IsNotFoundError(err) {
+			logger.Error(err, "Failed to get R2 bucket from Cloudflare")
+			return r.updateStatusError(ctx, bucket, err)
+		}
+		// Bucket doesn't exist, create it
+		existing = nil
+	}
+
+	if existing != nil {
+		// Bucket exists, update status
+		logger.V(1).Info("R2 bucket already exists in Cloudflare",
+			"bucketName", bucketName,
+			"location", existing.Location)
+		return r.updateStatusReady(ctx, bucket, apiResult.AccountID, existing)
+	}
+
+	// Create new bucket
+	logger.Info("Creating R2 bucket in Cloudflare",
+		"bucketName", bucketName,
+		"locationHint", bucket.Spec.LocationHint)
+
+	params := cf.R2BucketParams{
 		Name:         bucketName,
 		LocationHint: string(bucket.Spec.LocationHint),
 	}
 
-	// Build CORS rules
-	if len(bucket.Spec.CORS) > 0 {
-		config.CORS = bucket.Spec.CORS
-	}
-
-	// Build lifecycle rules
-	if len(bucket.Spec.Lifecycle) > 0 {
-		config.Lifecycle = &r2svc.R2LifecycleConfig{
-			Rules:          bucket.Spec.Lifecycle,
-			DeletionPolicy: bucket.Spec.DeletionPolicy,
+	result, err := apiResult.API.CreateR2Bucket(ctx, params)
+	if err != nil {
+		// Check if it's a conflict (bucket already exists)
+		if cf.IsConflictError(err) {
+			// Try to get the existing bucket
+			existing, getErr := apiResult.API.GetR2Bucket(ctx, bucketName)
+			if getErr == nil && existing != nil {
+				logger.Info("R2 bucket already exists, adopting it",
+					"bucketName", bucketName)
+				r.Recorder.Event(bucket, corev1.EventTypeNormal, "Adopted",
+					fmt.Sprintf("Adopted existing R2 bucket '%s'", bucketName))
+				return r.updateStatusReady(ctx, bucket, apiResult.AccountID, existing)
+			}
 		}
-	}
-
-	// Create source reference
-	source := service.Source{
-		Kind:      "R2Bucket",
-		Namespace: bucket.Namespace,
-		Name:      bucket.Name,
-	}
-
-	// Register to SyncState
-	opts := r2svc.R2BucketRegisterOptions{
-		AccountID:      accountID,
-		BucketName:     bucket.Status.BucketName, // May be empty for new buckets
-		Source:         source,
-		Config:         config,
-		CredentialsRef: credRef,
-	}
-
-	if err := r.bucketService.Register(ctx, opts); err != nil {
-		logger.Error(err, "Failed to register R2 bucket configuration")
-		r.Recorder.Event(bucket, corev1.EventTypeWarning, "RegisterFailed",
-			fmt.Sprintf("Failed to register R2 bucket: %s", err.Error()))
+		logger.Error(err, "Failed to create R2 bucket")
 		return r.updateStatusError(ctx, bucket, err)
 	}
 
-	r.Recorder.Event(bucket, corev1.EventTypeNormal, "Registered",
-		fmt.Sprintf("Registered R2 Bucket '%s' configuration to SyncState", bucketName))
+	r.Recorder.Event(bucket, corev1.EventTypeNormal, "Created",
+		fmt.Sprintf("R2 bucket '%s' created in Cloudflare", bucketName))
 
-	// Update status to Pending - actual sync happens via R2BucketSyncController
-	return r.updateStatusPending(ctx, bucket)
+	return r.updateStatusReady(ctx, bucket, apiResult.AccountID, result)
 }
 
 func (r *Reconciler) updateStatusError(
@@ -232,7 +220,7 @@ func (r *Reconciler) updateStatusError(
 			Type:               "Ready",
 			Status:             metav1.ConditionFalse,
 			ObservedGeneration: bucket.Generation,
-			Reason:             "ReconcileError",
+			Reason:             "Error",
 			Message:            cf.SanitizeErrorMessage(err),
 			LastTransitionTime: metav1.Now(),
 		})
@@ -240,41 +228,42 @@ func (r *Reconciler) updateStatusError(
 	})
 
 	if updateErr != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
+		return common.NoRequeue(), fmt.Errorf("failed to update status: %w", updateErr)
 	}
 
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	return common.RequeueShort(), nil
 }
 
-func (r *Reconciler) updateStatusPending(
+func (r *Reconciler) updateStatusReady(
 	ctx context.Context,
 	bucket *networkingv1alpha2.R2Bucket,
+	_ string, // accountID - not stored in status
+	result *cf.R2BucketResult,
 ) (ctrl.Result, error) {
 	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, bucket, func() {
-		bucket.Status.State = networkingv1alpha2.R2BucketStateCreating
-		bucket.Status.Message = "R2 bucket configuration registered, waiting for sync"
+		bucket.Status.BucketName = result.Name
+		bucket.Status.Location = result.Location
+		bucket.Status.State = networkingv1alpha2.R2BucketStateReady
+		bucket.Status.Message = ""
 		meta.SetStatusCondition(&bucket.Status.Conditions, metav1.Condition{
 			Type:               "Ready",
-			Status:             metav1.ConditionFalse,
+			Status:             metav1.ConditionTrue,
 			ObservedGeneration: bucket.Generation,
-			Reason:             "Pending",
-			Message:            "R2 bucket configuration registered, waiting for sync",
+			Reason:             "Synced",
+			Message:            "R2 bucket synced to Cloudflare",
 			LastTransitionTime: metav1.Now(),
 		})
 		bucket.Status.ObservedGeneration = bucket.Generation
 	})
 
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
+		return common.NoRequeue(), fmt.Errorf("failed to update status: %w", err)
 	}
 
-	// Requeue to check for sync completion
-	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	return common.NoRequeue(), nil
 }
 
 // findBucketsForCredentials returns R2Buckets that reference the given credentials
-//
-//nolint:revive // cognitive complexity is acceptable for watch handler
 func (r *Reconciler) findBucketsForCredentials(ctx context.Context, obj client.Object) []reconcile.Request {
 	creds, ok := obj.(*networkingv1alpha2.CloudflareCredentials)
 	if !ok {
@@ -310,52 +299,17 @@ func (r *Reconciler) findBucketsForCredentials(ctx context.Context, obj client.O
 	return requests
 }
 
-// findBucketsForSyncState returns R2Buckets that are sources for the given SyncState
-func (*Reconciler) findBucketsForSyncState(ctx context.Context, obj client.Object) []reconcile.Request {
-	logger := log.FromContext(ctx)
-
-	syncState, ok := obj.(*networkingv1alpha2.CloudflareSyncState)
-	if !ok {
-		return nil
-	}
-
-	// Only process R2Bucket type SyncStates
-	if syncState.Spec.ResourceType != networkingv1alpha2.SyncResourceR2Bucket {
-		return nil
-	}
-
-	var requests []reconcile.Request
-	for _, source := range syncState.Spec.Sources {
-		if source.Ref.Kind == "R2Bucket" {
-			requests = append(requests, reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Name:      source.Ref.Name,
-					Namespace: source.Ref.Namespace,
-				},
-			})
-		}
-	}
-
-	logger.V(1).Info("Found R2Buckets for SyncState update",
-		"syncState", syncState.Name,
-		"bucketCount", len(requests))
-
-	return requests
-}
-
 // SetupWithManager sets up the controller with the Manager.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("r2bucket-controller")
 
-	// Initialize BucketService
-	r.bucketService = r2svc.NewBucketService(mgr.GetClient())
+	// Initialize APIClientFactory
+	r.APIFactory = common.NewAPIClientFactory(mgr.GetClient(), ctrl.Log.WithName("r2bucket"))
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.R2Bucket{}).
 		Watches(&networkingv1alpha2.CloudflareCredentials{},
 			handler.EnqueueRequestsFromMapFunc(r.findBucketsForCredentials)).
-		Watches(&networkingv1alpha2.CloudflareSyncState{},
-			handler.EnqueueRequestsFromMapFunc(r.findBucketsForSyncState)).
 		Named("r2bucket").
 		Complete(r)
 }

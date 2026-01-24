@@ -1,16 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2025-2026 The Cloudflare Operator Authors
 
-// Package accessapplication provides the L2 controller for AccessApplication CRD.
-// This controller handles the reconciliation of AccessApplication resources,
-// resolving policy references and registering configurations with the Core Service.
+// Package accessapplication provides the controller for AccessApplication CRD.
+// It directly manages Access Applications in Cloudflare Zero Trust.
 package accessapplication
 
 import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -29,30 +27,24 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
+	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
-	"github.com/StringKe/cloudflare-operator/internal/service"
-	accesssvc "github.com/StringKe/cloudflare-operator/internal/service/access"
+	"github.com/StringKe/cloudflare-operator/internal/controller/common"
 )
 
 const (
 	FinalizerName = "cloudflare.com/accessapplication-finalizer"
-	// StateActive indicates the resource is actively synced with Cloudflare
+	// StateActive indicates the resource is actively synced with Cloudflare.
 	StateActive = "active"
 )
 
-// Reconciler reconciles an AccessApplication object
+// Reconciler reconciles an AccessApplication object.
+// It directly calls Cloudflare API and writes status back to the CRD.
 type Reconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
-
-	// Service layer
-	appService *accesssvc.ApplicationService
-
-	// Runtime state
-	ctx context.Context
-	log logr.Logger
-	app *networkingv1alpha2.AccessApplication
+	Scheme     *runtime.Scheme
+	Recorder   record.EventRecorder
+	APIFactory *common.APIClientFactory
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=accessapplications,verbs=get;list;watch;create;update;patch;delete
@@ -61,138 +53,183 @@ type Reconciler struct {
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
-// Reconcile implements the reconciliation loop for AccessApplication resources.
-//
-//nolint:revive // cognitive complexity is acceptable for this controller reconciliation loop
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	r.ctx = ctx
-	r.log = ctrllog.FromContext(ctx)
+	logger := ctrllog.FromContext(ctx)
 
 	// Fetch the AccessApplication instance
-	r.app = &networkingv1alpha2.AccessApplication{}
-	if err := r.Get(ctx, req.NamespacedName, r.app); err != nil {
+	app := &networkingv1alpha2.AccessApplication{}
+	if err := r.Get(ctx, req.NamespacedName, app); err != nil {
 		if apierrors.IsNotFound(err) {
-			r.log.Info("AccessApplication deleted, nothing to do")
-			return ctrl.Result{}, nil
+			return common.NoRequeue(), nil
 		}
-		r.log.Error(err, "unable to fetch AccessApplication")
-		return ctrl.Result{}, err
+		return common.NoRequeue(), err
 	}
 
-	// Check if AccessApplication is being deleted
-	// Following Unified Sync Architecture: only unregister from SyncState
-	// Sync Controller handles actual Cloudflare API deletion
-	if r.app.GetDeletionTimestamp() != nil {
-		return r.handleDeletion()
+	// Handle deletion
+	if !app.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, logger, app)
 	}
 
-	// Add finalizer if not present
-	if !controllerutil.ContainsFinalizer(r.app, FinalizerName) {
-		controllerutil.AddFinalizer(r.app, FinalizerName)
-		if err := r.Update(ctx, r.app); err != nil {
-			r.log.Error(err, "failed to add finalizer")
-			return ctrl.Result{}, err
-		}
-		r.Recorder.Event(r.app, corev1.EventTypeNormal, controller.EventReasonFinalizerSet, "Finalizer added")
+	// Ensure finalizer
+	if added, err := controller.EnsureFinalizer(ctx, r.Client, app, FinalizerName); err != nil {
+		return common.NoRequeue(), err
+	} else if added {
+		return ctrl.Result{Requeue: true}, nil
 	}
 
-	// Reconcile the AccessApplication through service layer
-	result, err := r.reconcileApplication()
+	// Get API client
+	apiResult, err := r.APIFactory.GetClient(ctx, common.APIClientOptions{
+		CloudflareDetails: &app.Spec.Cloudflare,
+		Namespace:         controller.OperatorNamespace, // AccessApplication is cluster-scoped
+		StatusAccountID:   app.Status.AccountID,
+	})
 	if err != nil {
-		r.log.Error(err, "failed to reconcile AccessApplication")
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+		logger.Error(err, "Failed to get API client")
+		return r.setErrorStatus(ctx, app, err)
 	}
 
-	return result, nil
-}
-
-// resolveCredentials resolves the credentials reference and returns the credentials info.
-// Following Unified Sync Architecture, the Resource Controller only needs
-// credential metadata (accountID, credRef) - it does not create a Cloudflare API client.
-func (r *Reconciler) resolveCredentials() (*controller.CredentialsInfo, error) {
-	// AccessApplication is cluster-scoped, use operator namespace for legacy inline secrets
-	info, err := controller.ResolveCredentialsForService(
-		r.ctx,
-		r.Client,
-		r.log,
-		r.app.Spec.Cloudflare,
-		controller.OperatorNamespace,
-		r.app.Status.AccountID,
-	)
-	if err != nil {
-		r.log.Error(err, "failed to resolve credentials")
-		r.Recorder.Event(r.app, corev1.EventTypeWarning, controller.EventReasonAPIError,
-			"Failed to resolve credentials: "+err.Error())
-		return nil, err
-	}
-
-	return info, nil
+	// Reconcile the application
+	return r.reconcileApplication(ctx, logger, app, apiResult)
 }
 
 // handleDeletion handles the deletion of an AccessApplication.
-// Following Unified Sync Architecture:
-// Resource Controller only unregisters from SyncState.
-// AccessApplication Sync Controller handles the actual Cloudflare API deletion.
-func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
-	if !controllerutil.ContainsFinalizer(r.app, FinalizerName) {
-		return ctrl.Result{}, nil
+func (r *Reconciler) handleDeletion(
+	ctx context.Context,
+	logger logr.Logger,
+	app *networkingv1alpha2.AccessApplication,
+) (ctrl.Result, error) {
+	if !controllerutil.ContainsFinalizer(app, FinalizerName) {
+		return common.NoRequeue(), nil
 	}
 
-	r.log.Info("Unregistering AccessApplication from SyncState")
+	// Get API client for deletion
+	apiResult, err := r.APIFactory.GetClient(ctx, common.APIClientOptions{
+		CloudflareDetails: &app.Spec.Cloudflare,
+		Namespace:         controller.OperatorNamespace,
+		StatusAccountID:   app.Status.AccountID,
+	})
+	if err != nil {
+		logger.Error(err, "Failed to get API client for deletion")
+		// Continue with finalizer removal
+	} else if app.Status.ApplicationID != "" {
+		// Delete from Cloudflare
+		logger.Info("Deleting AccessApplication from Cloudflare",
+			"applicationID", app.Status.ApplicationID)
 
-	// Get Application ID from status
-	applicationID := r.app.Status.ApplicationID
+		if err := apiResult.API.DeleteAccessApplication(ctx, app.Status.ApplicationID); err != nil {
+			if !cf.IsNotFoundError(err) {
+				logger.Error(err, "Failed to delete AccessApplication from Cloudflare")
+				r.Recorder.Event(app, corev1.EventTypeWarning, "DeleteFailed",
+					fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
+				return common.RequeueShort(), err
+			}
+			logger.Info("AccessApplication not found in Cloudflare, may have been already deleted")
+		}
 
-	// Unregister from SyncState - this triggers Sync Controller to delete from Cloudflare
-	// Following: Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
-	source := service.Source{
-		Kind: "AccessApplication",
-		Name: r.app.Name,
+		r.Recorder.Event(app, corev1.EventTypeNormal, "Deleted",
+			"AccessApplication deleted from Cloudflare")
 	}
 
-	if err := r.appService.Unregister(r.ctx, applicationID, source); err != nil {
-		r.log.Error(err, "failed to unregister from SyncState")
-		r.Recorder.Event(r.app, corev1.EventTypeWarning, "UnregisterFailed",
-			fmt.Sprintf("Failed to unregister from SyncState: %s", err.Error()))
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-	}
-
-	r.Recorder.Event(r.app, corev1.EventTypeNormal, "Unregistered",
-		"Unregistered from SyncState, Sync Controller will delete from Cloudflare")
-
-	// Remove finalizer with retry logic to handle conflicts
-	if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.app, func() {
-		controllerutil.RemoveFinalizer(r.app, FinalizerName)
+	// Remove finalizer
+	if err := controller.UpdateWithConflictRetry(ctx, r.Client, app, func() {
+		controllerutil.RemoveFinalizer(app, FinalizerName)
 	}); err != nil {
-		r.log.Error(err, "failed to remove finalizer")
-		return ctrl.Result{}, err
+		logger.Error(err, "Failed to remove finalizer")
+		return common.NoRequeue(), err
 	}
-	r.Recorder.Event(r.app, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
+	r.Recorder.Event(app, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
 
-	return ctrl.Result{}, nil
+	return common.NoRequeue(), nil
 }
 
-// reconcileApplication ensures the AccessApplication configuration is registered with the service layer.
-// Following Unified Sync Architecture:
-// Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
-//
-//nolint:revive // cognitive complexity is acceptable for this reconciliation logic
-func (r *Reconciler) reconcileApplication() (ctrl.Result, error) {
-	appName := r.app.GetAccessApplicationName()
-
-	// Resolve credentials (without creating API client)
-	credInfo, err := r.resolveCredentials()
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("resolve credentials: %w", err)
-	}
+// reconcileApplication ensures the AccessApplication is synced with Cloudflare.
+func (r *Reconciler) reconcileApplication(
+	ctx context.Context,
+	logger logr.Logger,
+	app *networkingv1alpha2.AccessApplication,
+	apiResult *common.APIClientResult,
+) (ctrl.Result, error) {
+	appName := app.GetAccessApplicationName()
 
 	// Resolve IdP references
-	allowedIdps := make([]string, 0, len(r.app.Spec.AllowedIdps)+len(r.app.Spec.AllowedIdpRefs))
-	allowedIdps = append(allowedIdps, r.app.Spec.AllowedIdps...)
-	for _, ref := range r.app.Spec.AllowedIdpRefs {
+	allowedIdps := r.resolveAllowedIdps(ctx, logger, app)
+
+	// Build API parameters
+	params := r.buildAPIParams(app, appName, allowedIdps)
+
+	// Check if application exists
+	var result *cf.AccessApplicationResult
+	if app.Status.ApplicationID != "" {
+		// Try to get existing application
+		existing, err := apiResult.API.GetAccessApplication(ctx, app.Status.ApplicationID)
+		if err != nil {
+			if cf.IsNotFoundError(err) {
+				// Application was deleted externally, create new one
+				logger.Info("AccessApplication not found in Cloudflare, creating new one")
+				result, err = apiResult.API.CreateAccessApplication(ctx, params)
+				if err != nil {
+					logger.Error(err, "Failed to create AccessApplication")
+					return r.setErrorStatus(ctx, app, err)
+				}
+				r.Recorder.Event(app, corev1.EventTypeNormal, "Created",
+					fmt.Sprintf("AccessApplication '%s' created in Cloudflare", appName))
+			} else {
+				logger.Error(err, "Failed to get AccessApplication from Cloudflare")
+				return r.setErrorStatus(ctx, app, err)
+			}
+		} else {
+			// Update existing application
+			result, err = apiResult.API.UpdateAccessApplication(ctx, app.Status.ApplicationID, params)
+			if err != nil {
+				logger.Error(err, "Failed to update AccessApplication")
+				return r.setErrorStatus(ctx, app, err)
+			}
+			logger.V(1).Info("AccessApplication updated in Cloudflare",
+				"applicationID", existing.ID)
+		}
+	} else {
+		// Try to find existing by name first
+		existing, err := apiResult.API.ListAccessApplicationsByName(ctx, appName)
+		if err == nil && existing != nil {
+			// Found existing, adopt it
+			logger.Info("Found existing AccessApplication in Cloudflare, adopting",
+				"applicationID", existing.ID, "name", appName)
+			result, err = apiResult.API.UpdateAccessApplication(ctx, existing.ID, params)
+			if err != nil {
+				logger.Error(err, "Failed to update adopted AccessApplication")
+				return r.setErrorStatus(ctx, app, err)
+			}
+			r.Recorder.Event(app, corev1.EventTypeNormal, "Adopted",
+				fmt.Sprintf("Adopted existing AccessApplication '%s' (ID: %s)", appName, existing.ID))
+		} else {
+			// Create new application
+			result, err = apiResult.API.CreateAccessApplication(ctx, params)
+			if err != nil {
+				logger.Error(err, "Failed to create AccessApplication")
+				return r.setErrorStatus(ctx, app, err)
+			}
+			r.Recorder.Event(app, corev1.EventTypeNormal, "Created",
+				fmt.Sprintf("AccessApplication '%s' created in Cloudflare", appName))
+		}
+	}
+
+	// Update status with success
+	return r.setSuccessStatus(ctx, app, apiResult.AccountID, result)
+}
+
+// resolveAllowedIdps resolves the allowed IdP IDs from both direct IDs and references.
+func (r *Reconciler) resolveAllowedIdps(
+	ctx context.Context,
+	logger logr.Logger,
+	app *networkingv1alpha2.AccessApplication,
+) []string {
+	allowedIdps := make([]string, 0, len(app.Spec.AllowedIdps)+len(app.Spec.AllowedIdpRefs))
+	allowedIdps = append(allowedIdps, app.Spec.AllowedIdps...)
+
+	for _, ref := range app.Spec.AllowedIdpRefs {
 		idp := &networkingv1alpha2.AccessIdentityProvider{}
-		if err := r.Get(r.ctx, apitypes.NamespacedName{Name: ref.Name}, idp); err != nil {
-			r.log.Error(err, "failed to get AccessIdentityProvider", "name", ref.Name)
+		if err := r.Get(ctx, apitypes.NamespacedName{Name: ref.Name}, idp); err != nil {
+			logger.Error(err, "Failed to get AccessIdentityProvider", "name", ref.Name)
 			continue
 		}
 		if idp.Status.ProviderID != "" {
@@ -200,251 +237,315 @@ func (r *Reconciler) reconcileApplication() (ctrl.Result, error) {
 		}
 	}
 
-	// Resolve policy references
-	policies, err := r.resolvePolicies()
-	if err != nil {
-		r.log.Error(err, "failed to resolve policies")
-		// Continue with empty policies, they will be retried
-	}
-
-	// Build the configuration
-	config := accesssvc.AccessApplicationConfig{
-		Name:                     appName,
-		Domain:                   r.app.Spec.Domain,
-		SelfHostedDomains:        r.app.Spec.SelfHostedDomains,
-		Destinations:             r.app.Spec.Destinations,
-		DomainType:               r.app.Spec.DomainType,
-		PrivateAddress:           r.app.Spec.PrivateAddress,
-		Type:                     r.app.Spec.Type,
-		SessionDuration:          r.app.Spec.SessionDuration,
-		AllowedIdps:              allowedIdps,
-		AutoRedirectToIdentity:   r.app.Spec.AutoRedirectToIdentity,
-		EnableBindingCookie:      r.app.Spec.EnableBindingCookie,
-		HTTPOnlyCookieAttribute:  r.app.Spec.HttpOnlyCookieAttribute,
-		PathCookieAttribute:      r.app.Spec.PathCookieAttribute,
-		SameSiteCookieAttribute:  r.app.Spec.SameSiteCookieAttribute,
-		LogoURL:                  r.app.Spec.LogoURL,
-		SkipInterstitial:         r.app.Spec.SkipInterstitial,
-		OptionsPreflightBypass:   r.app.Spec.OptionsPreflightBypass,
-		AppLauncherVisible:       r.app.Spec.AppLauncherVisible,
-		ServiceAuth401Redirect:   r.app.Spec.ServiceAuth401Redirect,
-		CustomDenyMessage:        r.app.Spec.CustomDenyMessage,
-		CustomDenyURL:            r.app.Spec.CustomDenyURL,
-		CustomNonIdentityDenyURL: r.app.Spec.CustomNonIdentityDenyURL,
-		AllowAuthenticateViaWarp: r.app.Spec.AllowAuthenticateViaWarp,
-		Tags:                     r.app.Spec.Tags,
-		CustomPages:              r.app.Spec.CustomPages,
-		GatewayRules:             r.app.Spec.GatewayRules,
-		CorsHeaders:              r.app.Spec.CorsHeaders,
-		SaasApp:                  r.app.Spec.SaasApp,
-		SCIMConfig:               r.app.Spec.SCIMConfig,
-		AppLauncherCustomization: r.app.Spec.AppLauncherCustomization,
-		TargetContexts:           r.app.Spec.TargetContexts,
-		Policies:                 policies,
-	}
-
-	// Build source reference
-	source := service.Source{
-		Kind: "AccessApplication",
-		Name: r.app.Name,
-	}
-
-	// Register with service using credentials info
-	opts := accesssvc.AccessApplicationRegisterOptions{
-		AccountID:      credInfo.AccountID,
-		ApplicationID:  r.app.Status.ApplicationID,
-		Source:         source,
-		Config:         config,
-		CredentialsRef: credInfo.CredentialsRef,
-	}
-
-	if err := r.appService.Register(r.ctx, opts); err != nil {
-		r.log.Error(err, "failed to register AccessApplication configuration")
-		r.setCondition(metav1.ConditionFalse, controller.EventReasonCreateFailed, err.Error())
-		r.Recorder.Event(r.app, corev1.EventTypeWarning, controller.EventReasonCreateFailed, err.Error())
-		return ctrl.Result{}, err
-	}
-
-	// Check if already synced (SyncState may have been created and synced in a previous reconcile)
-	syncStatus, err := r.appService.GetSyncStatus(r.ctx, source, r.app.Status.ApplicationID)
-	if err != nil {
-		r.log.Error(err, "failed to get sync status")
-		if err := r.updateStatusPending(credInfo.AccountID); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-
-	if syncStatus != nil && syncStatus.IsSynced && syncStatus.ApplicationID != "" {
-		// Already synced, update status to Ready
-		if err := r.updateStatusReady(credInfo.AccountID, syncStatus.ApplicationID); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{}, nil
-	}
-
-	// Update status to Pending if not already synced
-	if err := r.updateStatusPending(credInfo.AccountID); err != nil {
-		return ctrl.Result{}, err
-	}
-	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	return allowedIdps
 }
 
-// resolvePolicies converts policy references to AccessPolicyConfig.
-// Following Unified Sync Architecture: L2 Controller passes reference info to L3 Service,
-// and L5 Sync Controller resolves actual Group IDs via Cloudflare API.
-//
-// Supports two modes:
-// 1. Inline Rules Mode: When include/exclude/require rules are specified directly
-// 2. Group Reference Mode: When referencing an AccessGroup via name/groupId/cloudflareGroupName
-//
-//nolint:revive,unparam // cognitive-complexity: Policy resolution inherently handles multiple modes and error paths; error kept for future use
-func (r *Reconciler) resolvePolicies() ([]accesssvc.AccessPolicyConfig, error) {
-	if len(r.app.Spec.Policies) == 0 {
-		return nil, nil
+// buildAPIParams builds the Cloudflare API parameters from the spec.
+func (r *Reconciler) buildAPIParams(
+	app *networkingv1alpha2.AccessApplication,
+	appName string,
+	allowedIdps []string,
+) cf.AccessApplicationParams {
+	params := cf.AccessApplicationParams{
+		Name:                     appName,
+		Domain:                   app.Spec.Domain,
+		SelfHostedDomains:        app.Spec.SelfHostedDomains,
+		DomainType:               app.Spec.DomainType,
+		PrivateAddress:           app.Spec.PrivateAddress,
+		Type:                     app.Spec.Type,
+		SessionDuration:          app.Spec.SessionDuration,
+		AllowedIdps:              allowedIdps,
+		AutoRedirectToIdentity:   &app.Spec.AutoRedirectToIdentity,
+		EnableBindingCookie:      app.Spec.EnableBindingCookie,
+		HTTPOnlyCookieAttribute:  app.Spec.HttpOnlyCookieAttribute,
+		PathCookieAttribute:      app.Spec.PathCookieAttribute,
+		SameSiteCookieAttribute:  app.Spec.SameSiteCookieAttribute,
+		LogoURL:                  app.Spec.LogoURL,
+		SkipInterstitial:         app.Spec.SkipInterstitial,
+		OptionsPreflightBypass:   app.Spec.OptionsPreflightBypass,
+		AppLauncherVisible:       app.Spec.AppLauncherVisible,
+		ServiceAuth401Redirect:   app.Spec.ServiceAuth401Redirect,
+		CustomDenyMessage:        app.Spec.CustomDenyMessage,
+		CustomDenyURL:            app.Spec.CustomDenyURL,
+		CustomNonIdentityDenyURL: app.Spec.CustomNonIdentityDenyURL,
+		AllowAuthenticateViaWarp: app.Spec.AllowAuthenticateViaWarp,
+		Tags:                     app.Spec.Tags,
+		CustomPages:              app.Spec.CustomPages,
+		GatewayRules:             app.Spec.GatewayRules,
 	}
 
-	policies := make([]accesssvc.AccessPolicyConfig, 0, len(r.app.Spec.Policies))
-
-	for i, policyRef := range r.app.Spec.Policies {
-		precedence := policyRef.Precedence
-		if precedence == 0 {
-			precedence = i + 1 // Auto-assign precedence based on order
-		}
-
-		decision := policyRef.Decision
-		if decision == "" {
-			decision = "allow"
-		}
-
-		policyConfig := accesssvc.AccessPolicyConfig{
-			Decision:        decision,
-			Precedence:      precedence,
-			PolicyName:      policyRef.PolicyName,
-			SessionDuration: policyRef.SessionDuration,
-		}
-
-		// Check if using inline rules mode (include/exclude/require specified directly)
-		hasInlineRules := len(policyRef.Include) > 0 || len(policyRef.Exclude) > 0 || len(policyRef.Require) > 0
-
-		if hasInlineRules {
-			// Inline Rules Mode - pass rules directly to L5 Sync Controller
-			policyConfig.Include = policyRef.Include
-			policyConfig.Exclude = policyRef.Exclude
-			policyConfig.Require = policyRef.Require
-
-			r.log.V(1).Info("Using inline rules mode for policy",
-				"policyIndex", i, "precedence", precedence,
-				"includeCount", len(policyRef.Include),
-				"excludeCount", len(policyRef.Exclude),
-				"requireCount", len(policyRef.Require))
-		} else {
-			// Group Reference Mode - set reference fields for L5 to resolve
-			switch {
-			case policyRef.GroupID != "":
-				// Direct Cloudflare group ID reference - will be validated in L5
-				policyConfig.CloudflareGroupID = policyRef.GroupID
-			case policyRef.CloudflareGroupName != "":
-				// Cloudflare group name reference - will be looked up in L5
-				policyConfig.CloudflareGroupName = policyRef.CloudflareGroupName
-			case policyRef.Name != "":
-				// K8s AccessGroup reference - resolve now to get K8s resource status
-				accessGroup := &networkingv1alpha2.AccessGroup{}
-				if err := r.Get(r.ctx, apitypes.NamespacedName{Name: policyRef.Name}, accessGroup); err != nil {
-					if apierrors.IsNotFound(err) {
-						r.log.Error(err, "Kubernetes AccessGroup resource not found",
-							"policyIndex", i, "accessGroupName", policyRef.Name)
-						r.Recorder.Event(r.app, corev1.EventTypeWarning, "PolicyResolutionFailed",
-							fmt.Sprintf("AccessGroup %s not found for policy at precedence %d", policyRef.Name, precedence))
-						continue
-					}
-					r.log.Error(err, "Failed to get AccessGroup resource",
-						"policyIndex", i, "accessGroupName", policyRef.Name)
-					continue
-				}
-				if accessGroup.Status.GroupID != "" {
-					// AccessGroup already synced - use its GroupID directly
-					policyConfig.GroupID = accessGroup.Status.GroupID
-					policyConfig.GroupName = accessGroup.GetAccessGroupName()
-				} else {
-					// AccessGroup not yet synced - pass reference name for L5 to resolve
-					policyConfig.K8sAccessGroupName = policyRef.Name
-				}
-			default:
-				r.log.Info("No group reference or inline rules specified in policy, skipping",
-					"policyIndex", i, "precedence", precedence)
-				r.Recorder.Event(r.app, corev1.EventTypeWarning, "PolicyResolutionFailed",
-					fmt.Sprintf("No group reference or inline rules specified for policy at precedence %d", precedence))
-				continue
+	// Convert destinations
+	if len(app.Spec.Destinations) > 0 {
+		params.Destinations = make([]cf.AccessDestinationParams, len(app.Spec.Destinations))
+		for i, dest := range app.Spec.Destinations {
+			params.Destinations[i] = cf.AccessDestinationParams{
+				Type:       dest.Type,
+				URI:        dest.URI,
+				Hostname:   dest.Hostname,
+				CIDR:       dest.CIDR,
+				PortRange:  dest.PortRange,
+				L4Protocol: dest.L4Protocol,
+				VnetID:     dest.VnetID,
 			}
 		}
-
-		policies = append(policies, policyConfig)
 	}
 
-	return policies, nil
+	// Convert CORS headers
+	if app.Spec.CorsHeaders != nil {
+		params.CorsHeaders = &cf.AccessApplicationCorsHeadersParams{
+			AllowedMethods:   app.Spec.CorsHeaders.AllowedMethods,
+			AllowedOrigins:   app.Spec.CorsHeaders.AllowedOrigins,
+			AllowedHeaders:   app.Spec.CorsHeaders.AllowedHeaders,
+			AllowAllMethods:  app.Spec.CorsHeaders.AllowAllMethods,
+			AllowAllHeaders:  app.Spec.CorsHeaders.AllowAllHeaders,
+			AllowAllOrigins:  app.Spec.CorsHeaders.AllowAllOrigins,
+			AllowCredentials: app.Spec.CorsHeaders.AllowCredentials,
+			MaxAge:           app.Spec.CorsHeaders.MaxAge,
+		}
+	}
+
+	// Convert SaaS app config
+	if app.Spec.SaasApp != nil {
+		params.SaasApp = r.convertSaasAppConfig(app.Spec.SaasApp)
+	}
+
+	// Convert SCIM config
+	if app.Spec.SCIMConfig != nil {
+		params.SCIMConfig = r.convertSCIMConfig(app.Spec.SCIMConfig)
+	}
+
+	// Convert App Launcher customization
+	if app.Spec.AppLauncherCustomization != nil {
+		params.AppLauncherCustomization = r.convertAppLauncherCustomization(app.Spec.AppLauncherCustomization)
+	}
+
+	// Convert target contexts
+	if len(app.Spec.TargetContexts) > 0 {
+		params.TargetContexts = make([]cf.AccessInfrastructureTargetContextParams, len(app.Spec.TargetContexts))
+		for i, tc := range app.Spec.TargetContexts {
+			params.TargetContexts[i] = cf.AccessInfrastructureTargetContextParams{
+				TargetAttributes: tc.TargetAttributes,
+				Port:             tc.Port,
+				Protocol:         tc.Protocol,
+			}
+		}
+	}
+
+	return params
 }
 
-// updateStatusPending updates the AccessApplication status to Pending state.
-func (r *Reconciler) updateStatusPending(accountID string) error {
-	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.app, func() {
-		r.app.Status.ObservedGeneration = r.app.Generation
+// convertSaasAppConfig converts SaaS app configuration to API params.
+func (r *Reconciler) convertSaasAppConfig(saas *networkingv1alpha2.SaasApplicationConfig) *cf.SaasApplicationParams {
+	params := &cf.SaasApplicationParams{
+		AuthType:                      saas.AuthType,
+		ConsumerServiceURL:            saas.ConsumerServiceURL,
+		SPEntityID:                    saas.SPEntityID,
+		NameIDFormat:                  saas.NameIDFormat,
+		DefaultRelayState:             saas.DefaultRelayState,
+		NameIDTransformJsonata:        saas.NameIDTransformJsonata,
+		SamlAttributeTransformJsonata: saas.SamlAttributeTransformJsonata,
+		RedirectURIs:                  saas.RedirectURIs,
+		GrantTypes:                    saas.GrantTypes,
+		Scopes:                        saas.Scopes,
+		AppLauncherURL:                saas.AppLauncherURL,
+		GroupFilterRegex:              saas.GroupFilterRegex,
+		AllowPKCEWithoutClientSecret:  saas.AllowPKCEWithoutClientSecret,
+		AccessTokenLifetime:           saas.AccessTokenLifetime,
+	}
 
-		// Keep existing state if already active, otherwise set to pending
-		if r.app.Status.State != StateActive {
-			r.app.Status.State = "pending"
+	// Convert custom attributes
+	if len(saas.CustomAttributes) > 0 {
+		params.CustomAttributes = make([]cf.SAMLAttributeConfigParams, len(saas.CustomAttributes))
+		for i, attr := range saas.CustomAttributes {
+			params.CustomAttributes[i] = cf.SAMLAttributeConfigParams{
+				Name:         attr.Name,
+				NameFormat:   attr.NameFormat,
+				FriendlyName: attr.FriendlyName,
+				Required:     attr.Required,
+				Source: cf.SAMLAttributeSourceParams{
+					Name:      attr.Source.Name,
+					NameByIDP: attr.Source.NameByIDP,
+				},
+			}
 		}
+	}
 
-		// Set account ID
-		if accountID != "" {
-			r.app.Status.AccountID = accountID
+	// Convert custom claims
+	if len(saas.CustomClaims) > 0 {
+		params.CustomClaims = make([]cf.OIDCClaimConfigParams, len(saas.CustomClaims))
+		for i, claim := range saas.CustomClaims {
+			params.CustomClaims[i] = cf.OIDCClaimConfigParams{
+				Name:     claim.Name,
+				Required: claim.Required,
+				Scope:    claim.Scope,
+				Source: cf.OIDCClaimSourceParams{
+					Name:      claim.Source.Name,
+					NameByIDP: claim.Source.NameByIDP,
+				},
+			}
 		}
+	}
 
-		r.setCondition(metav1.ConditionFalse, "Pending", "Configuration registered, waiting for sync")
+	// Convert refresh token options
+	if saas.RefreshTokenOptions != nil {
+		params.RefreshTokenOptions = &cf.RefreshTokenOptionsParams{
+			Lifetime: saas.RefreshTokenOptions.Lifetime,
+		}
+	}
+
+	// Convert hybrid and implicit options
+	if saas.HybridAndImplicitOptions != nil {
+		params.HybridAndImplicitOptions = &cf.HybridAndImplicitOptionsParams{
+			ReturnIDTokenFromAuthorizationEndpoint:     saas.HybridAndImplicitOptions.ReturnIDTokenFromAuthorizationEndpoint,
+			ReturnAccessTokenFromAuthorizationEndpoint: saas.HybridAndImplicitOptions.ReturnAccessTokenFromAuthorizationEndpoint,
+		}
+	}
+
+	return params
+}
+
+// convertSCIMConfig converts SCIM configuration to API params.
+func (r *Reconciler) convertSCIMConfig(scim *networkingv1alpha2.AccessApplicationSCIMConfig) *cf.AccessApplicationSCIMConfigParams {
+	params := &cf.AccessApplicationSCIMConfigParams{
+		Enabled:            scim.Enabled,
+		RemoteURI:          scim.RemoteURI,
+		IDPUID:             scim.IDPUID,
+		DeactivateOnDelete: scim.DeactivateOnDelete,
+	}
+
+	// Convert authentication
+	if scim.Authentication != nil {
+		params.Authentication = &cf.SCIMAuthenticationParams{
+			Scheme:           scim.Authentication.Scheme,
+			User:             scim.Authentication.User,
+			Password:         scim.Authentication.Password,
+			Token:            scim.Authentication.Token,
+			ClientID:         scim.Authentication.ClientID,
+			ClientSecret:     scim.Authentication.ClientSecret,
+			AuthorizationURL: scim.Authentication.AuthorizationURL,
+			TokenURL:         scim.Authentication.TokenURL,
+			Scopes:           scim.Authentication.Scopes,
+		}
+	}
+
+	// Convert mappings
+	if len(scim.Mappings) > 0 {
+		params.Mappings = make([]cf.SCIMMappingParams, len(scim.Mappings))
+		for i, mapping := range scim.Mappings {
+			params.Mappings[i] = cf.SCIMMappingParams{
+				Schema:           mapping.Schema,
+				Enabled:          mapping.Enabled,
+				Filter:           mapping.Filter,
+				TransformJsonata: mapping.TransformJsonata,
+				Strictness:       mapping.Strictness,
+			}
+			if mapping.Operations != nil {
+				params.Mappings[i].Operations = &cf.SCIMMappingOperationsParams{
+					Create: mapping.Operations.Create,
+					Update: mapping.Operations.Update,
+					Delete: mapping.Operations.Delete,
+				}
+			}
+		}
+	}
+
+	return params
+}
+
+// convertAppLauncherCustomization converts App Launcher customization to API params.
+func (r *Reconciler) convertAppLauncherCustomization(
+	custom *networkingv1alpha2.AccessAppLauncherCustomization,
+) *cf.AccessAppLauncherCustomizationParams {
+	params := &cf.AccessAppLauncherCustomizationParams{
+		AppLauncherLogoURL:       custom.AppLauncherLogoURL,
+		HeaderBackgroundColor:    custom.HeaderBackgroundColor,
+		BackgroundColor:          custom.BackgroundColor,
+		SkipAppLauncherLoginPage: custom.SkipAppLauncherLoginPage,
+	}
+
+	// Convert landing page design
+	if custom.LandingPageDesign != nil {
+		params.LandingPageDesign = &cf.AccessLandingPageDesignParams{
+			Title:           custom.LandingPageDesign.Title,
+			Message:         custom.LandingPageDesign.Message,
+			ImageURL:        custom.LandingPageDesign.ImageURL,
+			ButtonColor:     custom.LandingPageDesign.ButtonColor,
+			ButtonTextColor: custom.LandingPageDesign.ButtonTextColor,
+		}
+	}
+
+	// Convert footer links
+	if len(custom.FooterLinks) > 0 {
+		params.FooterLinks = make([]cf.AccessFooterLinkParams, len(custom.FooterLinks))
+		for i, link := range custom.FooterLinks {
+			params.FooterLinks[i] = cf.AccessFooterLinkParams{
+				Name: link.Name,
+				URL:  link.URL,
+			}
+		}
+	}
+
+	return params
+}
+
+// setSuccessStatus updates the application status with success.
+func (r *Reconciler) setSuccessStatus(
+	ctx context.Context,
+	app *networkingv1alpha2.AccessApplication,
+	accountID string,
+	result *cf.AccessApplicationResult,
+) (ctrl.Result, error) {
+	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, app, func() {
+		app.Status.AccountID = accountID
+		app.Status.ApplicationID = result.ID
+		app.Status.AUD = result.AUD
+		app.Status.Domain = result.Domain
+		app.Status.SelfHostedDomains = result.SelfHostedDomains
+		app.Status.State = StateActive
+		app.Status.SaasAppClientID = result.SaasAppClientID
+		app.Status.ObservedGeneration = app.Generation
+
+		meta.SetStatusCondition(&app.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: app.Generation,
+			Reason:             "Synced",
+			Message:            "AccessApplication synced to Cloudflare",
+			LastTransitionTime: metav1.Now(),
+		})
 	})
 
 	if err != nil {
-		r.log.Error(err, "failed to update AccessApplication status")
-		return err
+		return common.NoRequeue(), fmt.Errorf("failed to update status: %w", err)
 	}
 
-	r.log.Info("AccessApplication configuration registered", "name", r.app.Name)
-	r.Recorder.Event(r.app, corev1.EventTypeNormal, "Registered",
-		"Configuration registered to SyncState")
-	return nil
+	return common.NoRequeue(), nil
 }
 
-// updateStatusReady updates the AccessApplication status to Ready state.
-func (r *Reconciler) updateStatusReady(accountID, applicationID string) error {
-	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.app, func() {
-		r.app.Status.ObservedGeneration = r.app.Generation
-		r.app.Status.State = StateActive
-		r.app.Status.AccountID = accountID
-		r.app.Status.ApplicationID = applicationID
-		r.setCondition(metav1.ConditionTrue, "Synced", "AccessApplication synced to Cloudflare")
+// setErrorStatus updates the application status with an error.
+func (r *Reconciler) setErrorStatus(
+	ctx context.Context,
+	app *networkingv1alpha2.AccessApplication,
+	err error,
+) (ctrl.Result, error) {
+	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, app, func() {
+		app.Status.State = "error"
+		app.Status.ObservedGeneration = app.Generation
+		meta.SetStatusCondition(&app.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: app.Generation,
+			Reason:             "Error",
+			Message:            cf.SanitizeErrorMessage(err),
+			LastTransitionTime: metav1.Now(),
+		})
 	})
 
-	if err != nil {
-		r.log.Error(err, "failed to update AccessApplication status to Ready")
-		return err
+	if updateErr != nil {
+		return common.NoRequeue(), fmt.Errorf("failed to update status: %w", updateErr)
 	}
 
-	r.log.Info("AccessApplication synced successfully", "name", r.app.Name, "applicationId", applicationID)
-	r.Recorder.Event(r.app, corev1.EventTypeNormal, "Synced",
-		fmt.Sprintf("AccessApplication synced to Cloudflare with ID %s", applicationID))
-	return nil
-}
-
-// setCondition sets a condition on the AccessApplication status.
-func (r *Reconciler) setCondition(status metav1.ConditionStatus, reason, message string) {
-	meta.SetStatusCondition(&r.app.Status.Conditions, metav1.Condition{
-		Type:               "Ready",
-		Status:             status,
-		ObservedGeneration: r.app.Generation,
-		LastTransitionTime: metav1.Now(),
-		Reason:             reason,
-		Message:            message,
-	})
+	return common.RequeueShort(), nil
 }
 
 // ============================================================================
@@ -461,8 +562,7 @@ func appReferencesIDP(app *networkingv1alpha2.AccessApplication, idpName string)
 	return false
 }
 
-// appReferencesAccessGroup checks if an AccessApplication references the given AccessGroup
-// via the K8s resource name field in policies.
+// appReferencesAccessGroup checks if an AccessApplication references the given AccessGroup.
 func appReferencesAccessGroup(app *networkingv1alpha2.AccessApplication, groupName string) bool {
 	for _, policy := range app.Spec.Policies {
 		if policy.Name == groupName {
@@ -472,8 +572,7 @@ func appReferencesAccessGroup(app *networkingv1alpha2.AccessApplication, groupNa
 	return false
 }
 
-// appReferencesAccessPolicy checks if an AccessApplication references the given AccessPolicy
-// via the ReusablePolicyRefs field.
+// appReferencesAccessPolicy checks if an AccessApplication references the given AccessPolicy.
 func appReferencesAccessPolicy(app *networkingv1alpha2.AccessApplication, policyName string) bool {
 	for _, ref := range app.Spec.ReusablePolicyRefs {
 		if ref.Name == policyName {
@@ -483,7 +582,7 @@ func appReferencesAccessPolicy(app *networkingv1alpha2.AccessApplication, policy
 	return false
 }
 
-// findAccessApplicationsForIdentityProvider returns a list of reconcile requests for AccessApplications
+// findAccessApplicationsForIdentityProvider returns reconcile requests for AccessApplications
 // that reference the given AccessIdentityProvider.
 func (r *Reconciler) findAccessApplicationsForIdentityProvider(ctx context.Context, obj client.Object) []reconcile.Request {
 	idp, ok := obj.(*networkingv1alpha2.AccessIdentityProvider)
@@ -498,26 +597,21 @@ func (r *Reconciler) findAccessApplicationsForIdentityProvider(ctx context.Conte
 		return nil
 	}
 
-	requests := make([]reconcile.Request, 0, len(appList.Items))
+	var requests []reconcile.Request
 	for i := range appList.Items {
 		app := &appList.Items[i]
-		if !appReferencesIDP(app, idp.Name) {
-			continue
+		if appReferencesIDP(app, idp.Name) {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: apitypes.NamespacedName{Name: app.Name},
+			})
 		}
-
-		logger.Info("AccessIdentityProvider changed, triggering AccessApplication reconcile",
-			"identityprovider", idp.Name,
-			"accessapplication", app.Name)
-		requests = append(requests, reconcile.Request{
-			NamespacedName: apitypes.NamespacedName{Name: app.Name},
-		})
 	}
 
 	return requests
 }
 
-// findAccessApplicationsForAccessGroup returns a list of reconcile requests for AccessApplications
-// that reference the given AccessGroup via the name field in policies.
+// findAccessApplicationsForAccessGroup returns reconcile requests for AccessApplications
+// that reference the given AccessGroup.
 func (r *Reconciler) findAccessApplicationsForAccessGroup(ctx context.Context, obj client.Object) []reconcile.Request {
 	accessGroup, ok := obj.(*networkingv1alpha2.AccessGroup)
 	if !ok {
@@ -531,26 +625,21 @@ func (r *Reconciler) findAccessApplicationsForAccessGroup(ctx context.Context, o
 		return nil
 	}
 
-	requests := make([]reconcile.Request, 0)
+	var requests []reconcile.Request
 	for i := range appList.Items {
 		app := &appList.Items[i]
-		if !appReferencesAccessGroup(app, accessGroup.Name) {
-			continue
+		if appReferencesAccessGroup(app, accessGroup.Name) {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: apitypes.NamespacedName{Name: app.Name},
+			})
 		}
-
-		logger.Info("AccessGroup changed, triggering AccessApplication reconcile",
-			"accessgroup", accessGroup.Name,
-			"accessapplication", app.Name)
-		requests = append(requests, reconcile.Request{
-			NamespacedName: apitypes.NamespacedName{Name: app.Name},
-		})
 	}
 
 	return requests
 }
 
-// findAccessApplicationsForAccessPolicy returns a list of reconcile requests for AccessApplications
-// that reference the given AccessPolicy via the ReusablePolicyRefs field.
+// findAccessApplicationsForAccessPolicy returns reconcile requests for AccessApplications
+// that reference the given AccessPolicy.
 func (r *Reconciler) findAccessApplicationsForAccessPolicy(ctx context.Context, obj client.Object) []reconcile.Request {
 	policy, ok := obj.(*networkingv1alpha2.AccessPolicy)
 	if !ok {
@@ -564,25 +653,14 @@ func (r *Reconciler) findAccessApplicationsForAccessPolicy(ctx context.Context, 
 		return nil
 	}
 
-	requests := make([]reconcile.Request, 0)
+	var requests []reconcile.Request
 	for i := range appList.Items {
 		app := &appList.Items[i]
-		if !appReferencesAccessPolicy(app, policy.Name) {
-			continue
+		if appReferencesAccessPolicy(app, policy.Name) {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: apitypes.NamespacedName{Name: app.Name},
+			})
 		}
-
-		logger.Info("AccessPolicy changed, triggering AccessApplication reconcile",
-			"accesspolicy", policy.Name,
-			"accessapplication", app.Name,
-			"namespace", app.Namespace)
-		requests = append(requests, reconcile.Request{
-			NamespacedName: apitypes.NamespacedName{Name: app.Name, Namespace: app.Namespace},
-		})
-	}
-
-	if len(requests) > 0 {
-		logger.V(1).Info("AccessPolicy changed, affected AccessApplications found",
-			"policy", policy.Name, "affectedApps", len(requests))
 	}
 
 	return requests
@@ -597,7 +675,7 @@ func (r *Reconciler) findAccessApplicationsForIngress(ctx context.Context, obj c
 	}
 	logger := ctrllog.FromContext(ctx)
 
-	hosts := make([]string, 0)
+	var hosts []string
 	for _, rule := range ing.Spec.Rules {
 		if rule.Host != "" {
 			hosts = append(hosts, rule.Host)
@@ -607,63 +685,21 @@ func (r *Reconciler) findAccessApplicationsForIngress(ctx context.Context, obj c
 		return nil
 	}
 
-	return r.findAccessApplicationsMatchingDomains(ctx, logger, hosts, "Ingress", ing.Name)
-}
-
-// findAccessApplicationsForClusterTunnel returns reconcile requests for AccessApplications
-// when a ClusterTunnel changes.
-func (r *Reconciler) findAccessApplicationsForClusterTunnel(ctx context.Context, obj client.Object) []reconcile.Request {
-	tunnel, ok := obj.(*networkingv1alpha2.ClusterTunnel)
-	if !ok {
-		return nil
-	}
-	logger := ctrllog.FromContext(ctx)
-
-	return r.findPendingAccessApplications(ctx, logger, "ClusterTunnel", tunnel.Name)
-}
-
-// findAccessApplicationsForTunnel returns reconcile requests for AccessApplications
-// when a Tunnel changes.
-func (r *Reconciler) findAccessApplicationsForTunnel(ctx context.Context, obj client.Object) []reconcile.Request {
-	tunnel, ok := obj.(*networkingv1alpha2.Tunnel)
-	if !ok {
-		return nil
-	}
-	logger := ctrllog.FromContext(ctx)
-
-	return r.findPendingAccessApplications(ctx, logger, "Tunnel", tunnel.Name)
-}
-
-// findAccessApplicationsMatchingDomains finds AccessApplications whose domain
-// matches any of the given hosts.
-func (r *Reconciler) findAccessApplicationsMatchingDomains(
-	ctx context.Context,
-	logger logr.Logger,
-	hosts []string,
-	sourceType, sourceName string,
-) []reconcile.Request {
 	appList := &networkingv1alpha2.AccessApplicationList{}
 	if err := r.List(ctx, appList); err != nil {
-		logger.Error(err, "Failed to list AccessApplications for domain matching")
+		logger.Error(err, "Failed to list AccessApplications for Ingress watch")
 		return nil
 	}
 
-	requests := make([]reconcile.Request, 0)
+	var requests []reconcile.Request
 	for i := range appList.Items {
 		app := &appList.Items[i]
-
-		// Only trigger if the app is in a non-ready state
+		// Only trigger if the app is not yet ready
 		if app.Status.State == StateActive {
 			continue
 		}
-
 		if domainMatchesHosts(app.Spec.Domain, hosts) ||
 			anyDomainMatchesHosts(app.Spec.SelfHostedDomains, hosts) {
-			logger.Info("Domain match found, triggering AccessApplication reconcile",
-				"sourceType", sourceType,
-				"sourceName", sourceName,
-				"accessapplication", app.Name,
-				"domain", app.Spec.Domain)
 			requests = append(requests, reconcile.Request{
 				NamespacedName: apitypes.NamespacedName{Name: app.Name},
 			})
@@ -673,35 +709,20 @@ func (r *Reconciler) findAccessApplicationsMatchingDomains(
 	return requests
 }
 
-// findPendingAccessApplications finds AccessApplications that are not in ready state.
-func (r *Reconciler) findPendingAccessApplications(
-	ctx context.Context,
-	logger logr.Logger,
-	sourceType, sourceName string,
-) []reconcile.Request {
+// findAccessApplicationsForTunnel returns reconcile requests when a Tunnel changes.
+func (r *Reconciler) findAccessApplicationsForTunnel(ctx context.Context, obj client.Object) []reconcile.Request {
+	logger := ctrllog.FromContext(ctx)
+
 	appList := &networkingv1alpha2.AccessApplicationList{}
 	if err := r.List(ctx, appList); err != nil {
-		logger.Error(err, "Failed to list AccessApplications for tunnel watch")
+		logger.Error(err, "Failed to list AccessApplications for Tunnel watch")
 		return nil
 	}
 
-	requests := make([]reconcile.Request, 0)
+	var requests []reconcile.Request
 	for i := range appList.Items {
 		app := &appList.Items[i]
-
-		// Only trigger if the app is in a non-ready state
-		if app.Status.State == StateActive {
-			continue
-		}
-
-		readyCondition := meta.FindStatusCondition(app.Status.Conditions, "Ready")
-		if readyCondition != nil && readyCondition.Status == metav1.ConditionFalse {
-			logger.Info("Tunnel changed, triggering pending AccessApplication reconcile",
-				"sourceType", sourceType,
-				"sourceName", sourceName,
-				"accessapplication", app.Name,
-				"currentState", app.Status.State,
-				"reason", readyCondition.Reason)
+		if app.Status.State != StateActive {
 			requests = append(requests, reconcile.Request{
 				NamespacedName: apitypes.NamespacedName{Name: app.Name},
 			})
@@ -712,40 +733,26 @@ func (r *Reconciler) findPendingAccessApplications(
 }
 
 // domainMatchesHosts checks if a domain matches any of the given hosts.
-// DNS domain names are case-insensitive, so comparisons are done in lowercase.
-//
-//nolint:revive // cognitive complexity is acceptable for this domain matching logic
 func domainMatchesHosts(domain string, hosts []string) bool {
 	if domain == "" {
 		return false
 	}
-
-	// Normalize domain to lowercase for case-insensitive comparison
 	domainLower := strings.ToLower(domain)
-
 	for _, host := range hosts {
-		// Normalize host to lowercase for case-insensitive comparison
 		hostLower := strings.ToLower(host)
-
 		if domainLower == hostLower {
 			return true
 		}
-		// Check wildcard matching
+		// Wildcard matching
 		if len(hostLower) > 2 && hostLower[:2] == "*." {
 			baseDomain := hostLower[2:]
-			if len(domainLower) > len(baseDomain)+1 && domainLower[len(domainLower)-len(baseDomain)-1:] == "."+baseDomain {
-				return true
-			}
-			if domainLower == baseDomain {
+			if strings.HasSuffix(domainLower, "."+baseDomain) || domainLower == baseDomain {
 				return true
 			}
 		}
 		if len(domainLower) > 2 && domainLower[:2] == "*." {
 			baseDomain := domainLower[2:]
-			if len(hostLower) > len(baseDomain)+1 && hostLower[len(hostLower)-len(baseDomain)-1:] == "."+baseDomain {
-				return true
-			}
-			if hostLower == baseDomain {
+			if strings.HasSuffix(hostLower, "."+baseDomain) || hostLower == baseDomain {
 				return true
 			}
 		}
@@ -766,36 +773,30 @@ func anyDomainMatchesHosts(domains []string, hosts []string) bool {
 // SetupWithManager sets up the controller with the Manager.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("accessapplication-controller")
-	r.appService = accesssvc.NewApplicationService(mgr.GetClient())
+	r.APIFactory = common.NewAPIClientFactory(mgr.GetClient(), ctrl.Log.WithName("accessapplication"))
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.AccessApplication{}).
-		// Watch AccessIdentityProvider changes for IdP reference updates
 		Watches(
 			&networkingv1alpha2.AccessIdentityProvider{},
 			handler.EnqueueRequestsFromMapFunc(r.findAccessApplicationsForIdentityProvider),
 		).
-		// Watch AccessGroup changes for inline policy reference updates
 		Watches(
 			&networkingv1alpha2.AccessGroup{},
 			handler.EnqueueRequestsFromMapFunc(r.findAccessApplicationsForAccessGroup),
 		).
-		// Watch AccessPolicy changes for reusable policy reference updates
 		Watches(
 			&networkingv1alpha2.AccessPolicy{},
 			handler.EnqueueRequestsFromMapFunc(r.findAccessApplicationsForAccessPolicy),
 		).
-		// Watch Ingress changes - when an Ingress is created/updated, its domains
-		// become available in the tunnel, allowing AccessApplications to be created
 		Watches(
 			&networkingv1.Ingress{},
 			handler.EnqueueRequestsFromMapFunc(r.findAccessApplicationsForIngress),
 		).
-		// Watch ClusterTunnel changes - tunnel config changes affect domain availability
 		Watches(
 			&networkingv1alpha2.ClusterTunnel{},
-			handler.EnqueueRequestsFromMapFunc(r.findAccessApplicationsForClusterTunnel),
+			handler.EnqueueRequestsFromMapFunc(r.findAccessApplicationsForTunnel),
 		).
-		// Watch Tunnel changes - tunnel config changes affect domain availability
 		Watches(
 			&networkingv1alpha2.Tunnel{},
 			handler.EnqueueRequestsFromMapFunc(r.findAccessApplicationsForTunnel),

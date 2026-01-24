@@ -12,12 +12,12 @@ import (
 	"time"
 
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
-	"github.com/StringKe/cloudflare-operator/internal/service"
-	tunnelsvc "github.com/StringKe/cloudflare-operator/internal/service/tunnel"
+	"github.com/StringKe/cloudflare-operator/internal/controller/tunnelconfig"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	apitypes "k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -329,20 +329,15 @@ func (r *TunnelBindingReconciler) deletionLogic() error {
 		// Run finalization logic. If the finalization logic fails,
 		// don't remove the finalizer so that we can retry during the next reconciliation.
 
-		// Unregister from SyncState before deleting DNS entries
+		// Remove source from ConfigMap before deleting DNS entries
 		if r.tunnelID != "" {
-			svc := tunnelsvc.NewService(r.Client)
-			source := service.Source{
-				Kind:      "TunnelBinding",
-				Namespace: r.binding.Namespace,
-				Name:      r.binding.Name,
-			}
-
-			if err := svc.Unregister(r.ctx, r.tunnelID, source); err != nil {
-				r.log.Error(err, "Failed to unregister from SyncState", "tunnelId", r.tunnelID)
-				// Don't block deletion on SyncState cleanup failure
+			writer := tunnelconfig.NewWriter(r.Client, r.Namespace)
+			sourceKey := fmt.Sprintf("TunnelBinding/%s/%s", r.binding.Namespace, r.binding.Name)
+			if err := writer.RemoveSourceConfig(r.ctx, r.tunnelID, sourceKey); err != nil {
+				r.log.Error(err, "Failed to remove source from ConfigMap", "tunnelId", r.tunnelID)
+				// Don't block deletion on ConfigMap cleanup failure
 			} else {
-				r.log.Info("Unregistered from SyncState", "tunnelId", r.tunnelID)
+				r.log.Info("Removed source from ConfigMap", "tunnelId", r.tunnelID)
 			}
 		}
 
@@ -667,12 +662,8 @@ func (r *TunnelBindingReconciler) getServiceProto(tunnelProto string, validProto
 	return serviceProto
 }
 
-// configureCloudflareDaemon registers ingress rules to the CloudflareSyncState CRD
-// via TunnelConfigService. The actual sync to Cloudflare API is handled by TunnelConfigSyncController.
-//
-// This is part of the unified sync architecture where:
-// - TunnelBinding controller registers rules via TunnelConfigService
-// - TunnelConfigSyncController aggregates all sources and syncs to Cloudflare API
+// configureCloudflareDaemon registers ingress rules to ConfigMap.
+// The TunnelConfig controller watches ConfigMaps and syncs to Cloudflare API.
 func (r *TunnelBindingReconciler) configureCloudflareDaemon() error {
 	bindings, err := r.getRelevantTunnelBindings()
 	if err != nil {
@@ -681,7 +672,7 @@ func (r *TunnelBindingReconciler) configureCloudflareDaemon() error {
 	}
 
 	// Build ingress rules from all bindings
-	rules := make([]tunnelsvc.IngressRule, 0, 16)
+	rules := make([]tunnelconfig.IngressRule, 0, 16)
 	for _, binding := range bindings {
 		for i, subject := range binding.Subjects {
 			targetService := ""
@@ -691,77 +682,95 @@ func (r *TunnelBindingReconciler) configureCloudflareDaemon() error {
 				targetService = binding.Status.Services[i].Target
 			}
 
-			rule := tunnelsvc.IngressRule{
+			rule := tunnelconfig.IngressRule{
 				Hostname: binding.Status.Services[i].Hostname,
 				Service:  targetService,
 				Path:     subject.Spec.Path,
+				Priority: tunnelconfig.PriorityBinding,
 			}
 
 			// Convert origin request config
-			originRequest := &tunnelsvc.OriginRequestConfig{}
+			originReq := &tunnelconfig.OriginRequestConfig{}
 			hasOriginConfig := false
 
 			if subject.Spec.NoTlsVerify {
-				originRequest.NoTLSVerify = &subject.Spec.NoTlsVerify
+				originReq.NoTLSVerify = subject.Spec.NoTlsVerify
 				hasOriginConfig = true
 			}
 			if subject.Spec.HTTP2Origin {
-				originRequest.HTTP2Origin = &subject.Spec.HTTP2Origin
+				originReq.HTTP2Origin = subject.Spec.HTTP2Origin
 				hasOriginConfig = true
 			}
 			if subject.Spec.ProxyAddress != "" {
-				originRequest.ProxyAddress = &subject.Spec.ProxyAddress
+				originReq.ProxyAddress = subject.Spec.ProxyAddress
 				hasOriginConfig = true
 			}
 			if subject.Spec.ProxyPort != 0 {
-				originRequest.ProxyPort = &subject.Spec.ProxyPort
+				originReq.ProxyPort = int(subject.Spec.ProxyPort)
 				hasOriginConfig = true
 			}
 			if subject.Spec.ProxyType != "" {
-				originRequest.ProxyType = &subject.Spec.ProxyType
-				hasOriginConfig = true
-			}
-			if caPool := subject.Spec.CaPool; caPool != "" {
-				caPath := fmt.Sprintf("/etc/cloudflared/certs/%s", caPool)
-				originRequest.CAPool = &caPath
+				originReq.ProxyType = subject.Spec.ProxyType
 				hasOriginConfig = true
 			}
 
 			if hasOriginConfig {
-				rule.OriginRequest = originRequest
+				rule.OriginRequest = originReq
 			}
 
 			rules = append(rules, rule)
 		}
 	}
 
-	// Get credentials reference from tunnel
-	credRef := r.getCredentialsReferenceFromTunnel()
-
-	// Register rules to SyncState via TunnelConfigService
-	svc := tunnelsvc.NewService(r.Client)
-	opts := tunnelsvc.RegisterRulesOptions{
-		TunnelID:       r.tunnelID,
-		AccountID:      r.accountID,
-		CredentialsRef: credRef,
-		Source: service.Source{
-			Kind:      "TunnelBinding",
-			Namespace: r.binding.Namespace,
-			Name:      r.binding.Name,
-		},
-		Rules:    rules,
-		Priority: tunnelsvc.PriorityBinding,
+	// Create source config
+	source := &tunnelconfig.SourceConfig{
+		Kind:       tunnelconfig.SourceKindTunnelBinding,
+		Namespace:  r.binding.Namespace,
+		Name:       r.binding.Name,
+		Generation: r.binding.Generation,
+		Rules:      rules,
 	}
 
-	if err := svc.RegisterRules(r.ctx, opts); err != nil {
-		r.log.Error(err, "failed to register rules to SyncState", "tunnelID", r.tunnelID)
-		return fmt.Errorf("register rules to SyncState: %w", err)
+	// Determine tunnel kind for GVK
+	tunnelKind := "ClusterTunnel"
+	if strings.ToLower(r.binding.TunnelRef.Kind) == tunnelKindTunnel {
+		tunnelKind = "Tunnel"
 	}
 
-	r.log.Info("Registered ingress rules to SyncState",
+	ownerGVK := metav1.GroupVersionKind{
+		Group:   "networking.cloudflare-operator.io",
+		Version: "v1alpha2",
+		Kind:    tunnelKind,
+	}
+
+	// Get tunnel object for owner reference
+	var owner metav1.Object
+	if strings.ToLower(r.binding.TunnelRef.Kind) == tunnelKindClusterTunnel {
+		clusterTunnel := &networkingv1alpha2.ClusterTunnel{}
+		key := apitypes.NamespacedName{Name: r.binding.TunnelRef.Name, Namespace: r.Namespace}
+		if err := r.Get(r.ctx, key, clusterTunnel); err == nil {
+			owner = clusterTunnel
+		}
+	} else {
+		tunnel := &networkingv1alpha2.Tunnel{}
+		key := apitypes.NamespacedName{Name: r.binding.TunnelRef.Name, Namespace: r.binding.Namespace}
+		if err := r.Get(r.ctx, key, tunnel); err == nil {
+			owner = tunnel
+		}
+	}
+
+	// Write to ConfigMap
+	writer := tunnelconfig.NewWriter(r.Client, r.Namespace)
+	if err := writer.WriteSourceConfig(r.ctx, r.tunnelID, r.accountID, source, owner, ownerGVK); err != nil {
+		r.log.Error(err, "failed to write to ConfigMap", "tunnelID", r.tunnelID)
+		return fmt.Errorf("write to ConfigMap: %w", err)
+	}
+
+	r.log.Info("Registered ingress rules to ConfigMap",
 		"tunnelID", r.tunnelID,
 		"ruleCount", len(rules),
 		"source", fmt.Sprintf("TunnelBinding/%s/%s", r.binding.Namespace, r.binding.Name))
+
 	return nil
 }
 

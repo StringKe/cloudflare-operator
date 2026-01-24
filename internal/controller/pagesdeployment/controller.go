@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2025-2026 The Cloudflare Operator Authors
 
-// Package pagesdeployment implements the L2 Controller for PagesDeployment CRD.
-// It registers deployment configurations to the Core Service for sync.
+// Package pagesdeployment implements the Controller for PagesDeployment CRD.
+// This controller directly calls Cloudflare API and writes status back to CRD,
+// following the simplified 3-layer architecture (CRD → Controller → CF API).
 package pagesdeployment
 
 import (
@@ -27,8 +28,7 @@ import (
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
-	"github.com/StringKe/cloudflare-operator/internal/service"
-	pagessvc "github.com/StringKe/cloudflare-operator/internal/service/pages"
+	"github.com/StringKe/cloudflare-operator/internal/controller/common"
 )
 
 const (
@@ -40,20 +40,36 @@ const (
 	// same configuration.
 	AnnotationForceRedeploy = "cloudflare-operator.io/force-redeploy"
 
+	// AnnotationLastForceRedeploy stores the last processed force-redeploy value
+	AnnotationLastForceRedeploy = "cloudflare-operator.io/last-force-redeploy"
+
 	// EventReasonProductionConflict indicates another production deployment exists
 	EventReasonProductionConflict = "ProductionConflict"
 	// EventReasonProductionProtected indicates production deletion is blocked
 	EventReasonProductionProtected = "ProductionProtected"
 	// EventReasonDeprecationWarning indicates deprecated fields are being used
 	EventReasonDeprecationWarning = "DeprecationWarning"
+	// EventReasonDeploymentCreated indicates a new deployment was created
+	EventReasonDeploymentCreated = "DeploymentCreated"
+	// EventReasonDeploymentPolling indicates polling deployment status
+	EventReasonDeploymentPolling = "DeploymentPolling"
+	// EventReasonDeploymentSucceeded indicates deployment succeeded
+	EventReasonDeploymentSucceeded = "DeploymentSucceeded"
+	// EventReasonDeploymentFailed indicates deployment failed
+	EventReasonDeploymentFailed = "DeploymentFailed"
+
+	// PollingInterval is the interval for polling in-progress deployments
+	PollingInterval = 30 * time.Second
 )
 
-// PagesDeploymentReconciler reconciles a PagesDeployment object
+// PagesDeploymentReconciler reconciles a PagesDeployment object.
+// It directly calls Cloudflare API and writes status back to CRD,
+// following the simplified 3-layer architecture.
 type PagesDeploymentReconciler struct {
 	client.Client
-	Scheme            *runtime.Scheme
-	Recorder          record.EventRecorder
-	deploymentService *pagessvc.DeploymentService
+	Scheme     *runtime.Scheme
+	Recorder   record.EventRecorder
+	APIFactory *common.APIClientFactory
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=pagesdeployments,verbs=get;list;watch;create;update;patch;delete
@@ -73,21 +89,14 @@ func (r *PagesDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-	// Apply backward compatibility adapter - converts deprecated fields to new format
+	// Apply backward compatibility adapter
 	r.applyBackwardCompatibilityAdapter(ctx, deployment)
-
-	// Resolve credentials
-	credInfo, err := r.resolveCredentials(ctx, deployment)
-	if err != nil {
-		logger.Error(err, "Failed to resolve credentials")
-		return r.updateStatusError(ctx, deployment, err)
-	}
 
 	// Resolve project name
 	projectName, err := r.resolveProjectName(ctx, deployment)
 	if err != nil {
 		logger.Error(err, "Failed to resolve project name")
-		return r.updateStatusError(ctx, deployment, err)
+		return r.setErrorStatus(ctx, deployment, err)
 	}
 
 	// Handle deletion
@@ -95,206 +104,491 @@ func (r *PagesDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return r.handleDeletion(ctx, deployment, projectName)
 	}
 
-	// Validate production uniqueness - only one production deployment per project
+	// Validate production uniqueness
 	if deployment.Spec.Environment == networkingv1alpha2.PagesDeploymentEnvironmentProduction {
 		if err := r.validateProductionUniqueness(ctx, deployment, projectName); err != nil {
 			logger.Error(err, "Production uniqueness validation failed")
 			r.Recorder.Event(deployment, corev1.EventTypeWarning, EventReasonProductionConflict, err.Error())
-			return r.updateStatusError(ctx, deployment, err)
+			return r.setErrorStatus(ctx, deployment, err)
 		}
 	}
 
-	// Add finalizer if not present
+	// Get API client
+	apiResult, err := r.getAPIClient(ctx, deployment)
+	if err != nil {
+		logger.Error(err, "Failed to get API client")
+		return r.setErrorStatus(ctx, deployment, err)
+	}
+
+	// Ensure finalizer
 	if !controllerutil.ContainsFinalizer(deployment, FinalizerName) {
 		controllerutil.AddFinalizer(deployment, FinalizerName)
 		if err := r.Update(ctx, deployment); err != nil {
 			return ctrl.Result{}, err
 		}
-	}
-
-	// Register Pages deployment configuration to SyncState
-	return r.registerPagesDeployment(ctx, deployment, projectName, credInfo)
-}
-
-// resolveCredentials resolves the credentials for the Pages deployment.
-func (r *PagesDeploymentReconciler) resolveCredentials(
-	ctx context.Context,
-	deployment *networkingv1alpha2.PagesDeployment,
-) (*controller.CredentialsInfo, error) {
-	return controller.ResolveCredentialsForService(
-		ctx,
-		r.Client,
-		log.FromContext(ctx),
-		deployment.Spec.Cloudflare,
-		deployment.Namespace,
-		deployment.Status.AccountID,
-	)
-}
-
-// applyBackwardCompatibilityAdapter converts deprecated fields to new format.
-// This allows existing manifests using the old Action/Branch/DirectUpload fields
-// to work with the new Environment/Source model.
-//
-//nolint:revive,gocritic // cyclomatic complexity and ifElseChain acceptable for backward compatibility logic
-func (r *PagesDeploymentReconciler) applyBackwardCompatibilityAdapter(
-	ctx context.Context,
-	deployment *networkingv1alpha2.PagesDeployment,
-) {
-	logger := log.FromContext(ctx)
-
-	// Track if we're using deprecated fields
-	usingDeprecated := false
-
-	// If new Source field is not specified, convert from deprecated fields
-	if deployment.Spec.Source == nil {
-		// Check for deprecated DirectUpload field
-		if deployment.Spec.DirectUpload != nil && deployment.Spec.DirectUpload.Source != nil {
-			usingDeprecated = true
-			deployment.Spec.Source = &networkingv1alpha2.PagesDeploymentSourceSpec{
-				Type: networkingv1alpha2.PagesDeploymentSourceTypeDirectUpload,
-				DirectUpload: &networkingv1alpha2.PagesDirectUploadSourceSpec{
-					Source:   deployment.Spec.DirectUpload.Source,
-					Checksum: deployment.Spec.DirectUpload.Checksum,
-					Archive:  deployment.Spec.DirectUpload.Archive,
-				},
-			}
-			logger.V(1).Info("Converted deprecated DirectUpload field to Source.DirectUpload")
-		} else if deployment.Spec.Branch != "" {
-			// Check for deprecated Branch field
-			usingDeprecated = true
-			deployment.Spec.Source = &networkingv1alpha2.PagesDeploymentSourceSpec{
-				Type: networkingv1alpha2.PagesDeploymentSourceTypeGit,
-				Git: &networkingv1alpha2.PagesGitSourceSpec{
-					Branch: deployment.Spec.Branch,
-				},
-			}
-			logger.V(1).Info("Converted deprecated Branch field to Source.Git")
-		} else if deployment.Spec.Action == networkingv1alpha2.PagesDeploymentActionCreate ||
-			deployment.Spec.Action == "" {
-			// Default to git source with empty branch (uses project's production branch)
-			deployment.Spec.Source = &networkingv1alpha2.PagesDeploymentSourceSpec{
-				Type: networkingv1alpha2.PagesDeploymentSourceTypeGit,
-				Git:  &networkingv1alpha2.PagesGitSourceSpec{},
-			}
+		// Re-fetch to get updated version
+		if err := r.Get(ctx, req.NamespacedName, deployment); err != nil {
+			return ctrl.Result{}, err
 		}
 	}
 
-	// If Environment is not specified, infer from context
-	if deployment.Spec.Environment == "" {
-		// Default to production for create action without explicit branch
-		// Default to preview for create action with explicit branch
-		if deployment.Spec.Source != nil && deployment.Spec.Source.Type == networkingv1alpha2.PagesDeploymentSourceTypeGit {
-			if deployment.Spec.Source.Git != nil && deployment.Spec.Source.Git.Branch != "" {
-				deployment.Spec.Environment = networkingv1alpha2.PagesDeploymentEnvironmentPreview
-			} else {
-				deployment.Spec.Environment = networkingv1alpha2.PagesDeploymentEnvironmentProduction
-			}
-		} else if deployment.Spec.Source != nil && deployment.Spec.Source.Type == networkingv1alpha2.PagesDeploymentSourceTypeDirectUpload {
-			// Direct upload defaults to preview
-			deployment.Spec.Environment = networkingv1alpha2.PagesDeploymentEnvironmentPreview
-		}
+	// Determine if we need to create a new deployment
+	needsDeployment := r.needsNewDeployment(deployment)
+
+	if needsDeployment {
+		// Create new deployment
+		return r.createDeployment(ctx, deployment, projectName, apiResult)
 	}
 
-	// Emit deprecation warning event
-	if usingDeprecated {
-		r.Recorder.Event(deployment, corev1.EventTypeWarning, EventReasonDeprecationWarning,
-			"Using deprecated fields (Branch, DirectUpload, Action). Please migrate to Environment and Source fields. These fields will be removed in v1alpha3.")
+	// Check existing deployment status
+	if deployment.Status.DeploymentID != "" {
+		return r.pollDeploymentStatus(ctx, deployment, projectName, apiResult)
 	}
+
+	// No deployment ID and no need for new deployment - should not happen
+	logger.Info("No deployment ID and no need for new deployment")
+	return r.setErrorStatus(ctx, deployment, errors.New("no deployment ID found"))
 }
 
-// validateProductionUniqueness ensures only one production deployment exists per project.
-// Allows temporary coexistence of managed deployments (by PagesProject), as the PagesProject
-// controller will reconcile them to ensure eventual consistency.
+// getAPIClient returns a Cloudflare API client for the deployment.
+func (r *PagesDeploymentReconciler) getAPIClient(ctx context.Context, deployment *networkingv1alpha2.PagesDeployment) (*common.APIClientResult, error) {
+	return r.APIFactory.GetClient(ctx, common.APIClientOptions{
+		CloudflareDetails: &deployment.Spec.Cloudflare,
+		Namespace:         deployment.Namespace,
+		StatusAccountID:   deployment.Status.AccountID,
+	})
+}
+
+// needsNewDeployment determines if a new deployment should be created.
 //
-//nolint:revive // cognitive complexity is acceptable for validation logic
-func (r *PagesDeploymentReconciler) validateProductionUniqueness(
+//nolint:revive // cognitive complexity acceptable for deployment decision logic
+func (r *PagesDeploymentReconciler) needsNewDeployment(deployment *networkingv1alpha2.PagesDeployment) bool {
+	// No deployment ID yet
+	if deployment.Status.DeploymentID == "" {
+		return true
+	}
+
+	// Check force-redeploy annotation
+	currentForceRedeploy := ""
+	if deployment.Annotations != nil {
+		currentForceRedeploy = deployment.Annotations[AnnotationForceRedeploy]
+	}
+	lastForceRedeploy := ""
+	if deployment.Annotations != nil {
+		lastForceRedeploy = deployment.Annotations[AnnotationLastForceRedeploy]
+	}
+	if currentForceRedeploy != "" && currentForceRedeploy != lastForceRedeploy {
+		return true
+	}
+
+	// Check if spec changed (generation changed and deployment succeeded)
+	if deployment.Generation != deployment.Status.ObservedGeneration &&
+		(deployment.Status.State == networkingv1alpha2.PagesDeploymentStateSucceeded ||
+			deployment.Status.State == networkingv1alpha2.PagesDeploymentStateFailed ||
+			deployment.Status.State == networkingv1alpha2.PagesDeploymentStateCancelled) {
+		return true
+	}
+
+	return false
+}
+
+// createDeployment creates a new Cloudflare Pages deployment.
+//
+//nolint:revive // cognitive complexity acceptable for deployment creation
+func (r *PagesDeploymentReconciler) createDeployment(
 	ctx context.Context,
 	deployment *networkingv1alpha2.PagesDeployment,
 	projectName string,
-) error {
+	apiResult *common.APIClientResult,
+) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
+	api := apiResult.API
 
-	// List all PagesDeployments in the same namespace
-	deploymentList := &networkingv1alpha2.PagesDeploymentList{}
-	if err := r.List(ctx, deploymentList, client.InNamespace(deployment.Namespace)); err != nil {
-		return fmt.Errorf("failed to list PagesDeployments: %w", err)
-	}
+	logger.Info("Creating new Pages deployment",
+		"project", projectName,
+		"environment", deployment.Spec.Environment,
+		"sourceType", r.getSourceType(deployment))
 
-	for _, other := range deploymentList.Items {
-		// Skip self
-		if other.Name == deployment.Name && other.Namespace == deployment.Namespace {
-			continue
-		}
+	var result *cf.PagesDeploymentResult
+	var err error
 
-		// Skip if not production
-		if other.Spec.Environment != networkingv1alpha2.PagesDeploymentEnvironmentProduction {
-			continue
-		}
+	// Determine source type and create deployment
+	if deployment.Spec.Source != nil {
+		switch deployment.Spec.Source.Type {
+		case networkingv1alpha2.PagesDeploymentSourceTypeGit:
+			// Git-based deployment
+			branch := ""
+			if deployment.Spec.Source.Git != nil {
+				branch = deployment.Spec.Source.Git.Branch
+			}
+			result, err = api.CreatePagesDeployment(ctx, projectName, branch)
 
-		// Check if same project
-		otherProjectName, err := r.resolveProjectNameFromRef(ctx, &other)
-		if err != nil {
-			continue // Skip if we can't resolve
-		}
-
-		if otherProjectName == projectName {
-			// Check if the other deployment is managed by PagesProject
-			// Managed deployments are allowed to temporarily coexist during reconciliation
-			const ManagedByLabel = "networking.cloudflare-operator.io/managed-by"
-			const ManagedByValue = "pagesproject"
-			if other.Labels[ManagedByLabel] == ManagedByValue {
-				logger.Info("Found managed production deployment, allowing temporary coexistence",
-					"existing", other.Name, "managed", true)
-				// PagesProject controller will handle reconciliation
-				continue
+		case networkingv1alpha2.PagesDeploymentSourceTypeDirectUpload:
+			// Direct upload deployment
+			if deployment.Spec.Source.DirectUpload == nil || deployment.Spec.Source.DirectUpload.Source == nil {
+				return r.setErrorStatus(ctx, deployment, errors.New("direct upload source is required"))
+			}
+			files, loadErr := r.loadDirectUploadFiles(ctx, deployment)
+			if loadErr != nil {
+				return r.setErrorStatus(ctx, deployment, fmt.Errorf("failed to load files: %w", loadErr))
+			}
+			directResult, uploadErr := api.CreatePagesDirectUploadDeployment(ctx, projectName, files)
+			if uploadErr != nil {
+				return r.setErrorStatus(ctx, deployment, fmt.Errorf("failed to create direct upload deployment: %w", uploadErr))
+			}
+			// Convert direct upload result to deployment result
+			result = &cf.PagesDeploymentResult{
+				ID:          directResult.ID,
+				URL:         directResult.URL,
+				Stage:       directResult.Stage,
+				ProjectName: projectName,
 			}
 
-			// Check if the other deployment is in a terminal state (failed/succeeded)
-			// Only block if the other production deployment is active
-			if other.Status.State != networkingv1alpha2.PagesDeploymentStateFailed &&
-				other.Status.State != networkingv1alpha2.PagesDeploymentStateCancelled {
-				return fmt.Errorf("production deployment '%s' already exists for project '%s' (user-created). "+
-					"Only one production deployment is allowed per project. "+
-					"Delete the existing production deployment or use environment: preview",
-					other.Name, projectName)
-			}
+		default:
+			return r.setErrorStatus(ctx, deployment, fmt.Errorf("unsupported source type: %s", deployment.Spec.Source.Type))
+		}
+	} else if deployment.Spec.Action == networkingv1alpha2.PagesDeploymentActionRollback {
+		// Rollback action
+		targetID := deployment.Spec.TargetDeploymentID
+		if deployment.Spec.Rollback != nil && deployment.Spec.Rollback.DeploymentID != "" {
+			targetID = deployment.Spec.Rollback.DeploymentID
+		}
+		if targetID == "" {
+			return r.setErrorStatus(ctx, deployment, errors.New("rollback target deployment ID is required"))
+		}
+		result, err = api.RollbackPagesDeployment(ctx, projectName, targetID)
+	} else {
+		// Default: git deployment with default branch
+		branch := deployment.Spec.Branch // Legacy field
+		result, err = api.CreatePagesDeployment(ctx, projectName, branch)
+	}
+
+	if err != nil {
+		logger.Error(err, "Failed to create Pages deployment")
+		return r.setErrorStatus(ctx, deployment, err)
+	}
+
+	// Record event
+	r.Recorder.Event(deployment, corev1.EventTypeNormal, EventReasonDeploymentCreated,
+		fmt.Sprintf("Created deployment %s (stage: %s)", result.ID, result.Stage))
+
+	// Update force-redeploy tracking
+	if deployment.Annotations == nil {
+		deployment.Annotations = make(map[string]string)
+	}
+	if forceRedeploy := deployment.Annotations[AnnotationForceRedeploy]; forceRedeploy != "" {
+		deployment.Annotations[AnnotationLastForceRedeploy] = forceRedeploy
+		if updateErr := r.Update(ctx, deployment); updateErr != nil {
+			logger.Error(updateErr, "Failed to update force-redeploy annotation")
+			// Don't fail reconciliation for this
 		}
 	}
 
-	return nil
+	// Update status with deployment info
+	return r.updateDeploymentStatus(ctx, deployment, projectName, apiResult.AccountID, result)
 }
 
-// resolveProjectNameFromRef resolves the project name from a PagesDeployment's ProjectRef.
-// This is a helper for validateProductionUniqueness.
-func (r *PagesDeploymentReconciler) resolveProjectNameFromRef(
+// pollDeploymentStatus polls the status of an existing deployment.
+func (r *PagesDeploymentReconciler) pollDeploymentStatus(
 	ctx context.Context,
 	deployment *networkingv1alpha2.PagesDeployment,
-) (string, error) {
-	if deployment.Spec.ProjectRef.CloudflareID != "" {
-		return deployment.Spec.ProjectRef.CloudflareID, nil
-	}
-	if deployment.Spec.ProjectRef.CloudflareName != "" {
-		return deployment.Spec.ProjectRef.CloudflareName, nil
-	}
-	if deployment.Spec.ProjectRef.Name != "" {
-		project := &networkingv1alpha2.PagesProject{}
-		if err := r.Get(ctx, client.ObjectKey{
-			Namespace: deployment.Namespace,
-			Name:      deployment.Spec.ProjectRef.Name,
-		}, project); err != nil {
-			return "", err
+	projectName string,
+	apiResult *common.APIClientResult,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+	api := apiResult.API
+
+	// Get deployment status from Cloudflare
+	result, err := api.GetPagesDeployment(ctx, projectName, deployment.Status.DeploymentID)
+	if err != nil {
+		if cf.IsNotFoundError(err) {
+			logger.Info("Deployment not found, will create new one")
+			// Clear deployment ID and retry
+			deployment.Status.DeploymentID = ""
+			if updateErr := r.Status().Update(ctx, deployment); updateErr != nil {
+				return ctrl.Result{}, updateErr
+			}
+			return ctrl.Result{Requeue: true}, nil
 		}
-		if project.Spec.Name != "" {
-			return project.Spec.Name, nil
-		}
-		return project.Name, nil
+		logger.Error(err, "Failed to get deployment status")
+		return r.setErrorStatus(ctx, deployment, err)
 	}
-	return "", errors.New("no project reference found")
+
+	// Update status
+	return r.updateDeploymentStatus(ctx, deployment, projectName, apiResult.AccountID, result)
+}
+
+// updateDeploymentStatus updates the CRD status based on deployment result.
+//
+//nolint:revive // cognitive complexity acceptable for status update with multiple fields
+func (r *PagesDeploymentReconciler) updateDeploymentStatus(
+	ctx context.Context,
+	deployment *networkingv1alpha2.PagesDeployment,
+	projectName string,
+	accountID string,
+	result *cf.PagesDeploymentResult,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, deployment, func() {
+		deployment.Status.AccountID = accountID
+		deployment.Status.ProjectName = projectName
+		deployment.Status.DeploymentID = result.ID
+		deployment.Status.URL = result.URL
+		deployment.Status.Environment = result.Environment
+
+		// Determine state based on stage
+		stage := result.Stage
+		if result.StageStatus != "" && result.StageStatus != "active" {
+			stage = result.StageStatus
+		}
+
+		switch stage {
+		case "queued":
+			deployment.Status.State = networkingv1alpha2.PagesDeploymentStateQueued
+		case "initialize", "clone_repo", "build":
+			deployment.Status.State = networkingv1alpha2.PagesDeploymentStateBuilding
+		case "deploy":
+			deployment.Status.State = networkingv1alpha2.PagesDeploymentStateDeploying
+		case "success", "active":
+			deployment.Status.State = networkingv1alpha2.PagesDeploymentStateSucceeded
+		case "failure", "failed":
+			deployment.Status.State = networkingv1alpha2.PagesDeploymentStateFailed
+		case "canceled", "cancelled":
+			deployment.Status.State = networkingv1alpha2.PagesDeploymentStateCancelled
+		default:
+			deployment.Status.State = networkingv1alpha2.PagesDeploymentStatePending
+		}
+
+		// Build condition
+		conditionStatus := metav1.ConditionFalse
+		reason := "InProgress"
+		message := fmt.Sprintf("Deployment is %s", stage)
+
+		switch deployment.Status.State {
+		case networkingv1alpha2.PagesDeploymentStateSucceeded:
+			conditionStatus = metav1.ConditionTrue
+			reason = "Succeeded"
+			message = fmt.Sprintf("Deployment succeeded: %s", result.URL)
+		case networkingv1alpha2.PagesDeploymentStateFailed:
+			reason = "Failed"
+			message = "Deployment failed"
+		case networkingv1alpha2.PagesDeploymentStateCancelled:
+			reason = "Cancelled"
+			message = "Deployment was cancelled"
+		}
+
+		meta.SetStatusCondition(&deployment.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             conditionStatus,
+			ObservedGeneration: deployment.Generation,
+			Reason:             reason,
+			Message:            message,
+			LastTransitionTime: metav1.Now(),
+		})
+
+		deployment.Status.ObservedGeneration = deployment.Generation
+	})
+
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
+	}
+
+	// Determine if we need to continue polling
+	switch deployment.Status.State {
+	case networkingv1alpha2.PagesDeploymentStateSucceeded:
+		logger.Info("Deployment succeeded", "url", result.URL)
+		r.Recorder.Event(deployment, corev1.EventTypeNormal, EventReasonDeploymentSucceeded,
+			fmt.Sprintf("Deployment succeeded: %s", result.URL))
+		return ctrl.Result{}, nil
+
+	case networkingv1alpha2.PagesDeploymentStateFailed:
+		logger.Info("Deployment failed")
+		r.Recorder.Event(deployment, corev1.EventTypeWarning, EventReasonDeploymentFailed,
+			"Deployment failed")
+		return ctrl.Result{}, nil
+
+	case networkingv1alpha2.PagesDeploymentStateCancelled:
+		logger.Info("Deployment cancelled")
+		return ctrl.Result{}, nil
+
+	default:
+		// Continue polling for in-progress deployments
+		logger.Info("Deployment in progress, will poll again",
+			"state", deployment.Status.State,
+			"stage", result.Stage,
+			"interval", PollingInterval)
+		r.Recorder.Event(deployment, corev1.EventTypeNormal, EventReasonDeploymentPolling,
+			fmt.Sprintf("Deployment in progress: %s", result.Stage))
+		return ctrl.Result{RequeueAfter: PollingInterval}, nil
+	}
+}
+
+// handleDeletion handles the deletion of a PagesDeployment.
+//
+//nolint:revive // cognitive complexity acceptable for deletion logic
+func (r *PagesDeploymentReconciler) handleDeletion(
+	ctx context.Context,
+	deployment *networkingv1alpha2.PagesDeployment,
+	projectName string,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	if !controllerutil.ContainsFinalizer(deployment, FinalizerName) {
+		return ctrl.Result{}, nil
+	}
+
+	// Production deletion protection warning
+	if deployment.Spec.Environment == networkingv1alpha2.PagesDeploymentEnvironmentProduction &&
+		deployment.Status.State == networkingv1alpha2.PagesDeploymentStateSucceeded {
+		if err := r.validateProductionDeletion(ctx, deployment, projectName); err != nil {
+			logger.Error(err, "Production deletion protection triggered")
+			r.Recorder.Event(deployment, corev1.EventTypeWarning, EventReasonProductionProtected, err.Error())
+			// Don't block deletion, just warn
+		}
+	}
+
+	// Try to delete deployment from Cloudflare
+	// Note: Active production deployments cannot be deleted via API
+	if deployment.Status.DeploymentID != "" {
+		apiResult, err := r.getAPIClient(ctx, deployment)
+		if err != nil {
+			logger.Error(err, "Failed to get API client for deletion")
+			// Continue with finalizer removal
+		} else {
+			if err := apiResult.API.DeletePagesDeployment(ctx, projectName, deployment.Status.DeploymentID); err != nil {
+				if !cf.IsNotFoundError(err) && !cf.IsActiveProductionDeploymentError(err) {
+					logger.Error(err, "Failed to delete deployment from Cloudflare")
+					r.Recorder.Event(deployment, corev1.EventTypeWarning, controller.EventReasonDeleteFailed,
+						cf.SanitizeErrorMessage(err))
+					return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+				}
+				if cf.IsActiveProductionDeploymentError(err) {
+					logger.Info("Cannot delete active production deployment, this is expected")
+					r.Recorder.Event(deployment, corev1.EventTypeNormal, "ProductionPreserved",
+						"Active production deployment preserved in Cloudflare")
+				}
+			}
+		}
+	}
+
+	// Remove finalizer
+	if err := controller.UpdateWithConflictRetry(ctx, r.Client, deployment, func() {
+		controllerutil.RemoveFinalizer(deployment, FinalizerName)
+	}); err != nil {
+		logger.Error(err, "Failed to remove finalizer")
+		return ctrl.Result{}, err
+	}
+
+	r.Recorder.Event(deployment, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
+	return ctrl.Result{}, nil
+}
+
+// setErrorStatus updates the deployment status with an error.
+func (r *PagesDeploymentReconciler) setErrorStatus(
+	ctx context.Context,
+	deployment *networkingv1alpha2.PagesDeployment,
+	err error,
+) (ctrl.Result, error) {
+	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, deployment, func() {
+		deployment.Status.State = networkingv1alpha2.PagesDeploymentStateFailed
+		meta.SetStatusCondition(&deployment.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: deployment.Generation,
+			Reason:             "ReconcileError",
+			Message:            cf.SanitizeErrorMessage(err),
+			LastTransitionTime: metav1.Now(),
+		})
+		deployment.Status.ObservedGeneration = deployment.Generation
+	})
+
+	if updateErr != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
+	}
+
+	r.Recorder.Event(deployment, corev1.EventTypeWarning, controller.EventReasonReconcileFailed,
+		cf.SanitizeErrorMessage(err))
+
+	// Determine requeue based on error type
+	if cf.IsPermanentError(err) {
+		return ctrl.Result{}, nil // Don't retry permanent errors
+	}
+	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+}
+
+// getSourceType returns a string describing the deployment source type.
+func (r *PagesDeploymentReconciler) getSourceType(deployment *networkingv1alpha2.PagesDeployment) string {
+	if deployment.Spec.Source != nil {
+		return string(deployment.Spec.Source.Type)
+	}
+	if deployment.Spec.Action == networkingv1alpha2.PagesDeploymentActionRollback {
+		return "rollback"
+	}
+	if deployment.Spec.DirectUpload != nil {
+		return "directUpload"
+	}
+	return "git"
+}
+
+// loadDirectUploadFiles loads files for direct upload from the specified source.
+// Supports: HTTP URL, S3, and OCI sources.
+//
+// Note: This implementation requires files to be fetched and extracted.
+// For simplicity, we currently only support simple cases.
+// Complex archive handling should be done by a dedicated file loader service.
+//
+//nolint:revive,unparam // cognitive complexity acceptable; returns nil as feature not yet implemented
+func (r *PagesDeploymentReconciler) loadDirectUploadFiles(
+	ctx context.Context,
+	deployment *networkingv1alpha2.PagesDeployment,
+) (map[string][]byte, error) {
+	logger := log.FromContext(ctx)
+
+	if deployment.Spec.Source == nil || deployment.Spec.Source.DirectUpload == nil {
+		return nil, errors.New("direct upload source not specified")
+	}
+
+	du := deployment.Spec.Source.DirectUpload
+	if du.Source == nil {
+		return nil, errors.New("direct upload source configuration is required")
+	}
+
+	// Currently, direct upload requires external file fetching
+	// which is not implemented inline in the controller.
+	// The proper implementation should use a dedicated file loader service.
+	//
+	// For now, we return an error indicating this feature needs external setup.
+	// In production, you would typically:
+	// 1. Use an init container to download and prepare files
+	// 2. Use a sidecar service for file management
+	// 3. Implement HTTP/S3/OCI fetching here
+
+	if du.Source.HTTP != nil {
+		logger.Info("Direct upload from HTTP source",
+			"url", du.Source.HTTP.URL)
+		return nil, errors.New("direct upload from HTTP URL is not yet implemented in the simplified controller; use Git-based deployment or pre-upload files to Cloudflare")
+	}
+
+	if du.Source.S3 != nil {
+		logger.Info("Direct upload from S3 source",
+			"bucket", du.Source.S3.Bucket,
+			"key", du.Source.S3.Key)
+		return nil, errors.New("direct upload from S3 is not yet implemented in the simplified controller; use Git-based deployment or pre-upload files to Cloudflare")
+	}
+
+	if du.Source.OCI != nil {
+		logger.Info("Direct upload from OCI source",
+			"image", du.Source.OCI.Image)
+		return nil, errors.New("direct upload from OCI registry is not yet implemented in the simplified controller; use Git-based deployment or pre-upload files to Cloudflare")
+	}
+
+	return nil, errors.New("no valid direct upload source specified (HTTP, S3, or OCI required)")
 }
 
 // resolveProjectName resolves the Cloudflare project name from the ProjectRef.
 //
-//nolint:revive // cognitive complexity is acceptable for resolution logic
+//nolint:revive // cognitive complexity acceptable for resolution logic
 func (r *PagesDeploymentReconciler) resolveProjectName(
 	ctx context.Context,
 	deployment *networkingv1alpha2.PagesDeployment,
@@ -318,280 +612,159 @@ func (r *PagesDeploymentReconciler) resolveProjectName(
 				deployment.Spec.ProjectRef.Name, err)
 		}
 
-		// Get project name from the PagesProject spec
 		if project.Spec.Name != "" {
 			return project.Spec.Name, nil
 		}
 		return project.Name, nil
 	}
 
-	return "", fmt.Errorf("project reference is required: specify name, cloudflareId, or cloudflareName")
+	return "", errors.New("project reference is required: specify name, cloudflareId, or cloudflareName")
 }
 
-// handleDeletion handles the deletion of a PagesDeployment.
-//
-//nolint:revive // cyclomatic complexity is acceptable for deletion logic with protection
-func (r *PagesDeploymentReconciler) handleDeletion(
+// resolveProjectNameFromRef resolves the project name from a PagesDeployment's ProjectRef.
+func (r *PagesDeploymentReconciler) resolveProjectNameFromRef(
 	ctx context.Context,
 	deployment *networkingv1alpha2.PagesDeployment,
-	projectName string,
-) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
-
-	if !controllerutil.ContainsFinalizer(deployment, FinalizerName) {
-		return ctrl.Result{}, nil
-	}
-
-	// Production deletion protection: if this is a production deployment that succeeded,
-	// check if there's another deployment that can take over
-	if deployment.Spec.Environment == networkingv1alpha2.PagesDeploymentEnvironmentProduction &&
-		deployment.Status.State == networkingv1alpha2.PagesDeploymentStateSucceeded {
-		if err := r.validateProductionDeletion(ctx, deployment, projectName); err != nil {
-			logger.Error(err, "Production deletion protection triggered")
-			r.Recorder.Event(deployment, corev1.EventTypeWarning, EventReasonProductionProtected, err.Error())
-			// Don't return error - allow deletion to proceed but log the warning
-			// The Cloudflare deployment will be preserved anyway
-		}
-	}
-
-	// Unregister from SyncState - this triggers Sync Controller to delete from Cloudflare
-	source := service.Source{
-		Kind:      "PagesDeployment",
-		Namespace: deployment.Namespace,
-		Name:      deployment.Name,
-	}
-
-	logger.Info("Unregistering Pages deployment from SyncState",
-		"projectName", projectName,
-		"deploymentId", deployment.Status.DeploymentID,
-		"environment", deployment.Spec.Environment,
-		"source", fmt.Sprintf("%s/%s", deployment.Namespace, deployment.Name))
-
-	if err := r.deploymentService.Unregister(ctx, deployment.Status.DeploymentID, source); err != nil {
-		logger.Error(err, "Failed to unregister Pages deployment from SyncState")
-		r.Recorder.Event(deployment, corev1.EventTypeWarning, "UnregisterFailed",
-			fmt.Sprintf("Failed to unregister from SyncState: %s", err.Error()))
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-	}
-
-	r.Recorder.Event(deployment, corev1.EventTypeNormal, "Unregistered",
-		"Unregistered from SyncState, Sync Controller will delete from Cloudflare")
-
-	// Remove finalizer with retry logic
-	if err := controller.UpdateWithConflictRetry(ctx, r.Client, deployment, func() {
-		controllerutil.RemoveFinalizer(deployment, FinalizerName)
-	}); err != nil {
-		logger.Error(err, "failed to remove finalizer")
-		return ctrl.Result{}, err
-	}
-	r.Recorder.Event(deployment, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
-
-	return ctrl.Result{}, nil
+) (string, error) {
+	return r.resolveProjectName(ctx, deployment)
 }
 
-// validateProductionDeletion checks if deleting a production deployment is safe.
-// This warns if deleting the only successful production deployment.
+// validateProductionUniqueness ensures only one production deployment exists per project.
 //
-//nolint:revive // cognitive complexity is acceptable for validation logic
-func (r *PagesDeploymentReconciler) validateProductionDeletion(
+//nolint:revive // cognitive complexity acceptable for validation logic
+func (r *PagesDeploymentReconciler) validateProductionUniqueness(
 	ctx context.Context,
 	deployment *networkingv1alpha2.PagesDeployment,
 	projectName string,
 ) error {
-	// List all PagesDeployments in the same namespace
 	deploymentList := &networkingv1alpha2.PagesDeploymentList{}
 	if err := r.List(ctx, deploymentList, client.InNamespace(deployment.Namespace)); err != nil {
 		return fmt.Errorf("failed to list PagesDeployments: %w", err)
 	}
 
-	// Check if there's another successful deployment for this project
 	for _, other := range deploymentList.Items {
-		// Skip self
 		if other.Name == deployment.Name && other.Namespace == deployment.Namespace {
 			continue
 		}
-
-		// Skip if being deleted
-		if !other.DeletionTimestamp.IsZero() {
+		if other.Spec.Environment != networkingv1alpha2.PagesDeploymentEnvironmentProduction {
 			continue
 		}
 
-		// Check if same project
 		otherProjectName, err := r.resolveProjectNameFromRef(ctx, &other)
 		if err != nil {
 			continue
 		}
 
 		if otherProjectName == projectName {
-			// Found another deployment for this project - deletion is safe
-			// The Cloudflare deployment will be preserved anyway
-			return nil
+			// Allow managed deployments to coexist temporarily
+			const ManagedByLabel = "networking.cloudflare-operator.io/managed-by"
+			if other.Labels[ManagedByLabel] == "pagesproject" {
+				continue
+			}
+
+			// Allow if other is in terminal failed state
+			if other.Status.State == networkingv1alpha2.PagesDeploymentStateFailed ||
+				other.Status.State == networkingv1alpha2.PagesDeploymentStateCancelled {
+				continue
+			}
+
+			return fmt.Errorf("production deployment '%s' already exists for project '%s'", other.Name, projectName)
 		}
 	}
 
-	// No other deployments found - warn but allow deletion
-	return fmt.Errorf("deleting the only PagesDeployment for project '%s'. "+
-		"Note: The Cloudflare deployment will be preserved and can be re-adopted", projectName)
+	return nil
 }
 
-// registerPagesDeployment registers the Pages deployment configuration to SyncState.
+// validateProductionDeletion checks if deleting a production deployment is safe.
 //
-//nolint:revive // cyclomatic complexity is acceptable for registration logic
-func (r *PagesDeploymentReconciler) registerPagesDeployment(
+//nolint:revive // cognitive complexity acceptable for validation logic
+func (r *PagesDeploymentReconciler) validateProductionDeletion(
 	ctx context.Context,
 	deployment *networkingv1alpha2.PagesDeployment,
 	projectName string,
-	credInfo *controller.CredentialsInfo,
-) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
-
-	// Create source reference
-	source := service.Source{
-		Kind:      "PagesDeployment",
-		Namespace: deployment.Namespace,
-		Name:      deployment.Name,
+) error {
+	deploymentList := &networkingv1alpha2.PagesDeploymentList{}
+	if err := r.List(ctx, deploymentList, client.InNamespace(deployment.Namespace)); err != nil {
+		return fmt.Errorf("failed to list PagesDeployments: %w", err)
 	}
 
-	// Get force-redeploy annotation value
-	// When this value changes, it forces a new deployment even if spec is unchanged
-	forceRedeploy := ""
-	if deployment.Annotations != nil {
-		forceRedeploy = deployment.Annotations[AnnotationForceRedeploy]
-	}
+	for _, other := range deploymentList.Items {
+		if other.Name == deployment.Name && other.Namespace == deployment.Namespace {
+			continue
+		}
+		if !other.DeletionTimestamp.IsZero() {
+			continue
+		}
 
-	// Build Pages deployment configuration using new or legacy fields
-	config := r.buildDeploymentConfig(deployment, projectName, forceRedeploy)
+		otherProjectName, err := r.resolveProjectNameFromRef(ctx, &other)
+		if err != nil {
+			continue
+		}
 
-	// Register to SyncState
-	opts := pagessvc.DeploymentRegisterOptions{
-		DeploymentID:   deployment.Status.DeploymentID,
-		ProjectName:    projectName,
-		AccountID:      credInfo.AccountID,
-		Source:         source,
-		Config:         config,
-		CredentialsRef: credInfo.CredentialsRef,
-	}
-
-	if err := r.deploymentService.Register(ctx, opts); err != nil {
-		logger.Error(err, "Failed to register Pages deployment configuration")
-		r.Recorder.Event(deployment, corev1.EventTypeWarning, "RegisterFailed",
-			fmt.Sprintf("Failed to register Pages deployment: %s", err.Error()))
-		return r.updateStatusError(ctx, deployment, err)
-	}
-
-	// Build description for event
-	sourceDesc := r.buildSourceDescription(deployment)
-	r.Recorder.Event(deployment, corev1.EventTypeNormal, "Registered",
-		fmt.Sprintf("Registered Pages Deployment (%s, %s) configuration to SyncState",
-			deployment.Spec.Environment, sourceDesc))
-
-	// Check if already synced
-	syncStatus, err := r.deploymentService.GetSyncStatus(ctx, source, deployment.Status.DeploymentID)
-	if err != nil {
-		logger.Error(err, "Failed to get sync status")
-		return r.updateStatusPending(ctx, deployment, projectName, credInfo.AccountID)
-	}
-
-	if syncStatus != nil && syncStatus.IsSynced {
-		// Already synced, update status based on action result
-		return r.updateStatusSynced(ctx, deployment, projectName, credInfo.AccountID, syncStatus)
-	}
-
-	// Update status to Pending - actual sync happens via PagesSyncController
-	return r.updateStatusPending(ctx, deployment, projectName, credInfo.AccountID)
-}
-
-// buildDeploymentConfig builds the deployment configuration from spec fields.
-// It handles both new (Environment/Source) and legacy (Action/Branch/DirectUpload) fields.
-func (*PagesDeploymentReconciler) buildDeploymentConfig(
-	deployment *networkingv1alpha2.PagesDeployment,
-	projectName string,
-	forceRedeploy string,
-) pagessvc.PagesDeploymentConfig {
-	config := pagessvc.PagesDeploymentConfig{
-		ProjectName:     projectName,
-		Environment:     string(deployment.Spec.Environment),
-		PurgeBuildCache: deployment.Spec.PurgeBuildCache,
-		ForceRedeploy:   forceRedeploy,
-	}
-
-	// Use new Source field if available
-	if deployment.Spec.Source != nil {
-		config.Source = convertSourceSpec(deployment.Spec.Source)
-	}
-
-	// Include legacy fields for backward compatibility during transition
-	// These are used by the Sync Controller if Source is not set
-	config.Action = string(deployment.Spec.Action)
-	config.TargetDeploymentID = deployment.Spec.TargetDeploymentID
-	config.Rollback = convertRollback(deployment.Spec.Rollback)
-
-	// Convert legacy DirectUpload if Source.DirectUpload is not set
-	if config.Source == nil || config.Source.DirectUpload == nil {
-		if deployment.Spec.DirectUpload != nil {
-			config.LegacyDirectUpload = convertDirectUpload(deployment.Spec.DirectUpload)
+		if otherProjectName == projectName {
+			return nil // Another deployment exists
 		}
 	}
 
-	return config
+	return fmt.Errorf("deleting the only PagesDeployment for project '%s'", projectName)
 }
 
-// buildSourceDescription creates a human-readable description of the deployment source.
+// applyBackwardCompatibilityAdapter converts deprecated fields to new format.
 //
-//nolint:revive // cognitive complexity is acceptable for source description building
-func (*PagesDeploymentReconciler) buildSourceDescription(deployment *networkingv1alpha2.PagesDeployment) string {
-	if deployment.Spec.Source != nil {
-		switch deployment.Spec.Source.Type {
-		case networkingv1alpha2.PagesDeploymentSourceTypeGit:
-			if deployment.Spec.Source.Git != nil && deployment.Spec.Source.Git.Branch != "" {
-				if deployment.Spec.Source.Git.CommitSha != "" {
-					return fmt.Sprintf("git:%s@%s", deployment.Spec.Source.Git.Branch,
-						deployment.Spec.Source.Git.CommitSha[:7])
-				}
-				return fmt.Sprintf("git:%s", deployment.Spec.Source.Git.Branch)
+//nolint:revive,gocritic // acceptable for backward compatibility logic
+func (r *PagesDeploymentReconciler) applyBackwardCompatibilityAdapter(
+	ctx context.Context,
+	deployment *networkingv1alpha2.PagesDeployment,
+) {
+	logger := log.FromContext(ctx)
+	usingDeprecated := false
+
+	if deployment.Spec.Source == nil {
+		if deployment.Spec.DirectUpload != nil && deployment.Spec.DirectUpload.Source != nil {
+			usingDeprecated = true
+			deployment.Spec.Source = &networkingv1alpha2.PagesDeploymentSourceSpec{
+				Type: networkingv1alpha2.PagesDeploymentSourceTypeDirectUpload,
+				DirectUpload: &networkingv1alpha2.PagesDirectUploadSourceSpec{
+					Source:   deployment.Spec.DirectUpload.Source,
+					Checksum: deployment.Spec.DirectUpload.Checksum,
+					Archive:  deployment.Spec.DirectUpload.Archive,
+				},
 			}
-			return "git:default"
-		case networkingv1alpha2.PagesDeploymentSourceTypeDirectUpload:
-			return "directUpload"
+			logger.V(1).Info("Converted deprecated DirectUpload field to Source.DirectUpload")
+		} else if deployment.Spec.Branch != "" {
+			usingDeprecated = true
+			deployment.Spec.Source = &networkingv1alpha2.PagesDeploymentSourceSpec{
+				Type: networkingv1alpha2.PagesDeploymentSourceTypeGit,
+				Git: &networkingv1alpha2.PagesGitSourceSpec{
+					Branch: deployment.Spec.Branch,
+				},
+			}
+			logger.V(1).Info("Converted deprecated Branch field to Source.Git")
+		} else if deployment.Spec.Action == networkingv1alpha2.PagesDeploymentActionCreate ||
+			deployment.Spec.Action == "" {
+			deployment.Spec.Source = &networkingv1alpha2.PagesDeploymentSourceSpec{
+				Type: networkingv1alpha2.PagesDeploymentSourceTypeGit,
+				Git:  &networkingv1alpha2.PagesGitSourceSpec{},
+			}
 		}
 	}
 
-	// Legacy format
-	if deployment.Spec.DirectUpload != nil {
-		return "directUpload"
-	}
-	if deployment.Spec.Branch != "" {
-		return fmt.Sprintf("git:%s", deployment.Spec.Branch)
-	}
-	return string(deployment.Spec.Action)
-}
-
-// convertSourceSpec converts CRD Source spec to service type.
-func convertSourceSpec(src *networkingv1alpha2.PagesDeploymentSourceSpec) *pagessvc.DeploymentSourceConfig {
-	if src == nil {
-		return nil
-	}
-
-	config := &pagessvc.DeploymentSourceConfig{
-		Type: string(src.Type),
-	}
-
-	if src.Git != nil {
-		config.Git = &pagessvc.GitSourceConfig{
-			Branch:    src.Git.Branch,
-			CommitSha: src.Git.CommitSha,
+	if deployment.Spec.Environment == "" {
+		if deployment.Spec.Source != nil && deployment.Spec.Source.Type == networkingv1alpha2.PagesDeploymentSourceTypeGit {
+			if deployment.Spec.Source.Git != nil && deployment.Spec.Source.Git.Branch != "" {
+				deployment.Spec.Environment = networkingv1alpha2.PagesDeploymentEnvironmentPreview
+			} else {
+				deployment.Spec.Environment = networkingv1alpha2.PagesDeploymentEnvironmentProduction
+			}
+		} else if deployment.Spec.Source != nil && deployment.Spec.Source.Type == networkingv1alpha2.PagesDeploymentSourceTypeDirectUpload {
+			deployment.Spec.Environment = networkingv1alpha2.PagesDeploymentEnvironmentPreview
 		}
 	}
 
-	if src.DirectUpload != nil {
-		config.DirectUpload = &pagessvc.DirectUploadConfig{
-			Source:   src.DirectUpload.Source,
-			Checksum: src.DirectUpload.Checksum,
-			Archive:  src.DirectUpload.Archive,
-		}
+	if usingDeprecated {
+		r.Recorder.Event(deployment, corev1.EventTypeWarning, EventReasonDeprecationWarning,
+			"Using deprecated fields. Please migrate to Environment and Source fields.")
 	}
-
-	return config
 }
 
 // findDeploymentsForProject returns PagesDeployments that may need reconciliation when a PagesProject changes.
@@ -601,7 +774,6 @@ func (r *PagesDeploymentReconciler) findDeploymentsForProject(ctx context.Contex
 		return nil
 	}
 
-	// List all PagesDeployments in the same namespace
 	deploymentList := &networkingv1alpha2.PagesDeploymentList{}
 	if err := r.List(ctx, deploymentList, client.InNamespace(project.Namespace)); err != nil {
 		return nil
@@ -614,7 +786,6 @@ func (r *PagesDeploymentReconciler) findDeploymentsForProject(ctx context.Contex
 
 	var requests []reconcile.Request
 	for _, deployment := range deploymentList.Items {
-		// Check if this deployment references the project
 		if deployment.Spec.ProjectRef.Name == project.Name ||
 			deployment.Spec.ProjectRef.CloudflareID == projectName ||
 			deployment.Spec.ProjectRef.CloudflareName == projectName {
@@ -627,178 +798,24 @@ func (r *PagesDeploymentReconciler) findDeploymentsForProject(ctx context.Contex
 	return requests
 }
 
-func (r *PagesDeploymentReconciler) updateStatusError(
-	ctx context.Context,
-	deployment *networkingv1alpha2.PagesDeployment,
-	err error,
-) (ctrl.Result, error) {
-	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, deployment, func() {
-		deployment.Status.State = networkingv1alpha2.PagesDeploymentStateFailed
-		meta.SetStatusCondition(&deployment.Status.Conditions, metav1.Condition{
-			Type:               "Ready",
-			Status:             metav1.ConditionFalse,
-			ObservedGeneration: deployment.Generation,
-			Reason:             "ReconcileError",
-			Message:            cf.SanitizeErrorMessage(err),
-			LastTransitionTime: metav1.Now(),
-		})
-		deployment.Status.ObservedGeneration = deployment.Generation
-	})
-
-	if updateErr != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
-	}
-
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-}
-
-func (r *PagesDeploymentReconciler) updateStatusPending(
-	ctx context.Context,
-	deployment *networkingv1alpha2.PagesDeployment,
-	projectName, accountID string,
-) (ctrl.Result, error) {
-	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, deployment, func() {
-		if deployment.Status.AccountID == "" {
-			deployment.Status.AccountID = accountID
-		}
-		deployment.Status.ProjectName = projectName
-		deployment.Status.State = networkingv1alpha2.PagesDeploymentStatePending
-		meta.SetStatusCondition(&deployment.Status.Conditions, metav1.Condition{
-			Type:               "Ready",
-			Status:             metav1.ConditionFalse,
-			ObservedGeneration: deployment.Generation,
-			Reason:             "Pending",
-			Message:            "Pages deployment configuration registered, waiting for sync",
-			LastTransitionTime: metav1.Now(),
-		})
-		deployment.Status.ObservedGeneration = deployment.Generation
-	})
-
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
-	}
-
-	// Requeue to check for sync completion
-	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-}
-
-//nolint:revive // cyclomatic complexity is acceptable for this status update function
-func (r *PagesDeploymentReconciler) updateStatusSynced(
-	ctx context.Context,
-	deployment *networkingv1alpha2.PagesDeployment,
-	projectName, accountID string,
-	syncStatus *pagessvc.DeploymentSyncStatus,
-) (ctrl.Result, error) {
-	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, deployment, func() {
-		deployment.Status.AccountID = accountID
-		deployment.Status.ProjectName = projectName
-		deployment.Status.DeploymentID = syncStatus.DeploymentID
-
-		// Update new status fields
-		deployment.Status.URL = syncStatus.URL
-		deployment.Status.HashURL = syncStatus.HashURL
-		deployment.Status.BranchURL = syncStatus.BranchURL
-		if syncStatus.Environment != "" {
-			deployment.Status.Environment = syncStatus.Environment
-		} else {
-			deployment.Status.Environment = string(deployment.Spec.Environment)
-		}
-		deployment.Status.IsCurrentProduction = syncStatus.IsCurrentProduction
-		deployment.Status.Version = syncStatus.Version
-		deployment.Status.SourceDescription = syncStatus.SourceDescription
-
-		// Determine state based on stage
-		switch syncStatus.Stage {
-		case "queued":
-			deployment.Status.State = networkingv1alpha2.PagesDeploymentStateQueued
-		case "initialize", "clone_repo", "build":
-			deployment.Status.State = networkingv1alpha2.PagesDeploymentStateBuilding
-		case "deploy":
-			deployment.Status.State = networkingv1alpha2.PagesDeploymentStateDeploying
-		case "success", "active":
-			deployment.Status.State = networkingv1alpha2.PagesDeploymentStateSucceeded
-		case "failure":
-			deployment.Status.State = networkingv1alpha2.PagesDeploymentStateFailed
-		default:
-			deployment.Status.State = networkingv1alpha2.PagesDeploymentStatePending
-		}
-
-		conditionStatus := metav1.ConditionFalse
-		reason := "InProgress"
-		message := fmt.Sprintf("Deployment is %s", syncStatus.Stage)
-
-		switch deployment.Status.State {
-		case networkingv1alpha2.PagesDeploymentStateSucceeded:
-			conditionStatus = metav1.ConditionTrue
-			reason = "Succeeded"
-			message = "Deployment succeeded"
-		case networkingv1alpha2.PagesDeploymentStateFailed:
-			reason = "Failed"
-			message = "Deployment failed"
-		}
-
-		meta.SetStatusCondition(&deployment.Status.Conditions, metav1.Condition{
-			Type:               "Ready",
-			Status:             conditionStatus,
-			ObservedGeneration: deployment.Generation,
-			Reason:             reason,
-			Message:            message,
-			LastTransitionTime: metav1.Now(),
-		})
-		deployment.Status.ObservedGeneration = deployment.Generation
-	})
-
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
-	}
-
-	// If deployment is still in progress, requeue to check status
-	if deployment.Status.State != networkingv1alpha2.PagesDeploymentStateSucceeded &&
-		deployment.Status.State != networkingv1alpha2.PagesDeploymentStateFailed {
-		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
-	}
-
-	return ctrl.Result{}, nil
-}
-
-func (r *PagesDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	r.Recorder = mgr.GetEventRecorderFor("pagesdeployment-controller")
-
-	// Initialize DeploymentService
-	r.deploymentService = pagessvc.NewDeploymentService(mgr.GetClient())
-
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&networkingv1alpha2.PagesDeployment{}).
-		Watches(&networkingv1alpha2.PagesProject{},
-			handler.EnqueueRequestsFromMapFunc(r.findDeploymentsForProject)).
-		// Watch other PagesDeployments for production uniqueness validation
-		Watches(&networkingv1alpha2.PagesDeployment{},
-			handler.EnqueueRequestsFromMapFunc(r.findDeploymentsForSameProject)).
-		Complete(r)
-}
-
-// findDeploymentsForSameProject returns PagesDeployments that may need re-validation
-// when another PagesDeployment for the same project changes (for production uniqueness).
+// findDeploymentsForSameProject returns PagesDeployments for production uniqueness validation.
 //
-//nolint:revive // cyclomatic complexity is acceptable for watch handler logic
+//nolint:revive // cognitive complexity acceptable for watch handler
 func (r *PagesDeploymentReconciler) findDeploymentsForSameProject(ctx context.Context, obj client.Object) []reconcile.Request {
 	changed, ok := obj.(*networkingv1alpha2.PagesDeployment)
 	if !ok {
 		return nil
 	}
 
-	// Only trigger if the changed deployment is production
 	if changed.Spec.Environment != networkingv1alpha2.PagesDeploymentEnvironmentProduction {
 		return nil
 	}
 
-	// Resolve project name for the changed deployment
 	changedProjectName, err := r.resolveProjectNameFromRef(ctx, changed)
 	if err != nil {
 		return nil
 	}
 
-	// List all PagesDeployments in the same namespace
 	deploymentList := &networkingv1alpha2.PagesDeploymentList{}
 	if err := r.List(ctx, deploymentList, client.InNamespace(changed.Namespace)); err != nil {
 		return nil
@@ -806,17 +823,13 @@ func (r *PagesDeploymentReconciler) findDeploymentsForSameProject(ctx context.Co
 
 	var requests []reconcile.Request
 	for _, deployment := range deploymentList.Items {
-		// Skip the deployment that triggered this watch
 		if deployment.Name == changed.Name && deployment.Namespace == changed.Namespace {
 			continue
 		}
-
-		// Skip if not production
 		if deployment.Spec.Environment != networkingv1alpha2.PagesDeploymentEnvironmentProduction {
 			continue
 		}
 
-		// Check if same project
 		projectName, err := r.resolveProjectNameFromRef(ctx, &deployment)
 		if err != nil {
 			continue
@@ -832,28 +845,15 @@ func (r *PagesDeploymentReconciler) findDeploymentsForSameProject(ctx context.Co
 	return requests
 }
 
-// convertDirectUpload converts CRD DirectUpload spec to service type.
-func convertDirectUpload(du *networkingv1alpha2.PagesDirectUpload) *pagessvc.DirectUploadConfig {
-	if du == nil {
-		return nil
-	}
-	return &pagessvc.DirectUploadConfig{
-		Source:               du.Source,
-		Checksum:             du.Checksum,
-		Archive:              du.Archive,
-		ManifestConfigMapRef: du.ManifestConfigMapRef,
-		Manifest:             du.Manifest,
-	}
-}
+func (r *PagesDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.Recorder = mgr.GetEventRecorderFor("pagesdeployment-controller")
+	r.APIFactory = common.NewAPIClientFactory(mgr.GetClient(), mgr.GetLogger())
 
-// convertRollback converts CRD Rollback spec to service type.
-func convertRollback(rb *networkingv1alpha2.RollbackConfig) *pagessvc.RollbackConfig {
-	if rb == nil {
-		return nil
-	}
-	return &pagessvc.RollbackConfig{
-		Strategy:     rb.Strategy,
-		Version:      rb.Version,
-		DeploymentID: rb.DeploymentID,
-	}
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&networkingv1alpha2.PagesDeployment{}).
+		Watches(&networkingv1alpha2.PagesProject{},
+			handler.EnqueueRequestsFromMapFunc(r.findDeploymentsForProject)).
+		Watches(&networkingv1alpha2.PagesDeployment{},
+			handler.EnqueueRequestsFromMapFunc(r.findDeploymentsForSameProject)).
+		Complete(r)
 }

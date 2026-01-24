@@ -31,9 +31,7 @@ import (
 	"github.com/StringKe/cloudflare-operator/internal/controller"
 	"github.com/StringKe/cloudflare-operator/internal/controller/route"
 	tunnelpkg "github.com/StringKe/cloudflare-operator/internal/controller/tunnel"
-	"github.com/StringKe/cloudflare-operator/internal/service"
-	dnssvc "github.com/StringKe/cloudflare-operator/internal/service/dns"
-	tunnelsvc "github.com/StringKe/cloudflare-operator/internal/service/tunnel"
+	"github.com/StringKe/cloudflare-operator/internal/controller/tunnelconfig"
 )
 
 // GatewayReconciler reconciles a Gateway object
@@ -186,20 +184,16 @@ func (r *GatewayReconciler) handleDeletion(
 		// Tunnel not found, just remove finalizer
 		logger.Info("Tunnel not found during deletion, removing finalizer")
 	} else {
-		// Unregister this Gateway's rules from SyncState
+		// Remove this Gateway's rules from ConfigMap
 		tunnelID := tunnel.GetStatus().TunnelId
 		if tunnelID != "" {
-			svc := tunnelsvc.NewService(r.Client)
-			source := service.Source{
-				Kind:      "Gateway",
-				Namespace: config.Namespace,
-				Name:      config.Name,
-			}
-			if unregErr := svc.Unregister(ctx, tunnelID, source); unregErr != nil {
-				logger.Error(unregErr, "Failed to unregister from SyncState", "tunnelId", tunnelID)
-				// Continue with finalizer removal - SyncState cleanup is best-effort
+			writer := tunnelconfig.NewWriter(r.Client, r.OperatorNamespace)
+			sourceKey := fmt.Sprintf("Gateway/%s/%s", config.Namespace, config.Name)
+			if unregErr := writer.RemoveSourceConfig(ctx, tunnelID, sourceKey); unregErr != nil {
+				logger.Error(unregErr, "Failed to remove from ConfigMap", "tunnelId", tunnelID)
+				// Continue with finalizer removal - ConfigMap cleanup is best-effort
 			} else {
-				logger.Info("Unregistered Gateway rules from SyncState",
+				logger.Info("Removed Gateway rules from ConfigMap",
 					"tunnelId", tunnelID, "config", config.Name)
 			}
 		}
@@ -694,9 +688,8 @@ func (r *GatewayReconciler) findGatewaysFromParentRefs(ctx context.Context, refs
 	return requests
 }
 
-// syncTunnelConfigToAPI syncs the tunnel configuration to CloudflareSyncState.
-// The actual Cloudflare API sync is handled by TunnelConfigSyncController.
-// This registers the Gateway's ingress rules to the shared SyncState.
+// syncTunnelConfigToAPI syncs the tunnel configuration to ConfigMap.
+// The TunnelConfig controller watches ConfigMaps and syncs to Cloudflare API.
 func (r *GatewayReconciler) syncTunnelConfigToAPI(
 	ctx context.Context,
 	tunnel tunnelpkg.Interface,
@@ -717,49 +710,54 @@ func (r *GatewayReconciler) syncTunnelConfigToAPI(
 		return nil
 	}
 
-	// Get credentials reference from tunnel
-	credRef := r.getCredentialsReferenceFromTunnel(tunnel)
-
-	// Convert cf.UnvalidatedIngressRule to tunnelsvc.IngressRule
-	tunnelRules := make([]tunnelsvc.IngressRule, 0, len(rules))
+	// Convert cf.UnvalidatedIngressRule to tunnelconfig.IngressRule
+	configRules := make([]tunnelconfig.IngressRule, 0, len(rules))
 	for _, rule := range rules {
-		// Skip the catch-all fallback rule - TunnelConfigSyncController handles it
+		// Skip the catch-all fallback rule - TunnelConfig Controller handles it
 		if rule.Hostname == "" && rule.Path == "" && rule.Service != "" {
 			continue
 		}
 
-		tunnelRules = append(tunnelRules, tunnelsvc.IngressRule{
-			Hostname:      rule.Hostname,
-			Path:          rule.Path,
-			Service:       rule.Service,
-			OriginRequest: convertOriginRequest(&rule.OriginRequest),
-		})
+		cfgRule := tunnelconfig.IngressRule{
+			Hostname: rule.Hostname,
+			Path:     rule.Path,
+			Service:  rule.Service,
+			Priority: tunnelconfig.PriorityGateway,
+		}
+
+		// Convert origin request config if present
+		cfgRule.OriginRequest = convertOriginRequest(&rule.OriginRequest)
+
+		configRules = append(configRules, cfgRule)
 	}
 
-	// Create service and register rules
-	svc := tunnelsvc.NewService(r.Client)
-	opts := tunnelsvc.RegisterRulesOptions{
-		TunnelID:       tunnelID,
-		AccountID:      accountID,
-		CredentialsRef: credRef,
-		Source: service.Source{
-			Kind:      "Gateway",
-			Namespace: config.Namespace,
-			Name:      config.Name,
-		},
-		Rules:    tunnelRules,
-		Priority: tunnelsvc.PriorityGateway,
+	// Create source config for HTTPRoute
+	source := &tunnelconfig.SourceConfig{
+		Kind:       tunnelconfig.SourceKindHTTPRoute,
+		Namespace:  config.Namespace,
+		Name:       config.Name,
+		Generation: config.Generation,
+		Rules:      configRules,
 	}
 
-	if err := svc.RegisterRules(ctx, opts); err != nil {
-		return fmt.Errorf("failed to register rules to SyncState: %w", err)
+	// Get owner reference info from Tunnel (ConfigMap is owned by Tunnel)
+	ownerGVK := metav1.GroupVersionKind{
+		Group:   "networking.cloudflare-operator.io",
+		Version: "v1alpha2",
+		Kind:    tunnel.GetKind(),
 	}
 
-	logger.Info("Registered Gateway rules to SyncState",
+	// Write to ConfigMap
+	writer := tunnelconfig.NewWriter(r.Client, r.OperatorNamespace)
+	if err := writer.WriteSourceConfig(ctx, tunnelID, accountID, source, tunnel.GetObject(), ownerGVK); err != nil {
+		return fmt.Errorf("failed to write to ConfigMap: %w", err)
+	}
+
+	logger.Info("Registered Gateway rules to ConfigMap",
 		"tunnel", tunnel.GetName(),
 		"tunnelId", tunnelID,
 		"config", config.Name,
-		"ruleCount", len(tunnelRules))
+		"ruleCount", len(configRules))
 
 	return nil
 }
@@ -775,29 +773,61 @@ func (*GatewayReconciler) getCredentialsReferenceFromTunnel(tunnel tunnelpkg.Int
 	return networkingv1alpha2.CredentialsReference{}
 }
 
-// convertOriginRequest converts cf.OriginRequestConfig to tunnelsvc.OriginRequestConfig
-func convertOriginRequest(req *cf.OriginRequestConfig) *tunnelsvc.OriginRequestConfig {
+// convertOriginRequest converts cf.OriginRequestConfig to tunnelconfig.OriginRequestConfig
+func convertOriginRequest(req *cf.OriginRequestConfig) *tunnelconfig.OriginRequestConfig {
 	if req == nil {
 		return nil
 	}
-	return &tunnelsvc.OriginRequestConfig{
-		ConnectTimeout:         req.ConnectTimeout,
-		TLSTimeout:             req.TLSTimeout,
-		TCPKeepAlive:           req.TCPKeepAlive,
-		NoHappyEyeballs:        req.NoHappyEyeballs,
-		KeepAliveConnections:   req.KeepAliveConnections,
-		KeepAliveTimeout:       req.KeepAliveTimeout,
-		HTTPHostHeader:         req.HTTPHostHeader,
-		OriginServerName:       req.OriginServerName,
-		CAPool:                 req.CAPool,
-		NoTLSVerify:            req.NoTLSVerify,
-		DisableChunkedEncoding: req.DisableChunkedEncoding,
-		BastionMode:            req.BastionMode,
-		ProxyAddress:           req.ProxyAddress,
-		ProxyPort:              req.ProxyPort,
-		ProxyType:              req.ProxyType,
-		HTTP2Origin:            req.HTTP2Origin,
+
+	result := &tunnelconfig.OriginRequestConfig{}
+
+	if req.ConnectTimeout != nil {
+		result.ConnectTimeout = req.ConnectTimeout.String()
 	}
+	if req.TLSTimeout != nil {
+		result.TLSTimeout = req.TLSTimeout.String()
+	}
+	if req.TCPKeepAlive != nil {
+		result.TCPKeepAlive = req.TCPKeepAlive.String()
+	}
+	if req.NoHappyEyeballs != nil {
+		result.NoHappyEyeballs = *req.NoHappyEyeballs
+	}
+	if req.KeepAliveConnections != nil {
+		result.KeepAliveConnections = *req.KeepAliveConnections
+	}
+	if req.KeepAliveTimeout != nil {
+		result.KeepAliveTimeout = req.KeepAliveTimeout.String()
+	}
+	if req.HTTPHostHeader != nil {
+		result.HTTPHostHeader = *req.HTTPHostHeader
+	}
+	if req.OriginServerName != nil {
+		result.OriginServerName = *req.OriginServerName
+	}
+	if req.NoTLSVerify != nil {
+		result.NoTLSVerify = *req.NoTLSVerify
+	}
+	if req.DisableChunkedEncoding != nil {
+		result.DisableChunkedEncoding = *req.DisableChunkedEncoding
+	}
+	if req.BastionMode != nil {
+		result.BastionMode = *req.BastionMode
+	}
+	if req.ProxyAddress != nil {
+		result.ProxyAddress = *req.ProxyAddress
+	}
+	if req.ProxyPort != nil {
+		result.ProxyPort = int(*req.ProxyPort)
+	}
+	if req.ProxyType != nil {
+		result.ProxyType = *req.ProxyType
+	}
+	if req.HTTP2Origin != nil {
+		result.HTTP2Origin = *req.HTTP2Origin
+	}
+
+	return result
 }
 
 // extractHostnamesFromRules extracts unique hostnames from ingress rules
@@ -874,61 +904,21 @@ func (r *GatewayReconciler) reconcileDNS(
 	}
 }
 
-// reconcileDNSAutomatic registers DNS records via DNS Service
+// reconcileDNSAutomatic creates DNSRecord CRDs for automatic DNS management.
+// This replaces the old DNS Service approach with direct CRD creation.
 func (r *GatewayReconciler) reconcileDNSAutomatic(
 	ctx context.Context,
 	gateway *gatewayv1.Gateway,
 	config *networkingv1alpha2.TunnelGatewayClassConfig,
 	hostnames []string,
 	tunnelCNAME string,
-	zoneID string,
-	accountID string,
-	credRef networkingv1alpha2.CredentialsReference,
+	_ string, // zoneID - not needed for CRD approach
+	_ string, // accountID - not needed for CRD approach
+	_ networkingv1alpha2.CredentialsReference, // credRef - inherited from namespace
 ) error {
-	logger := log.FromContext(ctx)
-
-	if zoneID == "" {
-		return fmt.Errorf("zone ID not available in tunnel status")
-	}
-
-	dnsService := dnssvc.NewService(r.Client)
-
-	var errs []error
-	for _, hostname := range hostnames {
-		opts := dnssvc.RegisterOptions{
-			ZoneID:    zoneID,
-			AccountID: accountID,
-			Source: service.Source{
-				Kind:      "Gateway",
-				Namespace: gateway.Namespace,
-				Name:      gateway.Name,
-			},
-			Config: dnssvc.DNSRecordConfig{
-				Name:    hostname,
-				Type:    "CNAME",
-				Content: tunnelCNAME,
-				Proxied: config.IsDNSProxied(),
-				TTL:     1, // Automatic TTL
-				Comment: fmt.Sprintf("Managed by cloudflare-operator Gateway %s/%s", gateway.Namespace, gateway.Name),
-			},
-			CredentialsRef: credRef,
-		}
-
-		if err := dnsService.Register(ctx, opts); err != nil {
-			errs = append(errs, fmt.Errorf("register DNS for %s: %w", hostname, err))
-			continue
-		}
-	}
-
-	if len(errs) > 0 {
-		return errors.Join(errs...)
-	}
-
-	logger.Info("DNS records registered via DNS Service",
-		"hostnames", hostnames,
-		"mode", "Automatic",
-		"tunnelCNAME", tunnelCNAME)
-	return nil
+	// Automatic mode now creates DNSRecord CRDs just like DNSRecord mode
+	// The DNSRecord controller will handle the actual API calls
+	return r.reconcileDNSRecordCRDs(ctx, gateway, config, hostnames, tunnelCNAME)
 }
 
 // reconcileDNSRecordCRDs creates DNSRecord CRDs for each hostname

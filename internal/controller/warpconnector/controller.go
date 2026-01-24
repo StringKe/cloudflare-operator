@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2025-2026 The Cloudflare Operator Authors
 
+// Package warpconnector provides a controller for managing Cloudflare WARP Connectors.
+// It directly calls Cloudflare API and writes status back to the CRD.
 package warpconnector
 
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"time"
 
-	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -23,30 +23,26 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
+	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
-	"github.com/StringKe/cloudflare-operator/internal/service"
-	warpsvc "github.com/StringKe/cloudflare-operator/internal/service/warp"
+	"github.com/StringKe/cloudflare-operator/internal/controller/common"
 )
 
 const (
-	FinalizerName = "warpconnector.networking.cloudflare-operator.io/finalizer"
+	finalizerName = "warpconnector.networking.cloudflare-operator.io/finalizer"
 )
 
-// WARPConnectorReconciler reconciles a WARPConnector object
-type WARPConnectorReconciler struct {
+// Reconciler reconciles a WARPConnector object.
+// It directly calls Cloudflare API and writes status back to the CRD.
+type Reconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
-	Service  *warpsvc.ConnectorService // L3 Service for WARP connector operations
-
-	// Runtime state
-	ctx       context.Context
-	log       logr.Logger
-	connector *networkingv1alpha2.WARPConnector
+	Scheme     *runtime.Scheme
+	Recorder   record.EventRecorder
+	APIFactory *common.APIClientFactory
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=warpconnectors,verbs=get;list;watch;create;update;patch;delete
@@ -55,300 +51,288 @@ type WARPConnectorReconciler struct {
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 
-func (r *WARPConnectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	r.ctx = ctx
-	r.log = ctrllog.FromContext(ctx)
+// Reconcile handles WARPConnector reconciliation
+func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
 
-	// Fetch the WARPConnector instance
-	r.connector = &networkingv1alpha2.WARPConnector{}
-	if err := r.Get(ctx, req.NamespacedName, r.connector); err != nil {
+	// Get the WARPConnector resource
+	connector := &networkingv1alpha2.WARPConnector{}
+	if err := r.Get(ctx, req.NamespacedName, connector); err != nil {
 		if errors.IsNotFound(err) {
-			return ctrl.Result{}, nil
+			return common.NoRequeue(), nil
 		}
-		return ctrl.Result{}, err
-	}
-
-	// Resolve credentials (for logging/status purposes)
-	credInfo, err := r.resolveCredentials()
-	if err != nil {
-		r.log.Error(err, "Failed to resolve credentials")
-		return r.updateStatusError(err)
+		logger.Error(err, "Unable to fetch WARPConnector")
+		return common.NoRequeue(), err
 	}
 
 	// Handle deletion
-	if !r.connector.DeletionTimestamp.IsZero() {
-		return r.handleDeletion(credInfo)
+	if !connector.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, connector)
 	}
 
-	// Add finalizer if not present
-	if !controllerutil.ContainsFinalizer(r.connector, FinalizerName) {
-		controllerutil.AddFinalizer(r.connector, FinalizerName)
-		if err := r.Update(ctx, r.connector); err != nil {
-			return ctrl.Result{}, err
-		}
+	// Ensure finalizer
+	if added, err := controller.EnsureFinalizer(ctx, r.Client, connector, finalizerName); err != nil {
+		return common.NoRequeue(), err
+	} else if added {
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	// Reconcile the WARP connector
-	return r.reconcileWARPConnector(credInfo)
+	return r.reconcileWARPConnector(ctx, connector)
 }
 
-// resolveCredentials resolves the credentials reference and returns the credentials info.
-// Following Unified Sync Architecture, the Resource Controller only needs
-// credential metadata (accountID, credRef) - it does not create a Cloudflare API client.
-func (r *WARPConnectorReconciler) resolveCredentials() (*controller.CredentialsInfo, error) {
-	// WARPConnector is namespace-scoped, use its namespace for legacy inline secrets
-	info, err := controller.ResolveCredentialsForService(
-		r.ctx,
-		r.Client,
-		r.log,
-		r.connector.Spec.Cloudflare,
-		r.connector.Namespace,
-		r.connector.Status.AccountID,
-	)
-	if err != nil {
-		r.log.Error(err, "failed to resolve credentials")
-		r.Recorder.Event(r.connector, corev1.EventTypeWarning, controller.EventReasonAPIError,
-			"Failed to resolve credentials: "+err.Error())
-		return nil, err
-	}
+// handleDeletion handles the deletion of WARPConnector.
+//
+//nolint:revive // cognitive complexity is acceptable for deletion logic
+func (r *Reconciler) handleDeletion(
+	ctx context.Context,
+	connector *networkingv1alpha2.WARPConnector,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
 
-	return info, nil
-}
-
-//nolint:revive // cognitive complexity unavoidable: deletion logic requires multiple cleanup steps
-func (r *WARPConnectorReconciler) handleDeletion(credInfo *controller.CredentialsInfo) (ctrl.Result, error) {
-	if !controllerutil.ContainsFinalizer(r.connector, FinalizerName) {
-		return ctrl.Result{}, nil
+	if !controllerutil.ContainsFinalizer(connector, finalizerName) {
+		return common.NoRequeue(), nil
 	}
 
 	// Delete deployment first
 	deployment := &appsv1.Deployment{}
-	if err := r.Get(r.ctx, types.NamespacedName{Name: r.connector.Name, Namespace: r.connector.Namespace}, deployment); err == nil {
-		if err := r.Delete(r.ctx, deployment); err != nil && !errors.IsNotFound(err) {
-			r.log.Error(err, "Failed to delete Deployment")
+	if err := r.Get(ctx, types.NamespacedName{Name: connector.Name, Namespace: connector.Namespace}, deployment); err == nil {
+		if err := r.Delete(ctx, deployment); err != nil && !errors.IsNotFound(err) {
+			logger.Error(err, "Failed to delete Deployment")
 		}
 	}
 
 	// Delete secret
 	secret := &corev1.Secret{}
-	secretName := r.connector.Name + "-token"
-	if err := r.Get(r.ctx, types.NamespacedName{Name: secretName, Namespace: r.connector.Namespace}, secret); err == nil {
-		if err := r.Delete(r.ctx, secret); err != nil && !errors.IsNotFound(err) {
-			r.log.Error(err, "Failed to delete Secret")
+	secretName := connector.Name + "-token"
+	if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: connector.Namespace}, secret); err == nil {
+		if err := r.Delete(ctx, secret); err != nil && !errors.IsNotFound(err) {
+			logger.Error(err, "Failed to delete Secret")
 		}
 	}
 
-	// Build routes for deletion
-	routes := make([]warpsvc.RouteConfig, len(r.connector.Spec.Routes))
-	for i, route := range r.connector.Spec.Routes {
-		routes[i] = warpsvc.RouteConfig{
-			Network: route.Network,
-			Comment: route.Comment,
-		}
-	}
-
-	// Request deletion via L3 Service (will be processed by L5 Sync Controller)
-	if r.connector.Status.ConnectorID != "" || len(r.connector.Spec.Routes) > 0 {
-		err := r.Service.RequestDelete(r.ctx, warpsvc.DeleteConnectorOptions{
-			ConnectorID:      r.connector.Status.ConnectorID,
-			ConnectorName:    r.connector.GetConnectorName(),
-			TunnelID:         r.connector.Status.TunnelID,
-			VirtualNetworkID: r.connector.Status.VirtualNetworkID,
-			AccountID:        credInfo.AccountID,
-			Routes:           routes,
-			Source: service.Source{
-				Kind:      "WARPConnector",
-				Namespace: r.connector.Namespace,
-				Name:      r.connector.Name,
-			},
-			CredentialsRef: credInfo.CredentialsRef,
+	// Delete WARP connector from Cloudflare
+	if connector.Status.ConnectorID != "" {
+		apiResult, err := r.APIFactory.GetClient(ctx, common.APIClientOptions{
+			CloudflareDetails: &connector.Spec.Cloudflare,
+			Namespace:         connector.Namespace,
+			StatusAccountID:   connector.Status.AccountID,
 		})
 		if err != nil {
-			r.log.Error(err, "Failed to request WARP connector deletion")
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+			logger.Error(err, "Failed to get API client for deletion")
+			// Continue with finalizer removal
+		} else {
+			logger.Info("Deleting WARP Connector from Cloudflare", "connectorId", connector.Status.ConnectorID)
+			if err := apiResult.API.DeleteWARPConnector(ctx, connector.Status.ConnectorID); err != nil {
+				if !cf.IsNotFoundError(err) {
+					logger.Error(err, "Failed to delete WARP Connector from Cloudflare")
+					r.Recorder.Event(connector, corev1.EventTypeWarning, "DeleteFailed",
+						fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
+					return common.RequeueShort(), err
+				}
+			} else {
+				r.Recorder.Event(connector, corev1.EventTypeNormal, "Deleted",
+					"WARP Connector deleted from Cloudflare")
+			}
 		}
 	}
 
-	// Remove finalizer with retry logic to handle conflicts
-	if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.connector, func() {
-		controllerutil.RemoveFinalizer(r.connector, FinalizerName)
+	// Remove finalizer
+	if err := controller.UpdateWithConflictRetry(ctx, r.Client, connector, func() {
+		controllerutil.RemoveFinalizer(connector, finalizerName)
 	}); err != nil {
-		r.log.Error(err, "Failed to remove finalizer")
-		return ctrl.Result{}, err
+		logger.Error(err, "Failed to remove finalizer")
+		return common.NoRequeue(), err
 	}
-	r.log.Info("Finalizer removed successfully")
-	r.Recorder.Event(r.connector, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
+	r.Recorder.Event(connector, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
 
-	return ctrl.Result{}, nil
+	return common.NoRequeue(), nil
 }
 
-//nolint:revive // cognitive complexity unavoidable: reconciliation requires multiple sequential operations
-func (r *WARPConnectorReconciler) reconcileWARPConnector(credInfo *controller.CredentialsInfo) (ctrl.Result, error) {
+// reconcileWARPConnector reconciles the WARP connector.
+//
+//nolint:revive // cognitive complexity is acceptable for reconciliation logic
+func (r *Reconciler) reconcileWARPConnector(
+	ctx context.Context,
+	connector *networkingv1alpha2.WARPConnector,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
 	// Resolve VirtualNetwork reference to get Cloudflare VirtualNetwork ID
 	vnetID := ""
-	if r.connector.Spec.VirtualNetworkRef != nil {
+	if connector.Spec.VirtualNetworkRef != nil {
 		vnet := &networkingv1alpha2.VirtualNetwork{}
-		if err := r.Get(r.ctx, types.NamespacedName{Name: r.connector.Spec.VirtualNetworkRef.Name}, vnet); err != nil {
+		if err := r.Get(ctx, types.NamespacedName{Name: connector.Spec.VirtualNetworkRef.Name}, vnet); err != nil {
 			if errors.IsNotFound(err) {
-				r.log.Error(err, "VirtualNetwork not found", "name", r.connector.Spec.VirtualNetworkRef.Name)
-				return r.updateStatusError(fmt.Errorf("VirtualNetwork '%s' not found", r.connector.Spec.VirtualNetworkRef.Name))
+				logger.Error(err, "VirtualNetwork not found", "name", connector.Spec.VirtualNetworkRef.Name)
+				return r.updateStatusError(ctx, connector, fmt.Errorf("VirtualNetwork '%s' not found", connector.Spec.VirtualNetworkRef.Name))
 			}
-			return r.updateStatusError(err)
+			return r.updateStatusError(ctx, connector, err)
 		}
 		if vnet.Status.VirtualNetworkId == "" {
-			r.log.Info("VirtualNetwork not yet ready", "name", r.connector.Spec.VirtualNetworkRef.Name)
-			errMsg := fmt.Errorf("VirtualNetwork '%s' is not ready (no Cloudflare ID)",
-				r.connector.Spec.VirtualNetworkRef.Name)
-			return r.updateStatusError(errMsg)
+			logger.Info("VirtualNetwork not yet ready", "name", connector.Spec.VirtualNetworkRef.Name)
+			return r.updateStatusError(ctx, connector, fmt.Errorf("VirtualNetwork '%s' is not ready (no Cloudflare ID)", connector.Spec.VirtualNetworkRef.Name))
 		}
 		vnetID = vnet.Status.VirtualNetworkId
-		r.log.Info("Resolved VirtualNetwork", "name", r.connector.Spec.VirtualNetworkRef.Name, "id", vnetID)
+		logger.V(1).Info("Resolved VirtualNetwork", "name", connector.Spec.VirtualNetworkRef.Name, "id", vnetID)
 	}
 
-	// Build routes config
-	routes := make([]warpsvc.RouteConfig, len(r.connector.Spec.Routes))
-	for i, route := range r.connector.Spec.Routes {
-		routes[i] = warpsvc.RouteConfig{
-			Network: route.Network,
-			Comment: route.Comment,
-		}
-	}
-
-	source := service.Source{
-		Kind:      "WARPConnector",
-		Namespace: r.connector.Namespace,
-		Name:      r.connector.Name,
+	// Get API client
+	apiResult, err := r.APIFactory.GetClient(ctx, common.APIClientOptions{
+		CloudflareDetails: &connector.Spec.Cloudflare,
+		Namespace:         connector.Namespace,
+		StatusAccountID:   connector.Status.AccountID,
+	})
+	if err != nil {
+		logger.Error(err, "Failed to get API client")
+		return r.updateStatusError(ctx, connector, err)
 	}
 
 	// Check if connector already exists
-	if r.connector.Status.ConnectorID == "" {
-		// Request creation via L3 Service
-		err := r.Service.RequestCreate(r.ctx, warpsvc.CreateConnectorOptions{
-			ConnectorName:    r.connector.GetConnectorName(),
-			AccountID:        credInfo.AccountID,
-			VirtualNetworkID: vnetID,
-			Routes:           routes,
-			Source:           source,
-			CredentialsRef:   credInfo.CredentialsRef,
-		})
-		if err != nil {
-			r.log.Error(err, "Failed to request WARP connector creation")
-			return r.updateStatusError(err)
-		}
-	} else {
-		// Request update via L3 Service
-		err := r.Service.RequestUpdate(r.ctx, warpsvc.UpdateConnectorOptions{
-			ConnectorID:      r.connector.Status.ConnectorID,
-			ConnectorName:    r.connector.GetConnectorName(),
-			TunnelID:         r.connector.Status.TunnelID,
-			VirtualNetworkID: vnetID,
-			AccountID:        credInfo.AccountID,
-			Routes:           routes,
-			Source:           source,
-			CredentialsRef:   credInfo.CredentialsRef,
-		})
-		if err != nil {
-			r.log.Error(err, "Failed to request WARP connector update")
-			return r.updateStatusError(err)
-		}
+	if connector.Status.ConnectorID == "" {
+		// Create new WARP connector
+		return r.createWARPConnector(ctx, connector, apiResult, vnetID)
 	}
 
-	// Check SyncState for results
-	syncState, err := r.Service.GetSyncState(r.ctx, r.connector.GetConnectorName())
-	if err != nil {
-		r.log.V(1).Info("SyncState not yet available, will check on next reconcile")
-		return r.updateStatusPending(credInfo.AccountID, vnetID)
-	}
-
-	// If SyncState has results, update status from it
-	if syncState.Status.SyncStatus == networkingv1alpha2.SyncStatusSynced && syncState.Status.ResultData != nil {
-		connectorID := syncState.Status.ResultData[warpsvc.ResultKeyConnectorID]
-		tunnelID := syncState.Status.ResultData[warpsvc.ResultKeyTunnelID]
-		tunnelToken := syncState.Status.ResultData[warpsvc.ResultKeyTunnelToken]
-
-		// Create or update tunnel token secret
-		if tunnelToken != "" {
-			if err := r.reconcileSecret(tunnelToken); err != nil {
-				return r.updateStatusError(err)
-			}
-		}
-
-		// Create or update deployment
-		if err := r.reconcileDeployment(); err != nil {
-			return r.updateStatusError(err)
-		}
-
-		// Get deployment status
-		deployment := &appsv1.Deployment{}
-		if err = r.Get(r.ctx, types.NamespacedName{Name: r.connector.Name, Namespace: r.connector.Namespace}, deployment); err != nil {
-			return r.updateStatusError(err)
-		}
-
-		// Parse routes configured
-		routesConfigured := 0
-		if rc, ok := syncState.Status.ResultData[warpsvc.ResultKeyRoutesConfigured]; ok {
-			if parsed, parseErr := strconv.Atoi(rc); parseErr == nil {
-				routesConfigured = parsed
-			}
-		}
-
-		return r.updateStatusSuccess(connectorID, tunnelID, vnetID, credInfo.AccountID, deployment.Status.ReadyReplicas, routesConfigured)
-	}
-
-	// SyncState exists but not yet synced
-	if syncState.Status.SyncStatus == networkingv1alpha2.SyncStatusError {
-		return r.updateStatusError(fmt.Errorf("sync error: %s", syncState.Status.Error))
-	}
-
-	return r.updateStatusPending(credInfo.AccountID, vnetID)
+	// Update existing WARP connector (deployment, etc.)
+	return r.updateWARPConnector(ctx, connector, apiResult, vnetID)
 }
 
-func (r *WARPConnectorReconciler) reconcileSecret(token string) error {
+// createWARPConnector creates a new WARP connector in Cloudflare.
+func (r *Reconciler) createWARPConnector(
+	ctx context.Context,
+	connector *networkingv1alpha2.WARPConnector,
+	apiResult *common.APIClientResult,
+	vnetID string,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	connectorName := connector.GetConnectorName()
+
+	logger.Info("Creating WARP Connector in Cloudflare", "name", connectorName)
+
+	result, err := apiResult.API.CreateWARPConnector(ctx, connectorName)
+	if err != nil {
+		logger.Error(err, "Failed to create WARP Connector")
+		return r.updateStatusError(ctx, connector, err)
+	}
+
+	r.Recorder.Event(connector, corev1.EventTypeNormal, "Created",
+		fmt.Sprintf("WARP Connector '%s' created in Cloudflare", connectorName))
+
+	// Create tunnel token secret
+	if err := r.reconcileSecret(ctx, connector, result.TunnelToken); err != nil {
+		logger.Error(err, "Failed to create tunnel token secret")
+		return r.updateStatusError(ctx, connector, err)
+	}
+
+	// Create deployment
+	if err := r.reconcileDeployment(ctx, connector); err != nil {
+		logger.Error(err, "Failed to create deployment")
+		return r.updateStatusError(ctx, connector, err)
+	}
+
+	// Get deployment status
+	deployment := &appsv1.Deployment{}
+	if err := r.Get(ctx, types.NamespacedName{Name: connector.Name, Namespace: connector.Namespace}, deployment); err != nil {
+		return r.updateStatusError(ctx, connector, err)
+	}
+
+	return r.updateStatusSuccess(ctx, connector, apiResult.AccountID, result.ID, result.TunnelID, vnetID, deployment.Status.ReadyReplicas, len(connector.Spec.Routes))
+}
+
+// updateWARPConnector updates an existing WARP connector.
+func (r *Reconciler) updateWARPConnector(
+	ctx context.Context,
+	connector *networkingv1alpha2.WARPConnector,
+	apiResult *common.APIClientResult,
+	vnetID string,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	// Get existing tunnel token for secret reconciliation
+	tokenResult, err := apiResult.API.GetWARPConnectorToken(ctx, connector.Status.ConnectorID)
+	if err != nil {
+		logger.Error(err, "Failed to get tunnel token")
+		// Continue anyway, might be temporary
+	} else {
+		// Update tunnel token secret
+		if err := r.reconcileSecret(ctx, connector, tokenResult.Token); err != nil {
+			logger.Error(err, "Failed to update tunnel token secret")
+			return r.updateStatusError(ctx, connector, err)
+		}
+	}
+
+	// Update deployment
+	if err := r.reconcileDeployment(ctx, connector); err != nil {
+		logger.Error(err, "Failed to update deployment")
+		return r.updateStatusError(ctx, connector, err)
+	}
+
+	// Get deployment status
+	deployment := &appsv1.Deployment{}
+	if err := r.Get(ctx, types.NamespacedName{Name: connector.Name, Namespace: connector.Namespace}, deployment); err != nil {
+		return r.updateStatusError(ctx, connector, err)
+	}
+
+	return r.updateStatusSuccess(ctx, connector, apiResult.AccountID, connector.Status.ConnectorID, connector.Status.TunnelID, vnetID, deployment.Status.ReadyReplicas, len(connector.Spec.Routes))
+}
+
+// reconcileSecret creates or updates the tunnel token secret.
+func (r *Reconciler) reconcileSecret(
+	ctx context.Context,
+	connector *networkingv1alpha2.WARPConnector,
+	token string,
+) error {
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      r.connector.Name + "-token",
-			Namespace: r.connector.Namespace,
+			Name:      connector.Name + "-token",
+			Namespace: connector.Namespace,
 		},
 	}
 
-	_, err := controllerutil.CreateOrUpdate(r.ctx, r.Client, secret, func() error {
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
 		secret.Data = map[string][]byte{
 			"TUNNEL_TOKEN": []byte(token),
 		}
-		return controllerutil.SetControllerReference(r.connector, secret, r.Scheme)
+		return controllerutil.SetControllerReference(connector, secret, r.Scheme)
 	})
 
 	return err
 }
 
-func (r *WARPConnectorReconciler) reconcileDeployment() error {
-	// Validate resource requirements before creating/updating deployment
-	resources, err := r.buildResources(r.connector.Spec.Resources)
+// reconcileDeployment creates or updates the cloudflared deployment.
+func (r *Reconciler) reconcileDeployment(
+	ctx context.Context,
+	connector *networkingv1alpha2.WARPConnector,
+) error {
+	// Validate resource requirements
+	resources, err := r.buildResources(connector.Spec.Resources)
 	if err != nil {
 		return fmt.Errorf("validate resources: %w", err)
 	}
 
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      r.connector.Name,
-			Namespace: r.connector.Namespace,
+			Name:      connector.Name,
+			Namespace: connector.Namespace,
 		},
 	}
 
-	_, err = controllerutil.CreateOrUpdate(r.ctx, r.Client, deployment, func() error {
-		replicas := r.connector.Spec.Replicas
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, deployment, func() error {
+		replicas := connector.Spec.Replicas
 		if replicas == 0 {
 			replicas = 1
 		}
 
-		image := r.connector.Spec.Image
+		image := connector.Spec.Image
 		if image == "" {
 			image = "cloudflare/cloudflared:latest"
 		}
 
 		labels := map[string]string{
 			"app.kubernetes.io/name":       "warp-connector",
-			"app.kubernetes.io/instance":   r.connector.Name,
+			"app.kubernetes.io/instance":   connector.Name,
 			"app.kubernetes.io/managed-by": "cloudflare-operator",
 		}
 
@@ -362,9 +346,9 @@ func (r *WARPConnectorReconciler) reconcileDeployment() error {
 					Labels: labels,
 				},
 				Spec: corev1.PodSpec{
-					ServiceAccountName: r.connector.Spec.ServiceAccountName,
-					NodeSelector:       r.connector.Spec.NodeSelector,
-					Tolerations:        r.buildTolerations(r.connector.Spec.Tolerations),
+					ServiceAccountName: connector.Spec.ServiceAccountName,
+					NodeSelector:       connector.Spec.NodeSelector,
+					Tolerations:        r.buildTolerations(connector.Spec.Tolerations),
 					Containers: []corev1.Container{
 						{
 							Name:  "cloudflared",
@@ -376,7 +360,7 @@ func (r *WARPConnectorReconciler) reconcileDeployment() error {
 									ValueFrom: &corev1.EnvVarSource{
 										SecretKeyRef: &corev1.SecretKeySelector{
 											LocalObjectReference: corev1.LocalObjectReference{
-												Name: r.connector.Name + "-token",
+												Name: connector.Name + "-token",
 											},
 											Key: "TUNNEL_TOKEN",
 										},
@@ -390,13 +374,14 @@ func (r *WARPConnectorReconciler) reconcileDeployment() error {
 			},
 		}
 
-		return controllerutil.SetControllerReference(r.connector, deployment, r.Scheme)
+		return controllerutil.SetControllerReference(connector, deployment, r.Scheme)
 	})
 
 	return err
 }
 
-func (*WARPConnectorReconciler) buildTolerations(tolerations []networkingv1alpha2.Toleration) []corev1.Toleration {
+// buildTolerations converts API tolerations to corev1 tolerations.
+func (*Reconciler) buildTolerations(tolerations []networkingv1alpha2.Toleration) []corev1.Toleration {
 	if len(tolerations) == 0 {
 		return nil
 	}
@@ -418,8 +403,10 @@ func (*WARPConnectorReconciler) buildTolerations(tolerations []networkingv1alpha
 	return result
 }
 
-//nolint:revive // cognitive complexity is acceptable for validation logic with error handling
-func (*WARPConnectorReconciler) buildResources(res *networkingv1alpha2.ResourceRequirements) (corev1.ResourceRequirements, error) {
+// buildResources converts API resource requirements to corev1 resource requirements.
+//
+//nolint:revive // cognitive complexity is acceptable for resource building
+func (*Reconciler) buildResources(res *networkingv1alpha2.ResourceRequirements) (corev1.ResourceRequirements, error) {
 	if res == nil {
 		return corev1.ResourceRequirements{}, nil
 	}
@@ -451,92 +438,75 @@ func (*WARPConnectorReconciler) buildResources(res *networkingv1alpha2.ResourceR
 	return result, nil
 }
 
-func (r *WARPConnectorReconciler) updateStatusError(err error) (ctrl.Result, error) {
-	// Use retry logic for status updates to handle conflicts
-	updateErr := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.connector, func() {
-		r.connector.Status.State = "Error"
-		meta.SetStatusCondition(&r.connector.Status.Conditions, metav1.Condition{
+func (r *Reconciler) updateStatusError(
+	ctx context.Context,
+	connector *networkingv1alpha2.WARPConnector,
+	err error,
+) (ctrl.Result, error) {
+	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, connector, func() {
+		connector.Status.State = "Error"
+		meta.SetStatusCondition(&connector.Status.Conditions, metav1.Condition{
 			Type:               "Ready",
 			Status:             metav1.ConditionFalse,
-			ObservedGeneration: r.connector.Generation,
+			ObservedGeneration: connector.Generation,
 			Reason:             "ReconcileError",
-			Message:            err.Error(),
+			Message:            cf.SanitizeErrorMessage(err),
 			LastTransitionTime: metav1.Now(),
 		})
-		r.connector.Status.ObservedGeneration = r.connector.Generation
+		connector.Status.ObservedGeneration = connector.Generation
 	})
 
 	if updateErr != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
+		return common.NoRequeue(), fmt.Errorf("failed to update status: %w", updateErr)
 	}
 
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
-func (r *WARPConnectorReconciler) updateStatusPending(accountID, virtualNetworkID string) (ctrl.Result, error) {
-	// Use retry logic for status updates to handle conflicts
-	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.connector, func() {
-		r.connector.Status.State = "Pending"
-		r.connector.Status.AccountID = accountID
-		r.connector.Status.VirtualNetworkID = virtualNetworkID
-		meta.SetStatusCondition(&r.connector.Status.Conditions, metav1.Condition{
-			Type:               "Ready",
-			Status:             metav1.ConditionFalse,
-			ObservedGeneration: r.connector.Generation,
-			Reason:             "Pending",
-			Message:            "Waiting for WARP connector sync",
-			LastTransitionTime: metav1.Now(),
-		})
-		r.connector.Status.ObservedGeneration = r.connector.Generation
-	})
-
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
-	}
-
-	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-}
-
-func (r *WARPConnectorReconciler) updateStatusSuccess(
-	connectorID, tunnelID, virtualNetworkID, accountID string,
+func (r *Reconciler) updateStatusSuccess(
+	ctx context.Context,
+	connector *networkingv1alpha2.WARPConnector,
+	accountID, connectorID, tunnelID, virtualNetworkID string,
 	readyReplicas int32,
 	routesConfigured int,
 ) (ctrl.Result, error) {
-	// Use retry logic for status updates to handle conflicts
-	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.connector, func() {
-		r.connector.Status.ConnectorID = connectorID
-		r.connector.Status.TunnelID = tunnelID
-		r.connector.Status.VirtualNetworkID = virtualNetworkID // Save for deletion
-		r.connector.Status.AccountID = accountID               // Save from credentials
-		r.connector.Status.ReadyReplicas = readyReplicas
-		r.connector.Status.RoutesConfigured = routesConfigured
-		r.connector.Status.State = "Ready"
-		meta.SetStatusCondition(&r.connector.Status.Conditions, metav1.Condition{
+	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, connector, func() {
+		connector.Status.ConnectorID = connectorID
+		connector.Status.TunnelID = tunnelID
+		connector.Status.VirtualNetworkID = virtualNetworkID
+		connector.Status.AccountID = accountID
+		connector.Status.ReadyReplicas = readyReplicas
+		connector.Status.RoutesConfigured = routesConfigured
+		connector.Status.State = "Ready"
+		meta.SetStatusCondition(&connector.Status.Conditions, metav1.Condition{
 			Type:               "Ready",
 			Status:             metav1.ConditionTrue,
-			ObservedGeneration: r.connector.Generation,
+			ObservedGeneration: connector.Generation,
 			Reason:             "Reconciled",
 			Message:            "WARP Connector successfully reconciled",
 			LastTransitionTime: metav1.Now(),
 		})
-		r.connector.Status.ObservedGeneration = r.connector.Generation
+		connector.Status.ObservedGeneration = connector.Generation
 	})
 
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
+		return common.NoRequeue(), fmt.Errorf("failed to update status: %w", err)
 	}
 
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
 // findWARPConnectorsForVirtualNetwork returns reconcile requests for WARPConnectors
-// that reference the given VirtualNetwork
-func (r *WARPConnectorReconciler) findWARPConnectorsForVirtualNetwork(ctx context.Context, obj client.Object) []reconcile.Request {
+// that reference the given VirtualNetwork.
+func (r *Reconciler) findWARPConnectorsForVirtualNetwork(
+	ctx context.Context,
+	obj client.Object,
+) []reconcile.Request {
 	vnet, ok := obj.(*networkingv1alpha2.VirtualNetwork)
 	if !ok {
 		return nil
 	}
-	logger := ctrllog.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
 	// List all WARPConnectors
 	connectors := &networkingv1alpha2.WARPConnectorList{}
@@ -548,7 +518,7 @@ func (r *WARPConnectorReconciler) findWARPConnectorsForVirtualNetwork(ctx contex
 	var requests []reconcile.Request
 	for _, connector := range connectors.Items {
 		if connector.Spec.VirtualNetworkRef != nil && connector.Spec.VirtualNetworkRef.Name == vnet.Name {
-			logger.Info("VirtualNetwork changed, triggering WARPConnector reconcile",
+			logger.V(1).Info("VirtualNetwork changed, triggering WARPConnector reconcile",
 				"virtualnetwork", vnet.Name,
 				"warpconnector", connector.Name,
 				"namespace", connector.Namespace)
@@ -564,8 +534,13 @@ func (r *WARPConnectorReconciler) findWARPConnectorsForVirtualNetwork(ctx contex
 	return requests
 }
 
-func (r *WARPConnectorReconciler) SetupWithManager(mgr ctrl.Manager) error {
+// SetupWithManager sets up the controller with the Manager.
+func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("warpconnector-controller")
+
+	// Initialize APIClientFactory
+	r.APIFactory = common.NewAPIClientFactory(mgr.GetClient(), ctrl.Log.WithName("warpconnector"))
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.WARPConnector{}).
 		Owns(&appsv1.Deployment{}).
@@ -575,5 +550,6 @@ func (r *WARPConnectorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&networkingv1alpha2.VirtualNetwork{},
 			handler.EnqueueRequestsFromMapFunc(r.findWARPConnectorsForVirtualNetwork),
 		).
+		Named("warpconnector").
 		Complete(r)
 }

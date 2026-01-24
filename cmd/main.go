@@ -38,24 +38,11 @@ import (
 	"github.com/StringKe/cloudflare-operator/internal/controller/r2bucketnotification"
 	"github.com/StringKe/cloudflare-operator/internal/controller/redirectrule"
 	"github.com/StringKe/cloudflare-operator/internal/controller/transformrule"
+	"github.com/StringKe/cloudflare-operator/internal/controller/tunnelconfig"
 	"github.com/StringKe/cloudflare-operator/internal/controller/virtualnetwork"
 	"github.com/StringKe/cloudflare-operator/internal/controller/warpconnector"
 	"github.com/StringKe/cloudflare-operator/internal/controller/zoneruleset"
-	domainsvc "github.com/StringKe/cloudflare-operator/internal/service/domain"
-	warpsvc "github.com/StringKe/cloudflare-operator/internal/service/warp"
-	accesssync "github.com/StringKe/cloudflare-operator/internal/sync/access"
-	devicesync "github.com/StringKe/cloudflare-operator/internal/sync/device"
-	dnssync "github.com/StringKe/cloudflare-operator/internal/sync/dns"
-	domainsync "github.com/StringKe/cloudflare-operator/internal/sync/domain"
-	gatewaysync "github.com/StringKe/cloudflare-operator/internal/sync/gateway"
-	networkroutesync "github.com/StringKe/cloudflare-operator/internal/sync/networkroute"
-	pagessync "github.com/StringKe/cloudflare-operator/internal/sync/pages"
-	privateservicesync "github.com/StringKe/cloudflare-operator/internal/sync/privateservice"
-	r2sync "github.com/StringKe/cloudflare-operator/internal/sync/r2"
-	rulesetsync "github.com/StringKe/cloudflare-operator/internal/sync/ruleset"
 	tunnelconfigsync "github.com/StringKe/cloudflare-operator/internal/sync/tunnel"
-	virtualnetworksync "github.com/StringKe/cloudflare-operator/internal/sync/virtualnetwork"
-	warpsync "github.com/StringKe/cloudflare-operator/internal/sync/warp"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -360,21 +347,21 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "AccessServiceToken")
 		os.Exit(1)
 	}
-	if err = (&deviceposturerule.DevicePostureRuleReconciler{
+	if err = (&deviceposturerule.Reconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "DevicePostureRule")
 		os.Exit(1)
 	}
-	if err = (&gatewayrule.GatewayRuleReconciler{
+	if err = (&gatewayrule.Reconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "GatewayRule")
 		os.Exit(1)
 	}
-	if err = (&gatewaylist.GatewayListReconciler{
+	if err = (&gatewaylist.Reconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
@@ -388,20 +375,16 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "DNSRecord")
 		os.Exit(1)
 	}
-	if err = (&gatewayconfiguration.GatewayConfigurationReconciler{
+	if err = (&gatewayconfiguration.Reconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "GatewayConfiguration")
 		os.Exit(1)
 	}
-	// Create WARP connector service for L3 operations
-	warpConnectorService := warpsvc.NewConnectorService(mgr.GetClient())
-
-	if err = (&warpconnector.WARPConnectorReconciler{
-		Client:  mgr.GetClient(),
-		Scheme:  mgr.GetScheme(),
-		Service: warpConnectorService,
+	if err = (&warpconnector.Reconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WARPConnector")
 		os.Exit(1)
@@ -422,14 +405,9 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "CloudflareDomain")
 		os.Exit(1)
 	}
-	// OriginCACertificate service for SyncState management
-	originCASvc := domainsvc.NewOriginCACertificateService(mgr.GetClient())
-
 	if err = (&origincacertificate.Reconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("origincacertificate-controller"),
-		Service:  originCASvc,
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "OriginCACertificate")
 		os.Exit(1)
@@ -507,14 +485,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// DomainRegistration service for SyncState management
-	domainRegSvc := domainsvc.NewDomainRegistrationService(mgr.GetClient())
-
 	if err = (&domainregistration.Reconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("domainregistration-controller"),
-		Service:  domainRegSvc,
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "DomainRegistration")
 		os.Exit(1)
@@ -569,179 +542,21 @@ func main() {
 			"gateway", gatewayAPIStatus.GatewayAvailable)
 	}
 
-	// Register Sync Controllers
-	// TunnelConfigSyncController aggregates configuration from Tunnel, ClusterTunnel,
-	// TunnelBinding, Ingress, and Gateway controllers, then syncs to Cloudflare API
-	if err = tunnelconfigsync.NewController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "TunnelConfigSync")
-		os.Exit(1)
-	}
-
-	// DNSSyncController syncs DNS record configuration to Cloudflare API
-	if err = dnssync.NewController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "DNSSync")
-		os.Exit(1)
-	}
-
-	// VirtualNetworkSyncController syncs VirtualNetwork configuration to Cloudflare API
-	if err = virtualnetworksync.NewController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "VirtualNetworkSync")
-		os.Exit(1)
-	}
-
-	// NetworkRouteSyncController syncs NetworkRoute configuration to Cloudflare API
-	if err = networkroutesync.NewController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "NetworkRouteSync")
-		os.Exit(1)
-	}
-
-	// PrivateServiceSyncController syncs PrivateService tunnel route configuration to Cloudflare API
-	if err = privateservicesync.NewController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "PrivateServiceSync")
-		os.Exit(1)
-	}
-
-	// AccessApplicationSyncController syncs AccessApplication configuration to Cloudflare API
-	if err = accesssync.NewApplicationController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "AccessApplicationSync")
-		os.Exit(1)
-	}
-
-	// AccessGroupSyncController syncs AccessGroup configuration to Cloudflare API
-	if err = accesssync.NewGroupController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "AccessGroupSync")
-		os.Exit(1)
-	}
-
-	// AccessPolicySyncController syncs reusable AccessPolicy configuration to Cloudflare API
-	if err = accesssync.NewPolicyController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "AccessPolicySync")
-		os.Exit(1)
-	}
-
-	// AccessServiceTokenSyncController syncs AccessServiceToken configuration to Cloudflare API
-	if err = accesssync.NewServiceTokenController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "AccessServiceTokenSync")
-		os.Exit(1)
-	}
-
-	// AccessIdentityProviderSyncController syncs AccessIdentityProvider configuration to Cloudflare API
-	if err = accesssync.NewIdentityProviderController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "AccessIdentityProviderSync")
-		os.Exit(1)
-	}
-
-	// R2BucketSyncController syncs R2Bucket configuration to Cloudflare API
-	if err = r2sync.NewBucketController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "R2BucketSync")
-		os.Exit(1)
-	}
-
-	// R2BucketDomainSyncController syncs R2BucketDomain configuration to Cloudflare API
-	if err = r2sync.NewDomainController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "R2BucketDomainSync")
-		os.Exit(1)
-	}
-
-	// R2BucketNotificationSyncController syncs R2BucketNotification configuration to Cloudflare API
-	if err = r2sync.NewNotificationController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "R2BucketNotificationSync")
-		os.Exit(1)
-	}
-
-	// ZoneRulesetSyncController syncs ZoneRuleset configuration to Cloudflare API
-	if err = rulesetsync.NewZoneRulesetController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "ZoneRulesetSync")
-		os.Exit(1)
-	}
-
-	// TransformRuleSyncController syncs TransformRule configuration to Cloudflare API
-	if err = rulesetsync.NewTransformRuleController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "TransformRuleSync")
-		os.Exit(1)
-	}
-
-	// RedirectRuleSyncController syncs RedirectRule configuration to Cloudflare API
-	if err = rulesetsync.NewRedirectRuleController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "RedirectRuleSync")
-		os.Exit(1)
-	}
-
-	// GatewayRuleSyncController syncs GatewayRule configuration to Cloudflare API
-	if err = gatewaysync.NewRuleController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "GatewayRuleSync")
-		os.Exit(1)
-	}
-
-	// GatewayListSyncController syncs GatewayList configuration to Cloudflare API
-	if err = gatewaysync.NewListController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "GatewayListSync")
-		os.Exit(1)
-	}
-
-	// GatewayConfigurationSyncController syncs GatewayConfiguration to Cloudflare API
-	if err = gatewaysync.NewConfigurationController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "GatewayConfigurationSync")
-		os.Exit(1)
-	}
-
-	// DevicePostureRuleSyncController syncs DevicePostureRule configuration to Cloudflare API
-	if err = devicesync.NewPostureRuleController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "DevicePostureRuleSync")
-		os.Exit(1)
-	}
-
-	// DeviceSettingsPolicySyncController syncs DeviceSettingsPolicy configuration to Cloudflare API
-	if err = devicesync.NewSettingsPolicyController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "DeviceSettingsPolicySync")
+	// TunnelConfig Controller - ConfigMap-based aggregation
+	// This controller watches ConfigMaps with tunnel configuration and syncs to Cloudflare API
+	if err = (&tunnelconfig.Reconciler{
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		OperatorNamespace: clusterResourceNamespace,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "TunnelConfig")
 		os.Exit(1)
 	}
 
 	// TunnelLifecycleSyncController handles Tunnel creation/deletion via Cloudflare API
+	// This uses SyncState for async lifecycle operations (TODO: migrate to direct API calls)
 	if err = tunnelconfigsync.NewLifecycleController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TunnelLifecycleSync")
-		os.Exit(1)
-	}
-
-	// CloudflareDomainSyncController syncs CloudflareDomain zone settings to Cloudflare API
-	if err = domainsync.NewCloudflareDomainController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "CloudflareDomainSync")
-		os.Exit(1)
-	}
-
-	// OriginCACertificateSyncController handles Origin CA certificate lifecycle via Cloudflare API
-	if err = domainsync.NewOriginCACertificateController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "OriginCACertificateSync")
-		os.Exit(1)
-	}
-
-	// DomainRegistrationSyncController syncs DomainRegistration status from Cloudflare API
-	if err = domainsync.NewDomainRegistrationController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "DomainRegistrationSync")
-		os.Exit(1)
-	}
-
-	// WARPConnectorSyncController handles WARP connector lifecycle via Cloudflare API
-	if err = warpsync.NewConnectorController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "WARPConnectorSync")
-		os.Exit(1)
-	}
-
-	// PagesProjectSyncController syncs PagesProject configuration to Cloudflare API
-	if err = pagessync.NewProjectSyncController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "PagesProjectSync")
-		os.Exit(1)
-	}
-
-	// PagesDomainSyncController syncs PagesDomain configuration to Cloudflare API
-	if err = pagessync.NewDomainSyncController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "PagesDomainSync")
-		os.Exit(1)
-	}
-
-	// PagesDeploymentSyncController syncs PagesDeployment configuration to Cloudflare API
-	if err = pagessync.NewDeploymentSyncController(mgr.GetClient()).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "PagesDeploymentSync")
 		os.Exit(1)
 	}
 

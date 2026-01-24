@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2025-2026 The Cloudflare Operator Authors
 
+// Package virtualnetwork provides a controller for managing Cloudflare Virtual Networks.
+// It directly calls Cloudflare API and writes status back to the CRD.
 package virtualnetwork
 
 import (
 	"context"
 	"fmt"
-	"time"
 
-	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -18,27 +18,25 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
+	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
-	"github.com/StringKe/cloudflare-operator/internal/service"
-	vnetsvc "github.com/StringKe/cloudflare-operator/internal/service/virtualnetwork"
+	"github.com/StringKe/cloudflare-operator/internal/controller/common"
 )
 
-// Reconciler reconciles a VirtualNetwork object
+const (
+	finalizerName = "virtualnetwork.networking.cloudflare-operator.io/finalizer"
+)
+
+// Reconciler reconciles a VirtualNetwork object.
+// It directly calls Cloudflare API and writes status back to the CRD.
 type Reconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
-
-	// Service layer
-	vnetService *vnetsvc.Service
-
-	// Runtime state
-	ctx  context.Context
-	log  logr.Logger
-	vnet *networkingv1alpha2.VirtualNetwork
+	Scheme     *runtime.Scheme
+	Recorder   record.EventRecorder
+	APIFactory *common.APIClientFactory
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=virtualnetworks,verbs=get;list;watch;create;update;patch;delete
@@ -47,258 +45,258 @@ type Reconciler struct {
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
-// Reconcile implements the reconciliation loop for VirtualNetwork resources.
-//
-//nolint:revive // cognitive complexity is acceptable for this controller reconciliation loop
+// Reconcile handles VirtualNetwork reconciliation
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	r.ctx = ctx
-	r.log = ctrllog.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
-	// Fetch the VirtualNetwork resource
-	r.vnet = &networkingv1alpha2.VirtualNetwork{}
-	if err := r.Get(ctx, req.NamespacedName, r.vnet); err != nil {
+	// Get the VirtualNetwork resource
+	vnet := &networkingv1alpha2.VirtualNetwork{}
+	if err := r.Get(ctx, req.NamespacedName, vnet); err != nil {
 		if apierrors.IsNotFound(err) {
-			r.log.Info("VirtualNetwork deleted, nothing to do")
-			return ctrl.Result{}, nil
+			return common.NoRequeue(), nil
 		}
-		r.log.Error(err, "unable to fetch VirtualNetwork")
-		return ctrl.Result{}, err
+		logger.Error(err, "Unable to fetch VirtualNetwork")
+		return common.NoRequeue(), err
 	}
 
-	// Check if VirtualNetwork is being deleted
-	// Following Unified Sync Architecture: only unregister from SyncState
-	// Sync Controller handles actual Cloudflare API deletion
-	if r.vnet.GetDeletionTimestamp() != nil {
-		return r.handleDeletion()
+	// Handle deletion
+	if !vnet.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, vnet)
 	}
 
-	// Add finalizer if not present
-	if !controllerutil.ContainsFinalizer(r.vnet, controller.VirtualNetworkFinalizer) {
-		controllerutil.AddFinalizer(r.vnet, controller.VirtualNetworkFinalizer)
-		if err := r.Update(ctx, r.vnet); err != nil {
-			r.log.Error(err, "failed to add finalizer")
-			return ctrl.Result{}, err
-		}
-		r.Recorder.Event(r.vnet, corev1.EventTypeNormal, controller.EventReasonFinalizerSet, "Finalizer added")
+	// Ensure finalizer
+	if added, err := controller.EnsureFinalizer(ctx, r.Client, vnet, finalizerName); err != nil {
+		return common.NoRequeue(), err
+	} else if added {
+		return ctrl.Result{Requeue: true}, nil
 	}
 
-	// Reconcile the VirtualNetwork through service layer
-	result, err := r.reconcileVirtualNetwork()
-	if err != nil {
-		r.log.Error(err, "failed to reconcile VirtualNetwork")
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-	}
-
-	return result, nil
-}
-
-// resolveCredentials resolves the credentials reference and returns the credentials info.
-// Following Unified Sync Architecture, the Resource Controller only needs
-// credential metadata (accountID, credRef) - it does not create a Cloudflare API client.
-func (r *Reconciler) resolveCredentials() (*controller.CredentialsInfo, error) {
+	// Get API client
 	// VirtualNetwork is cluster-scoped, use operator namespace for legacy inline secrets
-	info, err := controller.ResolveCredentialsForService(
-		r.ctx,
-		r.Client,
-		r.log,
-		r.vnet.Spec.Cloudflare,
-		controller.OperatorNamespace,
-		r.vnet.Status.AccountId,
-	)
+	apiResult, err := r.APIFactory.GetClient(ctx, common.APIClientOptions{
+		CloudflareDetails: &vnet.Spec.Cloudflare,
+		Namespace:         common.OperatorNamespace,
+		StatusAccountID:   vnet.Status.AccountId,
+	})
 	if err != nil {
-		r.log.Error(err, "failed to resolve credentials")
-		r.Recorder.Event(r.vnet, corev1.EventTypeWarning, controller.EventReasonAPIError,
-			"Failed to resolve credentials: "+err.Error())
-		return nil, err
+		logger.Error(err, "Failed to get API client")
+		return r.updateStatusError(ctx, vnet, err)
 	}
 
-	return info, nil
+	// Sync virtual network to Cloudflare
+	return r.syncVirtualNetwork(ctx, vnet, apiResult)
 }
 
-// handleDeletion handles the deletion of a VirtualNetwork.
-// Following Unified Sync Architecture:
-// Resource Controller only unregisters from SyncState.
-// VirtualNetwork Sync Controller handles the actual Cloudflare API deletion.
-func (r *Reconciler) handleDeletion() (ctrl.Result, error) {
-	if !controllerutil.ContainsFinalizer(r.vnet, controller.VirtualNetworkFinalizer) {
-		return ctrl.Result{}, nil
+// handleDeletion handles the deletion of VirtualNetwork.
+func (r *Reconciler) handleDeletion(
+	ctx context.Context,
+	vnet *networkingv1alpha2.VirtualNetwork,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	if !controllerutil.ContainsFinalizer(vnet, finalizerName) {
+		return common.NoRequeue(), nil
 	}
 
-	r.log.Info("Unregistering VirtualNetwork from SyncState")
+	// Get API client
+	apiResult, err := r.APIFactory.GetClient(ctx, common.APIClientOptions{
+		CloudflareDetails: &vnet.Spec.Cloudflare,
+		Namespace:         common.OperatorNamespace,
+		StatusAccountID:   vnet.Status.AccountId,
+	})
+	if err != nil {
+		logger.Error(err, "Failed to get API client for deletion")
+		// Continue with finalizer removal
+	} else if vnet.Status.VirtualNetworkId != "" {
+		// Delete virtual network from Cloudflare
+		logger.Info("Deleting VirtualNetwork from Cloudflare",
+			"virtualNetworkId", vnet.Status.VirtualNetworkId)
 
-	// Get VNet ID from status
-	vnetID := r.vnet.Status.VirtualNetworkId
+		if err := apiResult.API.DeleteVirtualNetwork(ctx, vnet.Status.VirtualNetworkId); err != nil {
+			if !cf.IsNotFoundError(err) {
+				logger.Error(err, "Failed to delete VirtualNetwork from Cloudflare")
+				r.Recorder.Event(vnet, corev1.EventTypeWarning, "DeleteFailed",
+					fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
+				return common.RequeueShort(), err
+			}
+			logger.Info("VirtualNetwork not found in Cloudflare, may have been already deleted")
+		}
 
-	// Unregister from SyncState - this triggers Sync Controller to delete from Cloudflare
-	// Following: Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
-	source := service.Source{
-		Kind: "VirtualNetwork",
-		Name: r.vnet.Name,
+		r.Recorder.Event(vnet, corev1.EventTypeNormal, "Deleted",
+			"VirtualNetwork deleted from Cloudflare")
 	}
 
-	if err := r.vnetService.Unregister(r.ctx, vnetID, source); err != nil {
-		r.log.Error(err, "failed to unregister from SyncState")
-		r.Recorder.Event(r.vnet, corev1.EventTypeWarning, "UnregisterFailed",
-			fmt.Sprintf("Failed to unregister from SyncState: %s", err.Error()))
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-	}
-
-	r.Recorder.Event(r.vnet, corev1.EventTypeNormal, "Unregistered",
-		"Unregistered from SyncState, Sync Controller will delete from Cloudflare")
-
-	// Remove finalizer with retry logic to handle conflicts
-	if err := controller.UpdateWithConflictRetry(r.ctx, r.Client, r.vnet, func() {
-		controllerutil.RemoveFinalizer(r.vnet, controller.VirtualNetworkFinalizer)
+	// Remove finalizer
+	if err := controller.UpdateWithConflictRetry(ctx, r.Client, vnet, func() {
+		controllerutil.RemoveFinalizer(vnet, finalizerName)
 	}); err != nil {
-		r.log.Error(err, "failed to remove finalizer")
-		return ctrl.Result{}, err
+		logger.Error(err, "Failed to remove finalizer")
+		return common.NoRequeue(), err
 	}
-	r.Recorder.Event(r.vnet, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
+	r.Recorder.Event(vnet, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
 
-	return ctrl.Result{}, nil
+	return common.NoRequeue(), nil
 }
 
-// reconcileVirtualNetwork ensures the VirtualNetwork configuration is registered with the service layer.
-// Following Unified Sync Architecture:
-// Resource Controller → Core Service → SyncState → Sync Controller → Cloudflare API
-//
-//nolint:revive // cognitive complexity is acceptable for reconciliation logic
-func (r *Reconciler) reconcileVirtualNetwork() (ctrl.Result, error) {
-	vnetName := r.vnet.GetVirtualNetworkName()
+// syncVirtualNetwork syncs the VirtualNetwork to Cloudflare.
+func (r *Reconciler) syncVirtualNetwork(
+	ctx context.Context,
+	vnet *networkingv1alpha2.VirtualNetwork,
+	apiResult *common.APIClientResult,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
 
-	// Resolve credentials (without creating API client)
-	credInfo, err := r.resolveCredentials()
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("resolve credentials: %w", err)
-	}
+	// Determine virtual network name
+	vnetName := vnet.GetVirtualNetworkName()
 
-	// Build the configuration
-	config := vnetsvc.VirtualNetworkConfig{
+	// Build params
+	params := cf.VirtualNetworkParams{
 		Name:             vnetName,
-		Comment:          r.buildManagedComment(),
-		IsDefaultNetwork: r.vnet.Spec.IsDefaultNetwork,
+		Comment:          r.buildManagedComment(vnet),
+		IsDefaultNetwork: vnet.Spec.IsDefaultNetwork,
 	}
 
-	// Build source reference
-	source := service.Source{
-		Kind: "VirtualNetwork",
-		Name: r.vnet.Name,
+	// Check if virtual network already exists by ID
+	if vnet.Status.VirtualNetworkId != "" {
+		existing, err := apiResult.API.GetVirtualNetwork(ctx, vnet.Status.VirtualNetworkId)
+		if err != nil {
+			if !cf.IsNotFoundError(err) {
+				logger.Error(err, "Failed to get VirtualNetwork from Cloudflare")
+				return r.updateStatusError(ctx, vnet, err)
+			}
+			// VNet doesn't exist, will create
+			logger.Info("VirtualNetwork not found in Cloudflare, will recreate",
+				"virtualNetworkId", vnet.Status.VirtualNetworkId)
+		} else {
+			// VNet exists, update it
+			logger.V(1).Info("Updating VirtualNetwork in Cloudflare",
+				"virtualNetworkId", existing.ID,
+				"name", vnetName)
+
+			result, err := apiResult.API.UpdateVirtualNetwork(ctx, existing.ID, params)
+			if err != nil {
+				logger.Error(err, "Failed to update VirtualNetwork")
+				return r.updateStatusError(ctx, vnet, err)
+			}
+
+			r.Recorder.Event(vnet, corev1.EventTypeNormal, "Updated",
+				fmt.Sprintf("VirtualNetwork '%s' updated in Cloudflare", vnetName))
+
+			return r.updateStatusReady(ctx, vnet, apiResult.AccountID, result)
+		}
 	}
 
-	// Register with service using credentials info
-	opts := vnetsvc.RegisterOptions{
-		AccountID:        credInfo.AccountID,
-		VirtualNetworkID: r.vnet.Status.VirtualNetworkId,
-		Source:           source,
-		Config:           config,
-		CredentialsRef:   credInfo.CredentialsRef,
+	// Try to find existing virtual network by name
+	existingByName, err := apiResult.API.GetVirtualNetworkByName(ctx, vnetName)
+	if err != nil && !cf.IsNotFoundError(err) {
+		logger.Error(err, "Failed to search for existing VirtualNetwork")
+		return r.updateStatusError(ctx, vnet, err)
 	}
 
-	if err := r.vnetService.Register(r.ctx, opts); err != nil {
-		r.log.Error(err, "failed to register VirtualNetwork configuration")
-		r.setCondition(metav1.ConditionFalse, controller.EventReasonCreateFailed, err.Error())
-		r.Recorder.Event(r.vnet, corev1.EventTypeWarning, controller.EventReasonCreateFailed, err.Error())
-		return ctrl.Result{}, err
+	if existingByName != nil {
+		// VNet already exists with this name, adopt it
+		logger.Info("VirtualNetwork already exists with same name, adopting it",
+			"virtualNetworkId", existingByName.ID,
+			"name", vnetName)
+
+		// Update the existing virtual network
+		result, err := apiResult.API.UpdateVirtualNetwork(ctx, existingByName.ID, params)
+		if err != nil {
+			logger.Error(err, "Failed to update existing VirtualNetwork")
+			return r.updateStatusError(ctx, vnet, err)
+		}
+
+		r.Recorder.Event(vnet, corev1.EventTypeNormal, "Adopted",
+			fmt.Sprintf("Adopted existing VirtualNetwork '%s'", vnetName))
+
+		return r.updateStatusReady(ctx, vnet, apiResult.AccountID, result)
 	}
 
-	// Check if already synced (SyncState may have been created and synced in a previous reconcile)
-	syncStatus, err := r.vnetService.GetSyncStatus(r.ctx, source, r.vnet.Status.VirtualNetworkId)
+	// Create new virtual network
+	logger.Info("Creating VirtualNetwork in Cloudflare",
+		"name", vnetName)
+
+	result, err := apiResult.API.CreateVirtualNetwork(ctx, params)
 	if err != nil {
-		r.log.Error(err, "failed to get sync status")
-		if err := r.updateStatusPending(credInfo.AccountID); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		logger.Error(err, "Failed to create VirtualNetwork")
+		return r.updateStatusError(ctx, vnet, err)
 	}
 
-	if syncStatus != nil && syncStatus.IsSynced && syncStatus.VirtualNetworkID != "" {
-		// Already synced, update status to Ready
-		if err := r.updateStatusReady(credInfo.AccountID, syncStatus.VirtualNetworkID); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{}, nil
-	}
+	r.Recorder.Event(vnet, corev1.EventTypeNormal, "Created",
+		fmt.Sprintf("VirtualNetwork '%s' created in Cloudflare", vnetName))
 
-	// Update status to Pending if not already synced
-	if err := r.updateStatusPending(credInfo.AccountID); err != nil {
-		return ctrl.Result{}, err
-	}
-	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	return r.updateStatusReady(ctx, vnet, apiResult.AccountID, result)
 }
 
 // buildManagedComment builds a comment with management marker.
-func (r *Reconciler) buildManagedComment() string {
-	mgmtInfo := controller.NewManagementInfo(r.vnet, "VirtualNetwork")
-	return controller.BuildManagedComment(mgmtInfo, r.vnet.Spec.Comment)
+func (r *Reconciler) buildManagedComment(vnet *networkingv1alpha2.VirtualNetwork) string {
+	mgmtInfo := controller.NewManagementInfo(vnet, "VirtualNetwork")
+	return controller.BuildManagedComment(mgmtInfo, vnet.Spec.Comment)
 }
 
-// updateStatusPending updates the VirtualNetwork status to Pending state.
-func (r *Reconciler) updateStatusPending(accountID string) error {
-	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.vnet, func() {
-		r.vnet.Status.ObservedGeneration = r.vnet.Generation
+func (r *Reconciler) updateStatusError(
+	ctx context.Context,
+	vnet *networkingv1alpha2.VirtualNetwork,
+	err error,
+) (ctrl.Result, error) {
+	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, vnet, func() {
+		vnet.Status.State = "error"
+		meta.SetStatusCondition(&vnet.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: vnet.Generation,
+			Reason:             "Error",
+			Message:            cf.SanitizeErrorMessage(err),
+			LastTransitionTime: metav1.Now(),
+		})
+		vnet.Status.ObservedGeneration = vnet.Generation
+	})
 
-		// Keep existing state if already active, otherwise set to pending
-		if r.vnet.Status.State != "active" {
-			r.vnet.Status.State = "pending"
-		}
+	if updateErr != nil {
+		return common.NoRequeue(), fmt.Errorf("failed to update status: %w", updateErr)
+	}
 
-		// Set account ID
-		if accountID != "" {
-			r.vnet.Status.AccountId = accountID
-		}
+	return common.RequeueShort(), nil
+}
 
-		r.setCondition(metav1.ConditionFalse, "Pending", "Configuration registered, waiting for sync")
+func (r *Reconciler) updateStatusReady(
+	ctx context.Context,
+	vnet *networkingv1alpha2.VirtualNetwork,
+	accountID string,
+	result *cf.VirtualNetworkResult,
+) (ctrl.Result, error) {
+	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, vnet, func() {
+		vnet.Status.AccountId = accountID
+		vnet.Status.VirtualNetworkId = result.ID
+		vnet.Status.State = "active"
+		vnet.Status.IsDefault = result.IsDefaultNetwork
+		meta.SetStatusCondition(&vnet.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: vnet.Generation,
+			Reason:             "Synced",
+			Message:            "VirtualNetwork synced to Cloudflare",
+			LastTransitionTime: metav1.Now(),
+		})
+		vnet.Status.ObservedGeneration = vnet.Generation
 	})
 
 	if err != nil {
-		r.log.Error(err, "failed to update VirtualNetwork status")
-		return err
+		return common.NoRequeue(), fmt.Errorf("failed to update status: %w", err)
 	}
 
-	r.log.Info("VirtualNetwork configuration registered", "name", r.vnet.Name)
-	r.Recorder.Event(r.vnet, corev1.EventTypeNormal, "Registered",
-		"Configuration registered to SyncState")
-	return nil
-}
-
-// updateStatusReady updates the VirtualNetwork status to Ready state.
-func (r *Reconciler) updateStatusReady(accountID, vnetID string) error {
-	err := controller.UpdateStatusWithConflictRetry(r.ctx, r.Client, r.vnet, func() {
-		r.vnet.Status.ObservedGeneration = r.vnet.Generation
-		r.vnet.Status.State = "active"
-		r.vnet.Status.AccountId = accountID
-		r.vnet.Status.VirtualNetworkId = vnetID
-		r.setCondition(metav1.ConditionTrue, "Synced", "VirtualNetwork synced to Cloudflare")
-	})
-
-	if err != nil {
-		r.log.Error(err, "failed to update VirtualNetwork status to Ready")
-		return err
-	}
-
-	r.log.Info("VirtualNetwork synced successfully", "name", r.vnet.Name, "vnetId", vnetID)
-	r.Recorder.Event(r.vnet, corev1.EventTypeNormal, "Synced",
-		fmt.Sprintf("VirtualNetwork synced to Cloudflare with ID %s", vnetID))
-	return nil
-}
-
-// setCondition sets a condition on the VirtualNetwork status using meta.SetStatusCondition.
-func (r *Reconciler) setCondition(status metav1.ConditionStatus, reason, message string) {
-	meta.SetStatusCondition(&r.vnet.Status.Conditions, metav1.Condition{
-		Type:               "Ready",
-		Status:             status,
-		ObservedGeneration: r.vnet.Generation,
-		LastTransitionTime: metav1.Now(),
-		Reason:             reason,
-		Message:            message,
-	})
+	return common.NoRequeue(), nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("virtualnetwork-controller")
-	r.vnetService = vnetsvc.NewService(mgr.GetClient())
+
+	// Initialize APIClientFactory
+	r.APIFactory = common.NewAPIClientFactory(mgr.GetClient(), ctrl.Log.WithName("virtualnetwork"))
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.VirtualNetwork{}).
+		Named("virtualnetwork").
 		Complete(r)
 }

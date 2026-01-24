@@ -1,277 +1,92 @@
-# 资源冲突解决方案 - 统一聚合模式
+# 资源冲突解决方案
 
 ## 概述
 
 本文档定义了 Cloudflare Operator 中多个 K8s 资源管理同一 Cloudflare 设置时的冲突检测、预防和解决机制。
 
-**核心设计决策**: 所有资源类型统一采用 **Type A 聚合模式**，不使用多种不同的解决方案，避免维护复杂性和不一致问题。
+## 资源分类
 
-## 统一聚合模式 (Unified Aggregation Pattern)
+### 1:1 资源 (直接同步)
 
-### 核心原则
+大部分资源是 1:1 映射关系，一个 K8s CRD 对应一个 Cloudflare 资源。这些资源直接调用 Cloudflare API，无需聚合。
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                     统一聚合模式 (Type A)                                     │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │ 多个 K8s 资源 → CloudflareSyncState (多源聚合) → 一个 Cloudflare 资源│   │
-│  │                                                                     │   │
-│  │ 特点:                                                               │   │
-│  │   1. 所有来源配置存储在 SyncState.spec.sources[]                     │   │
-│  │   2. 按优先级排序 (priority 字段)                                    │   │
-│  │   3. 所有权标记嵌入 Cloudflare 资源描述字段                           │   │
-│  │   4. 删除时: 重新聚合剩余来源 + 保留外部配置                          │   │
-│  │                                                                     │   │
-│  │ 优势:                                                               │   │
-│  │   ✅ 统一实现模式，易于维护                                          │   │
-│  │   ✅ 支持多资源协作管理同一配置                                       │   │
-│  │   ✅ 删除操作不会影响其他资源                                         │   │
-│  │   ✅ 保留非 Operator 管理的外部配置                                   │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+| CRD | Cloudflare 资源 | 冲突处理 |
+|-----|-----------------|----------|
+| DNSRecord | DNS Record | 名称唯一 |
+| AccessApplication | Access Application | ID 唯一 |
+| AccessGroup | Access Group | ID 唯一 |
+| VirtualNetwork | Virtual Network | 名称唯一 |
+| NetworkRoute | Network Route | 网络段唯一 |
+| R2Bucket | R2 Bucket | 名称唯一 |
+| GatewayRule | Gateway Rule | ID 唯一 |
+| ... | ... | ... |
 
-### 实现状态
+**冲突预防**: 通过所有权标记 (Comment 字段) 检测资源是否被其他来源管理。
 
-| 资源类型 | 实现状态 | 备注 |
-|----------|----------|------|
-| Tunnel + Ingress + TunnelBinding + Gateway | ✅ 已完成 | 原始聚合实现 |
-| DeviceSettingsPolicy | ✅ 已完成 | Split Tunnel 条目聚合 |
-| CloudflareDomain | ✅ 已完成 | Zone 设置聚合 |
-| GatewayConfiguration | ✅ 已完成 | 网关设置聚合 |
-| ZoneRuleset | ✅ 已完成 | 规则聚合，支持多个同 Phase 资源 |
-| TransformRule | ✅ 已完成 | Transform 规则聚合 |
-| RedirectRule | ✅ 已完成 | Redirect 规则聚合 |
-| AccessGroup | ✅ 已完成 | 标准六层架构 |
-| AccessIdentityProvider | ✅ 已完成 | 标准六层架构 |
+### 聚合资源 (ConfigMap)
+
+Tunnel 配置需要聚合多个来源，使用 ConfigMap 存储配置片段。
+
+| 来源 | 贡献内容 |
+|------|----------|
+| Tunnel/ClusterTunnel | warpRouting, fallback, originRequest |
+| Ingress | hostname → service 规则 |
+| TunnelBinding | 额外路由规则 |
+| HTTPRoute | Gateway API 路由 |
 
 ---
 
-## 架构图
+## 聚合模式架构
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                         资源冲突解决架构 (统一聚合模式)                         │
+│                         Tunnel 配置聚合架构                                   │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
 │  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐   ┌─────────────┐     │
-│  │ Resource A  │   │ Resource B  │   │ Resource C  │   │ Resource D  │     │
-│  │ (K8s CRD)   │   │ (K8s CRD)   │   │ (K8s CRD)   │   │ (K8s CRD)   │     │
+│  │   Tunnel    │   │   Ingress   │   │TunnelBinding│   │  HTTPRoute  │     │
+│  │  (CRD)      │   │  (CRD)      │   │   (CRD)     │   │   (CRD)     │     │
 │  └──────┬──────┘   └──────┬──────┘   └──────┬──────┘   └──────┬──────┘     │
 │         │                 │                 │                 │             │
 │         ▼                 ▼                 ▼                 ▼             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                    L2: Resource Controllers                          │   │
+│  │                    各自的 Controller                                 │   │
+│  │  1. 解析 Spec                                                       │   │
+│  │  2. 构建配置片段                                                     │   │
+│  │  3. 写入 ConfigMap (RetryOnConflict)                                │   │
+│  └──────────────────────────────┬──────────────────────────────────────┘   │
+│                                 │                                           │
+│                                 ▼                                           │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                    ConfigMap (聚合存储)                              │   │
 │  │  ┌─────────────────────────────────────────────────────────────┐    │   │
-│  │  │ 1. 验证 Spec                                                 │    │   │
-│  │  │ 2. 解析引用                                                  │    │   │
-│  │  │ 3. 构建配置                                                  │    │   │
-│  │  │ 4. 调用 Core Service.Register()                              │    │   │
+│  │  │ metadata:                                                    │    │   │
+│  │  │   name: tunnel-config-{tunnelID}                             │    │   │
+│  │  │   ownerReferences: Tunnel/ClusterTunnel                      │    │   │
+│  │  │ data:                                                        │    │   │
+│  │  │   config.json:                                               │    │   │
+│  │  │     sources:                                                 │    │   │
+│  │  │       "ClusterTunnel/my-tunnel": {priority: 10, ...}         │    │   │
+│  │  │       "Ingress/default/app": {priority: 100, ...}            │    │   │
 │  │  └─────────────────────────────────────────────────────────────┘    │   │
 │  └──────────────────────────────┬──────────────────────────────────────┘   │
 │                                 │                                           │
 │                                 ▼                                           │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                    L3: Core Services                                 │   │
-│  │  ┌─────────────────────────────────────────────────────────────┐    │   │
-│  │  │ BaseService.UpdateSource()                                   │    │   │
-│  │  │ ├─ 获取或创建 SyncState                                       │    │   │
-│  │  │ ├─ 添加/更新 sources[] 条目                                   │    │   │
-│  │  │ └─ 乐观锁冲突重试                                             │    │   │
-│  │  └─────────────────────────────────────────────────────────────┘    │   │
+│  │                    TunnelConfig Controller                          │   │
+│  │  1. Watch ConfigMap 变化                                            │   │
+│  │  2. 聚合所有 sources (按优先级)                                      │   │
+│  │  3. 计算 Hash 检测变化                                               │   │
+│  │  4. 调用 Cloudflare Tunnel API                                      │   │
 │  └──────────────────────────────┬──────────────────────────────────────┘   │
 │                                 │                                           │
 │                                 ▼                                           │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                    L4: CloudflareSyncState CRD                       │   │
-│  │  ┌─────────────────────────────────────────────────────────────┐    │   │
-│  │  │ spec:                                                        │    │   │
-│  │  │   sources:                                                   │    │   │
-│  │  │   - ref:                                                     │    │   │
-│  │  │       kind: DeviceSettingsPolicy                             │    │   │
-│  │  │       namespace: default                                     │    │   │
-│  │  │       name: policy-a                                         │    │   │
-│  │  │     priority: 100                                            │    │   │
-│  │  │     config: {...}                                            │    │   │
-│  │  │   - ref:                                                     │    │   │
-│  │  │       kind: DeviceSettingsPolicy                             │    │   │
-│  │  │       namespace: production                                  │    │   │
-│  │  │       name: policy-b                                         │    │   │
-│  │  │     priority: 200                                            │    │   │
-│  │  │     config: {...}                                            │    │   │
-│  │  └─────────────────────────────────────────────────────────────┘    │   │
-│  └──────────────────────────────┬──────────────────────────────────────┘   │
-│                                 │                                           │
-│                                 ▼                                           │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                    L5: Sync Controllers                              │   │
-│  │  ┌─────────────────────────────────────────────────────────────┐    │   │
-│  │  │ 统一聚合流程:                                                 │    │   │
-│  │  │ 1. Watch SyncState 变化                                      │    │   │
-│  │  │ 2. aggregateAllSources() - 聚合所有来源配置                   │    │   │
-│  │  │ 3. 添加所有权标记 [managed-by:Kind/Namespace/Name]           │    │   │
-│  │  │ 4. 计算 Hash 检测变化                                        │    │   │
-│  │  │ 5. 调用 Cloudflare API (唯一调用点)                          │    │   │
-│  │  │ 6. 更新 SyncState Status                                     │    │   │
-│  │  │                                                              │    │   │
-│  │  │ 统一删除流程:                                                 │    │   │
-│  │  │ 1. 重新聚合剩余 sources                                       │    │   │
-│  │  │ 2. 获取 Cloudflare 现有配置                                   │    │   │
-│  │  │ 3. filterExternalRules() - 过滤外部规则                       │    │   │
-│  │  │ 4. 合并剩余配置 + 外部配置                                    │    │   │
-│  │  │ 5. 同步到 Cloudflare                                         │    │   │
-│  │  │ 6. 清理 SyncState                                            │    │   │
-│  │  └─────────────────────────────────────────────────────────────┘    │   │
-│  └──────────────────────────────┬──────────────────────────────────────┘   │
-│                                 │                                           │
-│                                 ▼                                           │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                    L6: Cloudflare API                                │   │
+│  │                    Cloudflare Tunnel Configuration API              │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
-
----
-
-## 核心实现
-
-### 通用聚合框架
-
-位置: `internal/sync/common/aggregator.go`
-
-```go
-// OwnershipMarker 定义资源所有权标记格式
-// 格式: "managed-by:Kind/Namespace/Name"
-type OwnershipMarker struct {
-    Kind      string
-    Namespace string
-    Name      string
-}
-
-// 核心函数
-
-// NewOwnershipMarker 从 SourceReference 创建标记
-func NewOwnershipMarker(ref v1alpha2.SourceReference) OwnershipMarker
-
-// AppendToDescription 在描述中附加所有权标记
-func (m OwnershipMarker) AppendToDescription(description string) string
-
-// IsManagedByOperator 检查是否由 Operator 管理
-func IsManagedByOperator(description string) bool
-```
-
-### Sync Controller 标准实现
-
-每个 Sync Controller 都实现以下统一模式:
-
-```go
-// 1. 聚合类型定义
-type AggregatedConfig struct {
-    // 聚合后的配置
-    Rules       []RuleWithOwner
-    SourceCount int
-}
-
-type RuleWithOwner struct {
-    Rule  ConfigType
-    Owner v1alpha2.SourceReference
-}
-
-// 2. 聚合函数
-func (r *Controller) aggregateAllSources(syncState *v1alpha2.CloudflareSyncState) (*AggregatedConfig, error) {
-    // 按优先级排序 sources
-    sources := make([]v1alpha2.ConfigSource, len(syncState.Spec.Sources))
-    copy(sources, syncState.Spec.Sources)
-    sort.Slice(sources, func(i, j int) bool {
-        return sources[i].Priority < sources[j].Priority
-    })
-
-    // 聚合所有来源的配置
-    for _, source := range sources {
-        // 解析配置并添加所有权信息
-        for _, item := range config.Items {
-            result.Rules = append(result.Rules, RuleWithOwner{
-                Rule:  item,
-                Owner: source.Ref,
-            })
-        }
-    }
-    return result, nil
-}
-
-// 3. 转换函数 (添加所有权标记)
-func (r *Controller) convertAggregatedRules(aggregated *AggregatedConfig) []CloudflareRule {
-    for _, ruleWithOwner := range aggregated.Rules {
-        marker := common.NewOwnershipMarker(ruleWithOwner.Owner)
-        description := marker.AppendToDescription(ruleWithOwner.Rule.Name)
-        // 创建 Cloudflare 规则
-    }
-}
-
-// 4. 删除处理 (统一模式)
-func (r *Controller) handleDeletion(ctx context.Context, syncState *v1alpha2.CloudflareSyncState) (ctrl.Result, error) {
-    // 重新聚合剩余来源
-    aggregated, _ := r.aggregateAllSources(syncState)
-
-    // 获取 Cloudflare 现有配置
-    existing, _ := apiClient.GetRules(zoneID, phase)
-
-    // 过滤外部规则 (非 Operator 管理)
-    externalRules := r.filterExternalRules(existing.Rules)
-
-    // 转换剩余配置
-    remainingRules := r.convertAggregatedRules(aggregated)
-
-    // 合并并同步
-    finalRules := append(remainingRules, externalRules...)
-    apiClient.UpdateRules(zoneID, phase, finalRules)
-
-    // 清理 SyncState
-    return r.cleanupSyncState(ctx, syncState)
-}
-
-// 5. 外部规则过滤
-func (r *Controller) filterExternalRules(rules []CloudflareRule) []CloudflareRule {
-    external := make([]CloudflareRule, 0)
-    for _, rule := range rules {
-        if !common.IsManagedByOperator(rule.Description) {
-            external = append(external, rule)
-        }
-    }
-    return external
-}
-```
-
----
-
-## 所有权标记格式
-
-### 标记格式
-
-```
-[managed-by:Kind/Namespace/Name]
-```
-
-### 示例
-
-```
-User redirect rule [managed-by:RedirectRule/default/my-redirect]
-```
-
-### 标记位置
-
-| 资源类型 | 标记字段 |
-|----------|----------|
-| ZoneRuleset | rule.description |
-| TransformRule | rule.description |
-| RedirectRule | rule.description |
-| DeviceSettingsPolicy | entry.description |
-| DNSRecord | record.comment |
-| VirtualNetwork | network.comment |
 
 ---
 
@@ -281,149 +96,217 @@ User redirect rule [managed-by:RedirectRule/default/my-redirect]
 
 ```go
 const (
-    PriorityHighest = 10   // 系统级配置
-    PriorityHigh    = 50   // 管理员配置
-    PriorityDefault = 100  // 默认优先级
-    PriorityLow     = 200  // 低优先级
+    PriorityTunnelSettings = 10   // Tunnel/ClusterTunnel 设置 (最高)
+    PriorityBinding        = 50   // TunnelBinding
+    PriorityIngress        = 100  // Ingress
+    PriorityGateway        = 100  // Gateway API
 )
 ```
 
 ### 优先级规则
 
 1. **数字越小优先级越高**
-2. **高优先级配置先处理**
-3. **冲突时高优先级获胜**
-4. **同优先级按创建顺序**
+2. **高优先级的 warpRouting/fallback 设置生效**
+3. **规则按优先级排序后聚合**
+4. **同优先级规则按 hostname 排序**
 
-### 示例
+---
 
-```yaml
-# 高优先级 Tunnel 设置
-apiVersion: networking.cloudflare-operator.io/v1alpha2
-kind: Tunnel
-metadata:
-  name: primary-tunnel
-spec:
-  # ...
-  priority: 10  # 高优先级
+## 所有权标记
 
-# 低优先级 Ingress 规则
-# Ingress 默认使用 priority: 100
+### 1:1 资源所有权
+
+使用 Cloudflare 资源的 `comment` 或 `description` 字段标记所有权：
+
+```
+格式: [managed-by:Kind/Namespace/Name]
+示例: [managed-by:DNSRecord/default/my-record]
+```
+
+### 实现
+
+```go
+// internal/controller/management.go
+
+// NewManagementInfo 创建管理信息
+func NewManagementInfo(obj client.Object, kind string) ManagementInfo
+
+// BuildManagedComment 构建带管理标记的注释
+func BuildManagedComment(info ManagementInfo, userComment string) string
+
+// GetConflictingManager 检测冲突的管理者
+func GetConflictingManager(comment string, info ManagementInfo) *ManagementInfo
+```
+
+### 冲突检测示例
+
+```go
+// 创建/更新前检测冲突
+existing, _ := apiClient.GetDNSRecord(recordID)
+mgmtInfo := controller.NewManagementInfo(obj, "DNSRecord")
+
+if conflict := controller.GetConflictingManager(existing.Comment, mgmtInfo); conflict != nil {
+    return fmt.Errorf("record managed by %s/%s/%s",
+        conflict.Kind, conflict.Namespace, conflict.Name)
+}
+```
+
+---
+
+## ConfigMap 并发控制
+
+### 写入冲突处理
+
+使用 Kubernetes 的乐观锁机制处理并发写入：
+
+```go
+// internal/controller/tunnelconfig/writer.go
+
+func (w *Writer) WriteSourceConfig(ctx context.Context, tunnelID, sourceKey string, config *SourceConfig) error {
+    return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+        // 1. 读取当前 ConfigMap
+        configMap, err := w.getOrCreateConfigMap(ctx, tunnelID)
+        if err != nil {
+            return err
+        }
+
+        // 2. 更新 source 配置
+        tunnelConfig, _ := ParseTunnelConfig(configMap)
+        tunnelConfig.Sources[sourceKey] = config
+
+        // 3. 写回 ConfigMap (可能因 resourceVersion 冲突失败)
+        return w.updateConfigMap(ctx, configMap, tunnelConfig)
+    })
+}
+```
+
+### 删除时清理
+
+```go
+func (w *Writer) RemoveSourceConfig(ctx context.Context, tunnelID, sourceKey string) error {
+    return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+        configMap, err := w.getConfigMap(ctx, tunnelID)
+        if err != nil {
+            return client.IgnoreNotFound(err)
+        }
+
+        tunnelConfig, _ := ParseTunnelConfig(configMap)
+        delete(tunnelConfig.Sources, sourceKey)
+
+        if len(tunnelConfig.Sources) == 0 {
+            // ConfigMap 会通过 OwnerReference 自动删除
+            return nil
+        }
+
+        return w.updateConfigMap(ctx, configMap, tunnelConfig)
+    })
+}
 ```
 
 ---
 
 ## 测试验证场景
 
-### 场景 1: 多个 DeviceSettingsPolicy 互不干扰
+### 场景 1: 多个 Ingress 配置同一 Tunnel
 
 ```yaml
-# 创建两个 DeviceSettingsPolicy
----
-apiVersion: networking.cloudflare-operator.io/v1alpha2
-kind: DeviceSettingsPolicy
+# Ingress A
+apiVersion: networking.k8s.io/v1
+kind: Ingress
 metadata:
-  name: aws-vpc-proxy
+  name: app-a
 spec:
-  splitTunnelInclude:
-  - address: "10.0.0.0/8"
-    description: "AWS VPC"
----
-apiVersion: networking.cloudflare-operator.io/v1alpha2
-kind: DeviceSettingsPolicy
+  ingressClassName: cloudflare
+  rules:
+  - host: app-a.example.com
+    http:
+      paths:
+      - path: /
+        backend:
+          service:
+            name: app-a
+            port:
+              number: 80
+
+# Ingress B
+apiVersion: networking.k8s.io/v1
+kind: Ingress
 metadata:
-  name: office-network
+  name: app-b
 spec:
-  splitTunnelInclude:
-  - address: "192.168.1.0/24"
-    description: "Office Network"
+  ingressClassName: cloudflare
+  rules:
+  - host: app-b.example.com
+    http:
+      paths:
+      - path: /
+        backend:
+          service:
+            name: app-b
+            port:
+              number: 80
 ```
 
 **预期行为**:
-1. 创建后 Cloudflare Split Tunnel Include 包含两个条目
-2. 删除 `office-network` 后，`10.0.0.0/8` 仍然存在
-3. 外部添加的条目不受影响
+1. 两个 Ingress 的规则都写入同一 ConfigMap
+2. TunnelConfig Controller 聚合后同步到 Cloudflare
+3. 删除 Ingress A 后，Ingress B 的规则仍然存在
 
-### 场景 2: 多个 ZoneRuleset 同一 Phase
+### 场景 2: Tunnel 设置覆盖 Ingress
 
 ```yaml
-# 两个 ZoneRuleset 使用同一 phase
----
+# ClusterTunnel 启用 WARP Routing
 apiVersion: networking.cloudflare-operator.io/v1alpha2
-kind: ZoneRuleset
+kind: ClusterTunnel
 metadata:
-  name: waf-rules-team-a
+  name: main-tunnel
 spec:
-  phase: http_request_firewall_custom
-  rules:
-  - expression: 'ip.src in {1.2.3.0/24}'
-    action: block
----
-apiVersion: networking.cloudflare-operator.io/v1alpha2
-kind: ZoneRuleset
+  enableWarpRouting: true
+
+# Ingress 配置规则
+apiVersion: networking.k8s.io/v1
+kind: Ingress
 metadata:
-  name: waf-rules-team-b
+  name: web-app
 spec:
-  phase: http_request_firewall_custom
+  ingressClassName: cloudflare
   rules:
-  - expression: 'ip.src in {5.6.7.0/24}'
-    action: block
+  - host: web.example.com
+    # ...
 ```
 
 **预期行为**:
-1. 两个 ZoneRuleset 的规则都被同步到 Cloudflare
-2. 每条规则带有所有权标记
-3. 删除 team-a 的规则不影响 team-b
+1. ClusterTunnel 的 warpRouting 设置优先级 (10) 高于 Ingress (100)
+2. 最终配置包含 `warpRouting: true` 和 Ingress 规则
+3. 删除 ClusterTunnel 后 warpRouting 设置消失，但 Ingress 规则保留
 
-### 场景 3: 保留外部配置
+### 场景 3: DNSRecord 冲突检测
 
-```bash
-# 直接在 Cloudflare 控制台添加规则
-# 规则描述: "Manual rule by admin"
+```yaml
+# DNSRecord A 管理 api.example.com
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: DNSRecord
+metadata:
+  name: api-record
+  namespace: default
+spec:
+  name: api.example.com
+  type: CNAME
+  content: tunnel.cfargotunnel.com
 ```
 
 **预期行为**:
-1. Operator 管理的规则与外部规则共存
-2. 删除 Operator 资源时保留外部规则
-3. 外部规则不会被 Operator 修改
+1. 创建时在 Cloudflare 记录 comment 中添加 `[managed-by:DNSRecord/default/api-record]`
+2. 如果存在未被此资源管理的同名记录，报错冲突
+3. 删除 CRD 时删除 Cloudflare 记录
 
 ---
 
-## 相关文件
-
-### 核心实现
+## 相关代码
 
 | 文件 | 说明 |
 |------|------|
-| `internal/sync/common/aggregator.go` | 通用聚合框架 |
-| `internal/sync/device/settingspolicy_controller.go` | DeviceSettingsPolicy 实现 |
-| `internal/sync/ruleset/zoneruleset_controller.go` | ZoneRuleset 实现 |
-| `internal/sync/ruleset/transformrule_controller.go` | TransformRule 实现 |
-| `internal/sync/ruleset/redirectrule_controller.go` | RedirectRule 实现 |
-
-### 测试文件
-
-| 文件 | 说明 |
-|------|------|
-| `internal/sync/common/aggregator_test.go` | 聚合框架单元测试 |
-| `test/e2e/scenarios/state_consistency_test.go` | 状态一致性 E2E 测试 |
-
----
-
-## 历史记录
-
-### 设计演变
-
-1. **v0.22.x**: 最初采用四种不同方案 (Type A-D)
-2. **v0.23.x**: 统一为 Type A 聚合模式
-   - 移除 Phase 所有权锁定 (Type C)
-   - 移除引用计数方案 (Type D)
-   - 所有资源使用相同的聚合+所有权标记模式
-
-### 废弃的方案
-
-以下方案已废弃，保留仅供历史参考:
-
-- **Type B: 全局设置型** → 改用 Type A 聚合模式
-- **Type C: Phase 独占型** → 改用 Type A 聚合模式，允许多资源共享 Phase
-- **Type D: 引用计数** → 暂不实现，依赖 Kubernetes 本身的垃圾回收机制
+| `internal/controller/tunnelconfig/writer.go` | ConfigMap 读写工具 |
+| `internal/controller/tunnelconfig/types.go` | 配置类型和优先级 |
+| `internal/controller/tunnelconfig/controller.go` | 聚合同步控制器 |
+| `internal/controller/management.go` | 所有权标记工具 |

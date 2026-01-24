@@ -9,6 +9,7 @@ import (
 	"github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/clients/k8s"
+	"github.com/StringKe/cloudflare-operator/internal/controller/tunnelconfig"
 	"github.com/StringKe/cloudflare-operator/internal/service"
 	tunnelsvc "github.com/StringKe/cloudflare-operator/internal/service/tunnel"
 
@@ -545,24 +546,25 @@ func cleanupTunnel(r GenericTunnelReconciler) (ctrl.Result, bool, error) {
 	tunnelID := tunnel.GetStatus().TunnelId
 	tunnelName := getTunnelNameForDeletion(tunnel)
 
-	// Unregister from TunnelConfig SyncState
+	// Remove from ConfigMap
 	if tunnelID != "" {
 		tunnelKind := kindTunnel
 		if tunnel.GetNamespace() == "" {
 			tunnelKind = kindClusterTunnel
 		}
 
-		svc := tunnelsvc.NewService(r.GetClient())
-		source := service.Source{
-			Kind:      tunnelKind,
-			Namespace: tunnel.GetNamespace(),
-			Name:      tunnel.GetName(),
+		// Get operator namespace for ConfigMap
+		operatorNamespace := tunnel.GetNamespace()
+		if operatorNamespace == "" {
+			operatorNamespace = "cloudflare-operator-system"
 		}
 
-		if err := svc.Unregister(ctx, tunnelID, source); err != nil {
-			log.Error(err, "Failed to unregister from TunnelConfig SyncState", "tunnelId", tunnelID)
+		writer := tunnelconfig.NewWriter(r.GetClient(), operatorNamespace)
+		sourceKey := fmt.Sprintf("%s/%s/%s", tunnelKind, tunnel.GetNamespace(), tunnel.GetName())
+		if err := writer.RemoveSourceConfig(ctx, tunnelID, sourceKey); err != nil {
+			log.Error(err, "Failed to remove from ConfigMap", "tunnelId", tunnelID)
 		} else {
-			log.Info("Unregistered from TunnelConfig SyncState", "tunnelId", tunnelID)
+			log.Info("Removed from ConfigMap", "tunnelId", tunnelID)
 		}
 	}
 
@@ -839,11 +841,7 @@ func updateTunnelStatus(r GenericTunnelReconciler) error {
 }
 
 // syncWarpRoutingConfig registers the warp-routing configuration from Tunnel/ClusterTunnel spec
-// to the CloudflareSyncState CRD via TunnelConfigService.
-//
-// This is part of the unified sync architecture where:
-// - Tunnel/ClusterTunnel controllers register settings via TunnelConfigService
-// - TunnelConfigSyncController aggregates all sources and syncs to Cloudflare API
+// to ConfigMap. The TunnelConfig controller watches ConfigMaps and syncs to Cloudflare API.
 //
 // The Tunnel/ClusterTunnel controller is the ONLY source of truth for:
 // - warp-routing configuration
@@ -869,7 +867,7 @@ func syncWarpRoutingConfig(r GenericTunnelReconciler) error {
 		tunnelKind = kindClusterTunnel
 	}
 
-	r.GetLog().Info("Registering tunnel settings to SyncState",
+	r.GetLog().Info("Registering tunnel settings to ConfigMap",
 		"tunnelId", tunnelID,
 		"kind", tunnelKind,
 		"name", r.GetTunnel().GetName(),
@@ -879,33 +877,78 @@ func syncWarpRoutingConfig(r GenericTunnelReconciler) error {
 	// Build credentials reference from Tunnel spec
 	credRef := getCredentialsReference(r)
 
-	// Create TunnelConfigService and register settings
-	svc := tunnelsvc.NewService(r.GetClient())
-	opts := tunnelsvc.RegisterSettingsOptions{
-		TunnelID:       tunnelID,
-		AccountID:      r.GetCfAPI().ValidAccountId,
-		CredentialsRef: credRef,
-		Source: service.Source{
-			Kind:      tunnelKind,
-			Namespace: r.GetTunnel().GetNamespace(),
-			Name:      r.GetTunnel().GetName(),
-		},
-		Settings: tunnelsvc.TunnelSettings{
-			WarpRouting:    &tunnelsvc.WarpRoutingConfig{Enabled: enableWarpRouting},
-			FallbackTarget: fallbackTarget,
-		},
+	// Write to ConfigMap
+	if err := writeTunnelSettingsToConfigMap(r, tunnelID, tunnelKind, enableWarpRouting, credRef); err != nil {
+		return fmt.Errorf("failed to write tunnel settings to ConfigMap: %w", err)
 	}
 
-	if err := svc.RegisterSettings(r.GetContext(), opts); err != nil {
-		return fmt.Errorf("failed to register tunnel settings: %w", err)
-	}
-
-	r.GetLog().Info("Successfully registered tunnel settings to SyncState",
+	r.GetLog().Info("Successfully registered tunnel settings to ConfigMap",
 		"tunnelId", tunnelID,
 		"kind", tunnelKind,
 		"name", r.GetTunnel().GetName())
 	r.GetRecorder().Event(r.GetTunnel().GetObject(), corev1.EventTypeNormal,
 		"SettingsRegistered", fmt.Sprintf("Tunnel settings registered: warp-routing=%v, fallback=%s", enableWarpRouting, fallbackTarget))
+
+	return nil
+}
+
+// writeTunnelSettingsToConfigMap writes tunnel settings to the ConfigMap for the new architecture.
+func writeTunnelSettingsToConfigMap(r GenericTunnelReconciler, tunnelID, tunnelKind string, enableWarpRouting bool, credRef v1alpha2.CredentialsReference) error {
+	tunnel := r.GetTunnel()
+
+	// Build tunnel settings for ConfigMap
+	settings := &tunnelconfig.TunnelSettings{
+		WARPRouting: enableWarpRouting,
+	}
+
+	// Build source config
+	source := &tunnelconfig.SourceConfig{
+		Kind:       tunnelKind,
+		Namespace:  tunnel.GetNamespace(),
+		Name:       tunnel.GetName(),
+		Generation: tunnel.GetObject().GetGeneration(),
+		Settings:   settings,
+	}
+
+	// Get owner GVK
+	ownerGVK := metav1.GroupVersionKind{
+		Group:   "networking.cloudflare-operator.io",
+		Version: "v1alpha2",
+		Kind:    tunnelKind,
+	}
+
+	// Build credentials ref for ConfigMap
+	var configCredRef *tunnelconfig.CredentialsRef
+	if credRef.Name != "" {
+		configCredRef = &tunnelconfig.CredentialsRef{Name: credRef.Name}
+	}
+
+	// Get operator namespace from tunnel namespace (for namespaced Tunnel) or use default
+	operatorNamespace := tunnel.GetNamespace()
+	if operatorNamespace == "" {
+		// ClusterTunnel - get from context or use default
+		operatorNamespace = "cloudflare-operator-system"
+	}
+
+	// Write to ConfigMap
+	writer := tunnelconfig.NewWriter(r.GetClient(), operatorNamespace)
+	if err := writer.SetTunnelSettings(
+		r.GetContext(),
+		tunnelID,
+		r.GetCfAPI().ValidAccountId,
+		tunnel.GetStatus().TunnelName,
+		settings,
+		configCredRef,
+		source,
+		tunnel.GetObject(),
+		ownerGVK,
+	); err != nil {
+		return fmt.Errorf("failed to write tunnel settings to ConfigMap: %w", err)
+	}
+
+	r.GetLog().V(1).Info("Wrote tunnel settings to ConfigMap",
+		"tunnelId", tunnelID,
+		"source", fmt.Sprintf("%s/%s/%s", tunnelKind, tunnel.GetNamespace(), tunnel.GetName()))
 
 	return nil
 }

@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2025-2026 The Cloudflare Operator Authors
 
-// Package pagesdomain implements the L2 Controller for PagesDomain CRD.
-// It registers domain configurations to the Core Service for sync.
+// Package pagesdomain implements the Controller for PagesDomain CRD.
+// It directly manages custom domains for Cloudflare Pages projects.
 package pagesdomain
 
 import (
 	"context"
 	"fmt"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -26,27 +25,26 @@ import (
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
-	"github.com/StringKe/cloudflare-operator/internal/service"
-	pagessvc "github.com/StringKe/cloudflare-operator/internal/service/pages"
+	"github.com/StringKe/cloudflare-operator/internal/controller/common"
 )
 
 const (
 	FinalizerName = "pagesdomain.networking.cloudflare-operator.io/finalizer"
 )
 
-// PagesDomainReconciler reconciles a PagesDomain object
+// PagesDomainReconciler reconciles a PagesDomain object.
+// It directly calls Cloudflare API and writes status back to the CRD.
 type PagesDomainReconciler struct {
 	client.Client
-	Scheme        *runtime.Scheme
-	Recorder      record.EventRecorder
-	domainService *pagessvc.DomainService
+	Scheme     *runtime.Scheme
+	Recorder   record.EventRecorder
+	APIFactory *common.APIClientFactory
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=pagesdomains,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=pagesdomains/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=pagesdomains/finalizers,verbs=update
 
-//nolint:revive // cognitive complexity is acceptable for this reconcile loop
 func (r *PagesDomainReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
@@ -54,60 +52,58 @@ func (r *PagesDomainReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	domain := &networkingv1alpha2.PagesDomain{}
 	if err := r.Get(ctx, req.NamespacedName, domain); err != nil {
 		if errors.IsNotFound(err) {
-			return ctrl.Result{}, nil
+			return common.NoRequeue(), nil
 		}
-		return ctrl.Result{}, err
+		return common.NoRequeue(), err
 	}
 
-	// Resolve credentials
-	credInfo, err := r.resolveCredentials(ctx, domain)
+	// Handle deletion
+	if !domain.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, domain)
+	}
+
+	// Ensure finalizer
+	if added, err := controller.EnsureFinalizer(ctx, r.Client, domain, FinalizerName); err != nil {
+		return common.NoRequeue(), err
+	} else if added {
+		return ctrl.Result{Requeue: true}, nil
+	}
+
+	// Get API client
+	apiResult, err := r.APIFactory.GetClient(ctx, common.APIClientOptions{
+		CloudflareDetails: &domain.Spec.Cloudflare,
+		Namespace:         domain.Namespace,
+		StatusAccountID:   domain.Status.AccountID,
+	})
 	if err != nil {
-		logger.Error(err, "Failed to resolve credentials")
-		return r.updateStatusError(ctx, domain, err)
+		logger.Error(err, "Failed to get API client")
+		return r.setErrorStatus(ctx, domain, err)
 	}
 
 	// Resolve project name
 	projectName, err := r.resolveProjectName(ctx, domain)
 	if err != nil {
 		logger.Error(err, "Failed to resolve project name")
-		return r.updateStatusError(ctx, domain, err)
+		return r.setErrorStatus(ctx, domain, err)
 	}
 
-	// Handle deletion
-	if !domain.DeletionTimestamp.IsZero() {
-		return r.handleDeletion(ctx, domain, projectName)
+	// Check if domain exists in Cloudflare
+	existingDomain, err := apiResult.API.GetPagesDomain(ctx, projectName, domain.Spec.Domain)
+	if err != nil && !cf.IsNotFoundError(err) {
+		logger.Error(err, "Failed to get Pages domain from Cloudflare")
+		return r.setErrorStatus(ctx, domain, err)
 	}
 
-	// Add finalizer if not present
-	if !controllerutil.ContainsFinalizer(domain, FinalizerName) {
-		controllerutil.AddFinalizer(domain, FinalizerName)
-		if err := r.Update(ctx, domain); err != nil {
-			return ctrl.Result{}, err
-		}
+	if existingDomain != nil {
+		// Domain exists, check if we need to update
+		return r.handleExistingDomain(ctx, domain, apiResult, projectName, existingDomain)
 	}
 
-	// Register Pages domain configuration to SyncState
-	return r.registerPagesDomain(ctx, domain, projectName, credInfo)
-}
-
-// resolveCredentials resolves the credentials for the Pages domain.
-func (r *PagesDomainReconciler) resolveCredentials(
-	ctx context.Context,
-	domain *networkingv1alpha2.PagesDomain,
-) (*controller.CredentialsInfo, error) {
-	return controller.ResolveCredentialsForService(
-		ctx,
-		r.Client,
-		log.FromContext(ctx),
-		domain.Spec.Cloudflare,
-		domain.Namespace,
-		domain.Status.AccountID,
-	)
+	// Domain doesn't exist, create it
+	return r.handleCreateDomain(ctx, domain, apiResult, projectName)
 }
 
 // resolveProjectName resolves the Cloudflare project name from the ProjectRef.
-//
-//nolint:revive // cognitive complexity is acceptable for resolution logic
 func (r *PagesDomainReconciler) resolveProjectName(
 	ctx context.Context,
 	domain *networkingv1alpha2.PagesDomain,
@@ -141,176 +137,209 @@ func (r *PagesDomainReconciler) resolveProjectName(
 	return "", fmt.Errorf("project reference is required: specify name, cloudflareId, or cloudflareName")
 }
 
-// resolveZoneID resolves the Cloudflare Zone ID for DNS auto-configuration.
-// Priority:
-// 1. If Spec.ZoneID is explicitly provided, use it directly
-// 2. If AutoConfigureDNS is disabled, return empty string
-// 3. Otherwise, query Cloudflare API to find the zone for the domain
-func (r *PagesDomainReconciler) resolveZoneID(
-	ctx context.Context,
-	domain *networkingv1alpha2.PagesDomain,
-) (string, error) {
-	logger := log.FromContext(ctx)
-
-	// Priority 1: Explicit ZoneID in spec
-	if domain.Spec.ZoneID != "" {
-		logger.V(1).Info("Using explicit ZoneID from spec", "zoneID", domain.Spec.ZoneID)
-		return domain.Spec.ZoneID, nil
-	}
-
-	// If AutoConfigureDNS is disabled, no need to resolve ZoneID
-	if domain.Spec.AutoConfigureDNS != nil && !*domain.Spec.AutoConfigureDNS {
-		logger.V(1).Info("AutoConfigureDNS is disabled, skipping ZoneID resolution")
-		return "", nil
-	}
-
-	// Priority 2: Query from Cloudflare API
-	logger.Info("Querying Cloudflare API for Zone ID", "domain", domain.Spec.Domain)
-
-	// Create API client
-	apiClient, err := cf.NewAPIClientFromDetails(
-		ctx,
-		r.Client,
-		controller.OperatorNamespace, // PagesDomain is namespaced, but credentials are in operator namespace
-		domain.Spec.Cloudflare,
-	)
-	if err != nil {
-		return "", fmt.Errorf("create API client: %w", err)
-	}
-
-	// Extract base domain from FQDN
-	// e.g., "app.test.1xe.mip.sup-any.com" -> query zones and find matching one
-	zoneID, zoneName, err := apiClient.GetZoneIDForDomain(ctx, domain.Spec.Domain)
-	if err != nil {
-		return "", fmt.Errorf("query zone for domain %s: %w", domain.Spec.Domain, err)
-	}
-
-	logger.Info("Resolved Zone ID from Cloudflare API",
-		"domain", domain.Spec.Domain,
-		"zoneID", zoneID,
-		"zoneName", zoneName)
-
-	return zoneID, nil
-}
-
 // handleDeletion handles the deletion of a PagesDomain.
 func (r *PagesDomainReconciler) handleDeletion(
 	ctx context.Context,
 	domain *networkingv1alpha2.PagesDomain,
-	projectName string,
 ) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	if !controllerutil.ContainsFinalizer(domain, FinalizerName) {
-		return ctrl.Result{}, nil
+		return common.NoRequeue(), nil
 	}
 
 	// Check deletion policy
 	if domain.Spec.DeletionPolicy == "Orphan" {
 		logger.Info("Orphan deletion policy, skipping Cloudflare deletion")
 	} else {
-		// Unregister from SyncState - this triggers Sync Controller to delete from Cloudflare
-		source := service.Source{
-			Kind:      "PagesDomain",
-			Namespace: domain.Namespace,
-			Name:      domain.Name,
+		// Get API client
+		apiResult, err := r.APIFactory.GetClient(ctx, common.APIClientOptions{
+			CloudflareDetails: &domain.Spec.Cloudflare,
+			Namespace:         domain.Namespace,
+			StatusAccountID:   domain.Status.AccountID,
+		})
+		if err != nil {
+			logger.Error(err, "Failed to get API client for deletion")
+			// Continue with finalizer removal even if API client fails
+		} else {
+			// Resolve project name
+			projectName, err := r.resolveProjectName(ctx, domain)
+			if err != nil {
+				logger.Error(err, "Failed to resolve project name for deletion")
+				// Continue with finalizer removal
+			} else {
+				// Delete domain from Cloudflare
+				logger.Info("Deleting Pages domain from Cloudflare",
+					"projectName", projectName,
+					"domain", domain.Spec.Domain)
+
+				if err := apiResult.API.DeletePagesDomain(ctx, projectName, domain.Spec.Domain); err != nil {
+					if !cf.IsNotFoundError(err) {
+						logger.Error(err, "Failed to delete Pages domain from Cloudflare")
+						r.Recorder.Event(domain, corev1.EventTypeWarning, "DeleteFailed",
+							fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
+						return common.RequeueShort(), err
+					}
+					// NotFound is fine, domain already deleted
+					logger.Info("Pages domain not found in Cloudflare, may have been already deleted")
+				}
+
+				r.Recorder.Event(domain, corev1.EventTypeNormal, "Deleted",
+					"Pages domain deleted from Cloudflare")
+			}
 		}
-
-		logger.Info("Unregistering Pages domain from SyncState",
-			"projectName", projectName,
-			"domain", domain.Spec.Domain,
-			"source", fmt.Sprintf("%s/%s", domain.Namespace, domain.Name))
-
-		if err := r.domainService.Unregister(ctx, projectName, domain.Spec.Domain, source); err != nil {
-			logger.Error(err, "Failed to unregister Pages domain from SyncState")
-			r.Recorder.Event(domain, corev1.EventTypeWarning, "UnregisterFailed",
-				fmt.Sprintf("Failed to unregister from SyncState: %s", err.Error()))
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-		}
-
-		r.Recorder.Event(domain, corev1.EventTypeNormal, "Unregistered",
-			"Unregistered from SyncState, Sync Controller will delete from Cloudflare")
 	}
 
-	// Remove finalizer with retry logic
+	// Remove finalizer
 	if err := controller.UpdateWithConflictRetry(ctx, r.Client, domain, func() {
 		controllerutil.RemoveFinalizer(domain, FinalizerName)
 	}); err != nil {
-		logger.Error(err, "failed to remove finalizer")
-		return ctrl.Result{}, err
+		logger.Error(err, "Failed to remove finalizer")
+		return common.NoRequeue(), err
 	}
 	r.Recorder.Event(domain, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer removed")
 
-	return ctrl.Result{}, nil
+	return common.NoRequeue(), nil
 }
 
-// registerPagesDomain registers the Pages domain configuration to SyncState.
-func (r *PagesDomainReconciler) registerPagesDomain(
+// handleExistingDomain handles the case when the domain already exists in Cloudflare.
+func (r *PagesDomainReconciler) handleExistingDomain(
 	ctx context.Context,
 	domain *networkingv1alpha2.PagesDomain,
+	apiResult *common.APIClientResult,
 	projectName string,
-	credInfo *controller.CredentialsInfo,
+	existingDomain *cf.PagesDomainResult,
 ) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
+	logger.V(1).Info("Pages domain exists in Cloudflare",
+		"projectName", projectName,
+		"domain", domain.Spec.Domain,
+		"status", existingDomain.Status)
 
-	// Create source reference
-	source := service.Source{
-		Kind:      "PagesDomain",
-		Namespace: domain.Namespace,
-		Name:      domain.Name,
-	}
+	// Update status from Cloudflare
+	return r.setSuccessStatus(ctx, domain, apiResult.AccountID, projectName, existingDomain)
+}
 
-	// Resolve ZoneID if AutoConfigureDNS is enabled
-	zoneID, err := r.resolveZoneID(ctx, domain)
+// handleCreateDomain handles the creation of a new Pages domain.
+func (r *PagesDomainReconciler) handleCreateDomain(
+	ctx context.Context,
+	domain *networkingv1alpha2.PagesDomain,
+	apiResult *common.APIClientResult,
+	projectName string,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+	logger.Info("Creating Pages domain in Cloudflare",
+		"projectName", projectName,
+		"domain", domain.Spec.Domain)
+
+	// Add domain to Cloudflare
+	result, err := apiResult.API.AddPagesDomain(ctx, projectName, domain.Spec.Domain)
 	if err != nil {
-		logger.Error(err, "Failed to resolve Zone ID for DNS auto-configuration")
-		// Non-fatal: DNS auto-configuration will be skipped
-		r.Recorder.Event(domain, corev1.EventTypeWarning, "ZoneResolutionFailed",
-			fmt.Sprintf("Failed to resolve Zone ID: %s. DNS auto-configuration will be skipped.", err.Error()))
+		logger.Error(err, "Failed to add Pages domain to Cloudflare")
+		r.Recorder.Event(domain, corev1.EventTypeWarning, "CreateFailed",
+			fmt.Sprintf("Failed to add domain to Cloudflare: %s", cf.SanitizeErrorMessage(err)))
+		return r.setErrorStatus(ctx, domain, err)
 	}
 
-	// Build Pages domain configuration
-	config := pagessvc.PagesDomainConfig{
-		Domain:           domain.Spec.Domain,
-		ProjectName:      projectName,
-		AutoConfigureDNS: domain.Spec.AutoConfigureDNS,
-	}
+	r.Recorder.Event(domain, corev1.EventTypeNormal, "Created",
+		fmt.Sprintf("Pages domain '%s' added to project '%s'", domain.Spec.Domain, projectName))
 
-	// Register to SyncState
-	opts := pagessvc.DomainRegisterOptions{
-		DomainName:     domain.Spec.Domain,
-		ProjectName:    projectName,
-		AccountID:      credInfo.AccountID,
-		ZoneID:         zoneID,
-		Source:         source,
-		Config:         config,
-		CredentialsRef: credInfo.CredentialsRef,
-	}
+	// Update status
+	return r.setSuccessStatus(ctx, domain, apiResult.AccountID, projectName, result)
+}
 
-	if err := r.domainService.Register(ctx, opts); err != nil {
-		logger.Error(err, "Failed to register Pages domain configuration")
-		r.Recorder.Event(domain, corev1.EventTypeWarning, "RegisterFailed",
-			fmt.Sprintf("Failed to register Pages domain: %s", err.Error()))
-		return r.updateStatusError(ctx, domain, err)
-	}
+// setSuccessStatus updates the domain status with success.
+func (r *PagesDomainReconciler) setSuccessStatus(
+	ctx context.Context,
+	domain *networkingv1alpha2.PagesDomain,
+	accountID, projectName string,
+	result *cf.PagesDomainResult,
+) (ctrl.Result, error) {
+	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, domain, func() {
+		domain.Status.AccountID = accountID
+		domain.Status.ProjectName = projectName
+		domain.Status.DomainID = result.ID
+		domain.Status.Status = result.Status
+		domain.Status.ZoneID = result.ZoneTag
+		domain.Status.ValidationMethod = result.ValidationMethod
+		domain.Status.ValidationStatus = result.ValidationStatus
 
-	r.Recorder.Event(domain, corev1.EventTypeNormal, "Registered",
-		fmt.Sprintf("Registered Pages Domain '%s' configuration to SyncState", domain.Spec.Domain))
+		// Map Cloudflare status to State
+		switch result.Status {
+		case "active":
+			domain.Status.State = networkingv1alpha2.PagesDomainStateActive
+		case "pending":
+			domain.Status.State = networkingv1alpha2.PagesDomainStatePending
+		case "verifying":
+			domain.Status.State = networkingv1alpha2.PagesDomainStateVerifying
+		case "moved":
+			domain.Status.State = networkingv1alpha2.PagesDomainStateMoved
+		case "deleting":
+			domain.Status.State = networkingv1alpha2.PagesDomainStateDeleting
+		default:
+			domain.Status.State = networkingv1alpha2.PagesDomainStatePending
+		}
 
-	// Check if already synced
-	syncStatus, err := r.domainService.GetSyncStatus(ctx, projectName, domain.Spec.Domain)
+		// Set Ready condition based on status
+		if result.Status == "active" {
+			meta.SetStatusCondition(&domain.Status.Conditions, metav1.Condition{
+				Type:               "Ready",
+				Status:             metav1.ConditionTrue,
+				ObservedGeneration: domain.Generation,
+				Reason:             "Active",
+				Message:            "Pages domain is active and serving traffic",
+				LastTransitionTime: metav1.Now(),
+			})
+		} else {
+			meta.SetStatusCondition(&domain.Status.Conditions, metav1.Condition{
+				Type:               "Ready",
+				Status:             metav1.ConditionFalse,
+				ObservedGeneration: domain.Generation,
+				Reason:             "Pending",
+				Message:            fmt.Sprintf("Pages domain is %s", result.Status),
+				LastTransitionTime: metav1.Now(),
+			})
+		}
+		domain.Status.ObservedGeneration = domain.Generation
+	})
+
 	if err != nil {
-		logger.Error(err, "Failed to get sync status")
-		return r.updateStatusPending(ctx, domain, projectName, credInfo.AccountID)
+		return common.NoRequeue(), fmt.Errorf("failed to update status: %w", err)
 	}
 
-	if syncStatus != nil && syncStatus.IsSynced {
-		// Already synced, update status to Active
-		return r.updateStatusActive(ctx, domain, projectName, credInfo.AccountID, syncStatus.DomainID, syncStatus.Status)
+	// If domain is not yet active, poll for status updates
+	if result.Status != "active" {
+		return common.RequeueMedium(), nil
 	}
 
-	// Update status to Pending - actual sync happens via PagesSyncController
-	return r.updateStatusPending(ctx, domain, projectName, credInfo.AccountID)
+	return common.NoRequeue(), nil
+}
+
+// setErrorStatus updates the domain status with an error.
+func (r *PagesDomainReconciler) setErrorStatus(
+	ctx context.Context,
+	domain *networkingv1alpha2.PagesDomain,
+	err error,
+) (ctrl.Result, error) {
+	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, domain, func() {
+		domain.Status.State = networkingv1alpha2.PagesDomainStateError
+		domain.Status.Message = cf.SanitizeErrorMessage(err)
+		meta.SetStatusCondition(&domain.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: domain.Generation,
+			Reason:             "Error",
+			Message:            cf.SanitizeErrorMessage(err),
+			LastTransitionTime: metav1.Now(),
+		})
+		domain.Status.ObservedGeneration = domain.Generation
+	})
+
+	if updateErr != nil {
+		return common.NoRequeue(), fmt.Errorf("failed to update status: %w", updateErr)
+	}
+
+	return common.RequeueShort(), nil
 }
 
 // findDomainsForProject returns PagesDomains that may need reconciliation when a PagesProject changes.
@@ -346,95 +375,11 @@ func (r *PagesDomainReconciler) findDomainsForProject(ctx context.Context, obj c
 	return requests
 }
 
-func (r *PagesDomainReconciler) updateStatusError(
-	ctx context.Context,
-	domain *networkingv1alpha2.PagesDomain,
-	err error,
-) (ctrl.Result, error) {
-	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, domain, func() {
-		domain.Status.State = networkingv1alpha2.PagesDomainStateError
-		meta.SetStatusCondition(&domain.Status.Conditions, metav1.Condition{
-			Type:               "Ready",
-			Status:             metav1.ConditionFalse,
-			ObservedGeneration: domain.Generation,
-			Reason:             "ReconcileError",
-			Message:            cf.SanitizeErrorMessage(err),
-			LastTransitionTime: metav1.Now(),
-		})
-		domain.Status.ObservedGeneration = domain.Generation
-	})
-
-	if updateErr != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
-	}
-
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-}
-
-func (r *PagesDomainReconciler) updateStatusPending(
-	ctx context.Context,
-	domain *networkingv1alpha2.PagesDomain,
-	projectName, accountID string,
-) (ctrl.Result, error) {
-	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, domain, func() {
-		if domain.Status.AccountID == "" {
-			domain.Status.AccountID = accountID
-		}
-		domain.Status.ProjectName = projectName
-		domain.Status.State = networkingv1alpha2.PagesDomainStatePending
-		meta.SetStatusCondition(&domain.Status.Conditions, metav1.Condition{
-			Type:               "Ready",
-			Status:             metav1.ConditionFalse,
-			ObservedGeneration: domain.Generation,
-			Reason:             "Pending",
-			Message:            "Pages domain configuration registered, waiting for sync",
-			LastTransitionTime: metav1.Now(),
-		})
-		domain.Status.ObservedGeneration = domain.Generation
-	})
-
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
-	}
-
-	// Requeue to check for sync completion
-	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-}
-
-func (r *PagesDomainReconciler) updateStatusActive(
-	ctx context.Context,
-	domain *networkingv1alpha2.PagesDomain,
-	projectName, accountID, domainID, status string,
-) (ctrl.Result, error) {
-	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, domain, func() {
-		domain.Status.AccountID = accountID
-		domain.Status.ProjectName = projectName
-		domain.Status.DomainID = domainID
-		domain.Status.Status = status
-		domain.Status.State = networkingv1alpha2.PagesDomainStateActive
-		meta.SetStatusCondition(&domain.Status.Conditions, metav1.Condition{
-			Type:               "Ready",
-			Status:             metav1.ConditionTrue,
-			ObservedGeneration: domain.Generation,
-			Reason:             "Synced",
-			Message:            "Pages domain synced to Cloudflare",
-			LastTransitionTime: metav1.Now(),
-		})
-		domain.Status.ObservedGeneration = domain.Generation
-	})
-
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
-	}
-
-	return ctrl.Result{}, nil
-}
-
 func (r *PagesDomainReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("pagesdomain-controller")
 
-	// Initialize DomainService
-	r.domainService = pagessvc.NewDomainService(mgr.GetClient())
+	// Initialize APIClientFactory
+	r.APIFactory = common.NewAPIClientFactory(mgr.GetClient(), ctrl.Log.WithName("pagesdomain"))
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.PagesDomain{}).
