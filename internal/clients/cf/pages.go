@@ -140,6 +140,8 @@ type PagesDeploymentResult struct {
 	Stage            string
 	StageStatus      string
 	Stages           []PagesDeploymentStage
+	// Aliases contains all URLs for this deployment (hash URL, branch URL, etc.)
+	Aliases []string
 }
 
 // PagesDeploymentStage represents a deployment stage
@@ -923,6 +925,7 @@ func convertFromPagesDeployment(deployment cloudflare.PagesProjectDeployment) *P
 		ProductionBranch: deployment.ProductionBranch,
 		Stage:            deployment.LatestStage.Name,
 		StageStatus:      deployment.LatestStage.Status,
+		Aliases:          deployment.Aliases,
 	}
 
 	if deployment.CreatedOn != nil {

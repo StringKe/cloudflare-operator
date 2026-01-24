@@ -442,6 +442,12 @@ type PagesDeploymentStatus struct {
 	// +kubebuilder:validation:Optional
 	Version int `json:"version,omitempty"`
 
+	// VersionName is the human-readable version identifier.
+	// For managed deployments: the version name from PagesProject.spec.versions (e.g., "sha-abc123")
+	// For direct deployments: extracted from the deployment name or source key.
+	// +kubebuilder:validation:Optional
+	VersionName string `json:"versionName,omitempty"`
+
 	// ProductionBranch is the production branch used.
 	// +kubebuilder:validation:Optional
 	ProductionBranch string `json:"productionBranch,omitempty"`

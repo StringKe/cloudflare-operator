@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -337,6 +338,12 @@ func (r *PagesDeploymentReconciler) updateDeploymentStatus(
 		deployment.Status.DeploymentID = result.ID
 		deployment.Status.URL = result.URL
 		deployment.Status.Environment = result.Environment
+
+		// Extract HashURL from Aliases (first .pages.dev URL containing the short ID)
+		deployment.Status.HashURL = extractHashURL(result.Aliases, result.ShortID, projectName)
+
+		// Extract VersionName from labels or deployment name
+		deployment.Status.VersionName = extractVersionName(deployment)
 
 		// Determine state based on stage
 		stage := result.Stage
@@ -853,4 +860,49 @@ func (r *PagesDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&networkingv1alpha2.PagesDeployment{},
 			handler.EnqueueRequestsFromMapFunc(r.findDeploymentsForSameProject)).
 		Complete(r)
+}
+
+// extractHashURL extracts the hash-based URL from aliases.
+// The hash URL format is: <shortId>.<projectName>.pages.dev
+//
+//nolint:revive // cognitive complexity acceptable for URL extraction logic
+func extractHashURL(aliases []string, shortID, projectName string) string {
+	// First, try to find exact match with shortID in aliases
+	pagesDevSuffix := ".pages.dev"
+	for _, alias := range aliases {
+		if strings.HasSuffix(alias, pagesDevSuffix) && strings.Contains(alias, shortID) {
+			return alias
+		}
+	}
+
+	// If shortID is available, construct the hash URL
+	if shortID != "" && projectName != "" {
+		return fmt.Sprintf("%s.%s.pages.dev", shortID, projectName)
+	}
+
+	// Fallback: find any pages.dev URL that's not the main project URL
+	mainURL := projectName + pagesDevSuffix
+	for _, alias := range aliases {
+		if strings.HasSuffix(alias, pagesDevSuffix) && alias != mainURL {
+			return alias
+		}
+	}
+
+	return ""
+}
+
+// extractVersionName extracts the version name from deployment labels or name.
+// Priority:
+// 1. Label "networking.cloudflare-operator.io/version" (set by PagesProject version manager)
+// 2. Deployment name (if it follows version naming pattern)
+func extractVersionName(deployment *networkingv1alpha2.PagesDeployment) string {
+	// Check for version label (set by PagesProject version manager)
+	const versionLabel = "networking.cloudflare-operator.io/version"
+	if version, ok := deployment.Labels[versionLabel]; ok && version != "" {
+		return version
+	}
+
+	// Fallback: use deployment name as version identifier
+	// This allows CI pipelines to use meaningful deployment names like "sha-abc123"
+	return deployment.Name
 }

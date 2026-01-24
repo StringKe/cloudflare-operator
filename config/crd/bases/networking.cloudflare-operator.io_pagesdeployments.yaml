@@ -902,6 +902,12 @@ spec:
                   Version is the sequential version number within the project.
                   Increments with each new deployment.
                 type: integer
+              versionName:
+                description: |-
+                  VersionName is the human-readable version identifier.
+                  For managed deployments: the version name from PagesProject.spec.versions (e.g., "sha-abc123")
+                  For direct deployments: extracted from the deployment name or source key.
+                type: string
             type: object
         type: object
     served: true
