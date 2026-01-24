@@ -29,6 +29,7 @@ import (
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
 	"github.com/StringKe/cloudflare-operator/internal/controller/common"
+	"github.com/StringKe/cloudflare-operator/internal/uploader"
 )
 
 const (
@@ -532,13 +533,7 @@ func (r *PagesDeploymentReconciler) getSourceType(deployment *networkingv1alpha2
 }
 
 // loadDirectUploadFiles loads files for direct upload from the specified source.
-// Supports: HTTP URL, S3, and OCI sources.
-//
-// Note: This implementation requires files to be fetched and extracted.
-// For simplicity, we currently only support simple cases.
-// Complex archive handling should be done by a dedicated file loader service.
-//
-//nolint:revive,unparam // cognitive complexity acceptable; returns nil as feature not yet implemented
+// Supports: HTTP URL, S3, and OCI sources with archive extraction (tar.gz, tar, zip).
 func (r *PagesDeploymentReconciler) loadDirectUploadFiles(
 	ctx context.Context,
 	deployment *networkingv1alpha2.PagesDeployment,
@@ -554,36 +549,38 @@ func (r *PagesDeploymentReconciler) loadDirectUploadFiles(
 		return nil, errors.New("direct upload source configuration is required")
 	}
 
-	// Currently, direct upload requires external file fetching
-	// which is not implemented inline in the controller.
-	// The proper implementation should use a dedicated file loader service.
-	//
-	// For now, we return an error indicating this feature needs external setup.
-	// In production, you would typically:
-	// 1. Use an init container to download and prepare files
-	// 2. Use a sidecar service for file management
-	// 3. Implement HTTP/S3/OCI fetching here
-
-	if du.Source.HTTP != nil {
-		logger.Info("Direct upload from HTTP source",
-			"url", du.Source.HTTP.URL)
-		return nil, errors.New("direct upload from HTTP URL is not yet implemented in the simplified controller; use Git-based deployment or pre-upload files to Cloudflare")
-	}
-
-	if du.Source.S3 != nil {
+	// Log source type
+	switch {
+	case du.Source.HTTP != nil:
+		logger.Info("Direct upload from HTTP source", "url", du.Source.HTTP.URL)
+	case du.Source.S3 != nil:
 		logger.Info("Direct upload from S3 source",
 			"bucket", du.Source.S3.Bucket,
-			"key", du.Source.S3.Key)
-		return nil, errors.New("direct upload from S3 is not yet implemented in the simplified controller; use Git-based deployment or pre-upload files to Cloudflare")
+			"key", du.Source.S3.Key,
+			"region", du.Source.S3.Region)
+	case du.Source.OCI != nil:
+		logger.Info("Direct upload from OCI source", "image", du.Source.OCI.Image)
 	}
 
-	if du.Source.OCI != nil {
-		logger.Info("Direct upload from OCI source",
-			"image", du.Source.OCI.Image)
-		return nil, errors.New("direct upload from OCI registry is not yet implemented in the simplified controller; use Git-based deployment or pre-upload files to Cloudflare")
+	// Use the uploader package to download, verify, and extract files
+	manifest, err := uploader.ProcessSource(
+		ctx,
+		r.Client,
+		deployment.Namespace,
+		du.Source,
+		du.Checksum,
+		du.Archive,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("process direct upload source: %w", err)
 	}
 
-	return nil, errors.New("no valid direct upload source specified (HTTP, S3, or OCI required)")
+	logger.Info("Direct upload files loaded",
+		"fileCount", manifest.FileCount,
+		"totalSize", manifest.TotalSize,
+		"sourceHash", manifest.SourceHash)
+
+	return manifest.Files, nil
 }
 
 // resolveProjectName resolves the Cloudflare project name from the ProjectRef.
