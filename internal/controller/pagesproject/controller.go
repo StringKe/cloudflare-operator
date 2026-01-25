@@ -31,10 +31,14 @@ import (
 // It directly calls Cloudflare API and writes status back to the CRD.
 type PagesProjectReconciler struct {
 	client.Client
-	Scheme         *runtime.Scheme
-	Recorder       record.EventRecorder
-	APIFactory     *common.APIClientFactory
-	versionManager *VersionManager
+	Scheme                  *runtime.Scheme
+	Recorder                record.EventRecorder
+	APIFactory              *common.APIClientFactory
+	versionManager          *VersionManager
+	gitopsReconciler        *GitOpsReconciler
+	latestPreviewReconciler *LatestPreviewReconciler
+	autoPromoteReconciler   *AutoPromoteReconciler
+	externalReconciler      *ExternalReconciler
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=pagesprojects,verbs=get;list;watch;create;update;patch;delete
@@ -84,20 +88,77 @@ func (r *PagesProjectReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return result, err
 	}
 
-	// Handle declarative version management if versions are specified
+	// Handle version management based on policy
+	policy := r.versionManager.GetPolicy(project)
 	if r.versionManager.HasVersions(project) {
-		// Reconcile versions - create/update PagesDeployment resources
-		if err := r.versionManager.Reconcile(ctx, project); err != nil {
-			logger.Error(err, "Failed to reconcile versions")
-			controller.RecordErrorEventAndCondition(r.Recorder, project,
-				&project.Status.Conditions, "VersionReconcileFailed", err)
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-		}
+		var requeueAfter time.Duration
 
-		// Reconcile production target - promote/demote deployments
-		if err := r.reconcileProductionTarget(ctx, project); err != nil {
-			logger.Error(err, "Failed to reconcile production target")
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, err
+		switch policy {
+		case networkingv1alpha2.VersionPolicyGitOps:
+			// GitOps mode: use GitOpsReconciler
+			if err := r.gitopsReconciler.Reconcile(ctx, project, apiResult.API); err != nil {
+				logger.Error(err, "Failed to reconcile GitOps versions")
+				controller.RecordErrorEventAndCondition(r.Recorder, project,
+					&project.Status.Conditions, "GitOpsReconcileFailed", err)
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+			}
+
+			// Update version mapping and status
+			if err := r.gitopsReconciler.UpdateVersionMapping(ctx, project); err != nil {
+				logger.Error(err, "Failed to update version mapping")
+				// Non-fatal, continue
+			}
+
+		case networkingv1alpha2.VersionPolicyLatestPreview:
+			// LatestPreview mode: track latest successful preview deployment
+			if err := r.latestPreviewReconciler.Reconcile(ctx, project, apiResult.API); err != nil {
+				logger.Error(err, "Failed to reconcile latestPreview")
+				controller.RecordErrorEventAndCondition(r.Recorder, project,
+					&project.Status.Conditions, "LatestPreviewReconcileFailed", err)
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+			}
+			requeueAfter = r.latestPreviewReconciler.GetRequeueAfter()
+
+		case networkingv1alpha2.VersionPolicyAutoPromote:
+			// AutoPromote mode: automatically promote after preview succeeds
+			requeue, err := r.autoPromoteReconciler.Reconcile(ctx, project, apiResult.API)
+			if err != nil {
+				logger.Error(err, "Failed to reconcile autoPromote")
+				controller.RecordErrorEventAndCondition(r.Recorder, project,
+					&project.Status.Conditions, "AutoPromoteReconcileFailed", err)
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+			}
+			if requeue > 0 {
+				requeueAfter = requeue
+			} else {
+				requeueAfter = r.autoPromoteReconciler.GetRequeueAfter()
+			}
+
+		case networkingv1alpha2.VersionPolicyExternal:
+			// External mode: external system controls versioning
+			requeue, err := r.externalReconciler.Reconcile(ctx, project, apiResult.API)
+			if err != nil {
+				logger.Error(err, "Failed to reconcile external versions")
+				controller.RecordErrorEventAndCondition(r.Recorder, project,
+					&project.Status.Conditions, "ExternalReconcileFailed", err)
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+			}
+			requeueAfter = requeue
+
+		default:
+			// Other modes: use VersionManager
+			if err := r.versionManager.Reconcile(ctx, project); err != nil {
+				logger.Error(err, "Failed to reconcile versions")
+				controller.RecordErrorEventAndCondition(r.Recorder, project,
+					&project.Status.Conditions, "VersionReconcileFailed", err)
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+			}
+
+			// Reconcile production target - promote/demote deployments
+			if err := r.reconcileProductionTarget(ctx, project); err != nil {
+				logger.Error(err, "Failed to reconcile production target")
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, err
+			}
 		}
 
 		// Prune old versions based on revisionHistoryLimit
@@ -111,9 +172,35 @@ func (r *PagesProjectReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			logger.Error(err, "Failed to aggregate version status")
 			// Status aggregation errors are non-fatal, continue
 		}
+
+		// Update active policy in status
+		if err := r.updateActivePolicy(ctx, project, policy); err != nil {
+			logger.Error(err, "Failed to update active policy")
+			// Non-fatal, continue
+		}
+
+		// Return with requeue if needed
+		if requeueAfter > 0 {
+			return ctrl.Result{RequeueAfter: requeueAfter}, nil
+		}
 	}
 
 	return result, nil
+}
+
+// updateActivePolicy updates the active policy in project status.
+func (r *PagesProjectReconciler) updateActivePolicy(
+	ctx context.Context,
+	project *networkingv1alpha2.PagesProject,
+	policy networkingv1alpha2.VersionPolicy,
+) error {
+	if project.Status.ActivePolicy == policy {
+		return nil
+	}
+
+	return controller.UpdateStatusWithConflictRetry(ctx, r.Client, project, func() {
+		project.Status.ActivePolicy = policy
+	})
 }
 
 // handleDeletion handles the deletion of a PagesProject.
@@ -492,11 +579,45 @@ func (r *PagesProjectReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Initialize APIClientFactory
 	r.APIFactory = common.NewAPIClientFactory(mgr.GetClient(), ctrl.Log.WithName("pagesproject"))
 
+	logger := ctrl.Log.WithName("pagesproject")
+
 	// Initialize VersionManager
 	r.versionManager = NewVersionManager(
 		mgr.GetClient(),
 		mgr.GetScheme(),
-		ctrl.Log.WithName("pagesproject").WithName("versionmanager"),
+		logger.WithName("versionmanager"),
+	)
+
+	// Initialize GitOpsReconciler
+	r.gitopsReconciler = NewGitOpsReconciler(
+		mgr.GetClient(),
+		mgr.GetScheme(),
+		r.Recorder,
+		logger,
+	)
+
+	// Initialize LatestPreviewReconciler
+	r.latestPreviewReconciler = NewLatestPreviewReconciler(
+		mgr.GetClient(),
+		mgr.GetScheme(),
+		r.Recorder,
+		logger,
+	)
+
+	// Initialize AutoPromoteReconciler
+	r.autoPromoteReconciler = NewAutoPromoteReconciler(
+		mgr.GetClient(),
+		mgr.GetScheme(),
+		r.Recorder,
+		logger,
+	)
+
+	// Initialize ExternalReconciler
+	r.externalReconciler = NewExternalReconciler(
+		mgr.GetClient(),
+		mgr.GetScheme(),
+		r.Recorder,
+		logger,
 	)
 
 	return ctrl.NewControllerManagedBy(mgr).

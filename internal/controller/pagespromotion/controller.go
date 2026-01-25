@@ -201,7 +201,7 @@ func (r *PagesPromotionReconciler) resolveDeploymentID(
 		return promotion.Spec.DeploymentRef.DeploymentID, nil, nil
 	}
 
-	// Priority 2: Reference to PagesDeployment K8s resource
+	// Priority 2: Reference to PagesDeployment K8s resource by name
 	if promotion.Spec.DeploymentRef.Name != "" {
 		deployment := &networkingv1alpha2.PagesDeployment{}
 		if err := r.Get(ctx, client.ObjectKey{
@@ -219,8 +219,93 @@ func (r *PagesPromotionReconciler) resolveDeploymentID(
 		return deployment.Status.DeploymentID, deployment, nil
 	}
 
-	return "", nil, errors.New("deployment reference is required: specify name or deploymentId")
+	// Priority 3: Reference by version name (GitOps mode)
+	if promotion.Spec.DeploymentRef.VersionName != "" {
+		return r.findDeploymentIDByVersion(ctx, promotion, promotion.Spec.DeploymentRef.VersionName)
+	}
+
+	return "", nil, errors.New("deployment reference is required: specify name, deploymentId, or versionName")
 }
+
+// findDeploymentIDByVersion finds a deployment ID by version name.
+//
+//nolint:revive // cyclomatic complexity acceptable for search logic
+func (r *PagesPromotionReconciler) findDeploymentIDByVersion(
+	ctx context.Context,
+	promotion *networkingv1alpha2.PagesPromotion,
+	versionName string,
+) (string, *networkingv1alpha2.PagesDeployment, error) {
+	// Get project name for filtering
+	projectName, err := r.resolveProjectName(ctx, promotion)
+	if err != nil {
+		return "", nil, err
+	}
+
+	// List all PagesDeployments in the namespace
+	deployments := &networkingv1alpha2.PagesDeploymentList{}
+	if err := r.List(ctx, deployments, client.InNamespace(promotion.Namespace)); err != nil {
+		return "", nil, fmt.Errorf("failed to list deployments: %w", err)
+	}
+
+	for i := range deployments.Items {
+		d := &deployments.Items[i]
+
+		// Check if deployment belongs to the project
+		if !r.belongsToProject(d, promotion, projectName) {
+			continue
+		}
+
+		// Match by spec.versionName
+		if d.Spec.VersionName == versionName {
+			if d.Status.DeploymentID == "" {
+				return "", d, errors.New("referenced PagesDeployment has no deployment ID yet")
+			}
+			return d.Status.DeploymentID, d, nil
+		}
+
+		// Match by status.versionName
+		if d.Status.VersionName == versionName {
+			if d.Status.DeploymentID == "" {
+				return "", d, errors.New("referenced PagesDeployment has no deployment ID yet")
+			}
+			return d.Status.DeploymentID, d, nil
+		}
+
+		// Match by version label
+		if d.Labels != nil && d.Labels[versionLabel] == versionName {
+			if d.Status.DeploymentID == "" {
+				return "", d, errors.New("referenced PagesDeployment has no deployment ID yet")
+			}
+			return d.Status.DeploymentID, d, nil
+		}
+	}
+
+	return "", nil, fmt.Errorf("no deployment found for version %s", versionName)
+}
+
+// belongsToProject checks if a deployment belongs to the referenced project.
+func (*PagesPromotionReconciler) belongsToProject(
+	deployment *networkingv1alpha2.PagesDeployment,
+	promotion *networkingv1alpha2.PagesPromotion,
+	projectName string,
+) bool {
+	// Check by project reference name
+	if promotion.Spec.ProjectRef.Name != "" && deployment.Spec.ProjectRef.Name == promotion.Spec.ProjectRef.Name {
+		return true
+	}
+
+	// Check by Cloudflare project name
+	if deployment.Spec.ProjectRef.CloudflareID == projectName ||
+		deployment.Spec.ProjectRef.CloudflareName == projectName ||
+		deployment.Status.ProjectName == projectName {
+		return true
+	}
+
+	return false
+}
+
+// versionLabel is the label key for version name.
+const versionLabel = "networking.cloudflare-operator.io/version"
 
 // requireSuccessfulDeployment returns whether the promotion requires a successful deployment.
 func requireSuccessfulDeployment(promotion *networkingv1alpha2.PagesPromotion) bool {

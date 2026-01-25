@@ -349,6 +349,15 @@ type PagesDeploymentSpec struct {
 	// +kubebuilder:validation:Required
 	ProjectRef PagesProjectRef `json:"projectRef"`
 
+	// VersionName is a human-readable version identifier for this deployment.
+	// Used by GitOps workflows to reference deployments by version.
+	// When set, this deployment can be referenced by PagesProject or PagesPromotion via versionName.
+	// Example values: "v1.2.3", "sha-abc123", "feature-x-v1"
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	VersionName string `json:"versionName,omitempty"`
+
 	// Environment specifies the deployment environment.
 	// - production: The production deployment (only one per project)
 	// - preview: Preview deployments (multiple allowed)
@@ -452,7 +461,7 @@ type PagesDeploymentStatus struct {
 	Version int `json:"version,omitempty"`
 
 	// VersionName is the human-readable version identifier.
-	// For managed deployments: the version name from PagesProject.spec.versions (e.g., "sha-abc123")
+	// For managed deployments: the version name from PagesProject.spec.versionManagement (e.g., "sha-abc123")
 	// For direct deployments: extracted from the deployment name or source key.
 	// +kubebuilder:validation:Optional
 	VersionName string `json:"versionName,omitempty"`

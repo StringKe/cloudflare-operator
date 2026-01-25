@@ -4,9 +4,10 @@
 # for managing multiple deployment versions and automatic production promotion.
 #
 # Features demonstrated:
-# - Declarative version list (spec.versions[])
+# - Version management policy (spec.versionManagement.policy)
+# - Declarative version list (spec.versionManagement.declarativeVersions.versions[])
 # - Automatic PagesDeployment creation for each version
-# - Production target control (spec.productionTarget)
+# - Production target control (spec.versionManagement.declarativeVersions.productionTarget)
 # - Revision history limiting (spec.revisionHistoryLimit)
 #
 # How it works:
@@ -15,64 +16,40 @@
 # 3. The productionTarget controls which version is promoted to production
 # 4. Old deployments are pruned based on revisionHistoryLimit
 
+---
+# Example 1: DeclarativeVersions mode with full version list
 apiVersion: networking.cloudflare-operator.io/v1alpha2
 kind: PagesProject
 metadata:
-  name: my-app
+  name: my-app-declarative
   namespace: default
 spec:
-  # Project configuration
-  name: "my-app"
+  name: "my-app-declarative"
   productionBranch: "main"
 
-  # Declarative version list
-  # Controller automatically creates PagesDeployment for each version
-  versions:
-    # Latest version - will be deployed first
-    - name: "v1.2.3"
-      source:
-        source:
-          http:
-            url: "https://artifacts.example.com/my-app/v1.2.3/dist.tar.gz"
-        archive:
-          type: tar.gz
-          stripComponents: 1
-        checksum:
-          algorithm: sha256
-          value: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      metadata:
-        gitCommit: "abc123def456"
-        buildTime: "2025-01-20T10:00:00Z"
-        author: "deploy-bot"
+  # Version management configuration
+  versionManagement:
+    # Policy: declarativeVersions - use version list with source template
+    policy: declarativeVersions
+    declarativeVersions:
+      # Version names list (sorted by priority, first is latest)
+      versions:
+        - "v1.2.3"
+        - "v1.2.2"
+        - "v1.2.1"
 
-    # Previous version - kept for rollback
-    - name: "v1.2.2"
-      source:
-        source:
-          http:
-            url: "https://artifacts.example.com/my-app/v1.2.2/dist.tar.gz"
-        archive:
-          type: tar.gz
-          stripComponents: 1
-        checksum:
-          algorithm: sha256
-          value: "a1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+      # Source template - how to construct the source URL from version
+      sourceTemplate:
+        type: http
+        http:
+          urlTemplate: "https://artifacts.example.com/my-app/{{.Version}}/dist.tar.gz"
+          archiveType: tar.gz
 
-    # Older stable version
-    - name: "v1.2.1"
-      source:
-        source:
-          http:
-            url: "https://artifacts.example.com/my-app/v1.2.1/dist.tar.gz"
-        archive:
-          type: tar.gz
-          stripComponents: 1
-
-  # Production target control
-  # - "latest": Automatically deploy versions[0] to production
-  # - "v1.2.2": Lock to specific version for rollback
-  # - "": No automatic production promotion
-  productionTarget: "latest"
+      # Production target control
+      # - "latest": Automatically deploy versions[0] to production
+      # - "v1.2.2": Lock to specific version for rollback
+      # - "": No automatic production promotion
+      productionTarget: "latest"
 
   # Revision history limit
   # Keeps only the 10 most recent deployments
@@ -92,37 +69,215 @@ spec:
       name: cloudflare-credentials
 
 ---
-# Example: PagesProject with version pinning for rollback
+# Example 2: FullVersions mode with complete version configurations
 apiVersion: networking.cloudflare-operator.io/v1alpha2
 kind: PagesProject
 metadata:
-  name: my-app-rollback-example
+  name: my-app-fullversions
   namespace: default
 spec:
-  name: "my-app-rollback"
+  name: "my-app-fullversions"
   productionBranch: "main"
 
-  versions:
-    - name: "v1.2.3"
-      source:
-        source:
-          http:
-            url: "https://artifacts.example.com/my-app/v1.2.3/dist.tar.gz"
-        archive:
-          type: tar.gz
+  versionManagement:
+    policy: fullVersions
+    fullVersions:
+      versions:
+        # Latest version with full configuration
+        - name: "v1.2.3"
+          source:
+            source:
+              http:
+                url: "https://artifacts.example.com/my-app/v1.2.3/dist.tar.gz"
+            archive:
+              type: tar.gz
+              stripComponents: 1
+            checksum:
+              algorithm: sha256
+              value: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          metadata:
+            gitCommit: "abc123def456"
+            buildTime: "2025-01-20T10:00:00Z"
+            author: "deploy-bot"
 
-    - name: "v1.2.2"
-      source:
-        source:
-          http:
-            url: "https://artifacts.example.com/my-app/v1.2.2/dist.tar.gz"
-        archive:
-          type: tar.gz
+        # Previous version for rollback
+        - name: "v1.2.2"
+          source:
+            source:
+              http:
+                url: "https://artifacts.example.com/my-app/v1.2.2/dist.tar.gz"
+            archive:
+              type: tar.gz
+              stripComponents: 1
 
-  # Pin to v1.2.2 for rollback (instead of "latest")
-  productionTarget: "v1.2.2"
+      productionTarget: "latest"
 
   revisionHistoryLimit: 5
+
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials
+
+---
+# Example 3: GitOps mode - preview + production two-stage deployment
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesProject
+metadata:
+  name: my-app-gitops
+  namespace: default
+spec:
+  name: "my-app-gitops"
+  productionBranch: "main"
+
+  versionManagement:
+    policy: gitops
+    gitops:
+      # CI system modifies this field to trigger preview deployment
+      previewVersion: "v1.3.0"
+
+      # Operators manually modify this field to promote to production
+      # Must have passed preview validation
+      productionVersion: "v1.2.3"
+
+      # Source template for version resolution
+      sourceTemplate:
+        type: s3
+        s3:
+          bucket: "my-artifacts-bucket"
+          keyTemplate: "builds/my-app/{{.Version}}/dist.tar.gz"
+          region: "us-east-1"
+          archiveType: tar.gz
+
+      # Require preview validation before production promotion (default: true)
+      requirePreviewValidation: true
+
+      # Optional: validation labels that mark a version as validated
+      validationLabels:
+        qa-approved: "true"
+
+  revisionHistoryLimit: 10
+
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials
+
+---
+# Example 4: TargetVersion mode - single version deployment
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesProject
+metadata:
+  name: my-app-single
+  namespace: default
+spec:
+  name: "my-app-single"
+  productionBranch: "main"
+
+  versionManagement:
+    policy: targetVersion
+    targetVersion:
+      version: "sha-abc123"
+      sourceTemplate:
+        type: http
+        http:
+          urlTemplate: "https://artifacts.example.com/my-app/{{.Version}}/dist.tar.gz"
+          archiveType: tar.gz
+
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials
+
+---
+# Example 5: AutoPromote mode - auto-promote after preview succeeds
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesProject
+metadata:
+  name: my-app-autopromote
+  namespace: default
+spec:
+  name: "my-app-autopromote"
+  productionBranch: "main"
+
+  versionManagement:
+    policy: autoPromote
+    autoPromote:
+      # Wait 5 minutes after preview succeeds before promoting
+      promoteAfter: 5m
+
+      # Require health check before promotion
+      requireHealthCheck: true
+      healthCheckUrl: "https://preview.my-app.pages.dev/health"
+      healthCheckTimeout: 30s
+
+      sourceTemplate:
+        type: http
+        http:
+          urlTemplate: "https://artifacts.example.com/my-app/{{.Version}}/dist.tar.gz"
+          archiveType: tar.gz
+
+  revisionHistoryLimit: 10
+
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials
+
+---
+# Example 6: LatestPreview mode - track latest successful preview
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesProject
+metadata:
+  name: my-app-latestpreview
+  namespace: default
+spec:
+  name: "my-app-latestpreview"
+  productionBranch: "main"
+
+  versionManagement:
+    policy: latestPreview
+    latestPreview:
+      # Optional: only track deployments matching this selector
+      labelSelector:
+        matchLabels:
+          team: frontend
+
+      # Auto-promote latest successful preview to production
+      autoPromote: true
+
+  revisionHistoryLimit: 10
+
+  cloudflare:
+    accountId: "your-account-id"
+    credentialsRef:
+      name: cloudflare-credentials
+
+---
+# Example 7: External mode - external system controls versioning
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesProject
+metadata:
+  name: my-app-external
+  namespace: default
+spec:
+  name: "my-app-external"
+  productionBranch: "main"
+
+  versionManagement:
+    policy: external
+    external:
+      # External system updates these fields to control versions
+      currentVersion: "v1.2.3"
+      productionVersion: "v1.2.3"
+
+      # Sync interval for checking external system
+      syncInterval: 5m
+
+      # Optional: webhook URL to notify external system
+      webhookUrl: "https://ci.example.com/webhook/cloudflare"
+
+  revisionHistoryLimit: 10
 
   cloudflare:
     accountId: "your-account-id"

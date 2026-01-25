@@ -7,17 +7,27 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// VersionManagementType defines the mode for version management.
-// +kubebuilder:validation:Enum=targetVersion;declarativeVersions;fullVersions
-type VersionManagementType string
+// VersionPolicy defines the mode for version management.
+// +kubebuilder:validation:Enum=none;targetVersion;declarativeVersions;fullVersions;gitops;latestPreview;autoPromote;external
+type VersionPolicy string
 
 const (
-	// TargetVersionMode - simplest mode: specify only target version
-	TargetVersionMode VersionManagementType = "targetVersion"
-	// DeclarativeVersionsMode - declarative mode: version name list + template
-	DeclarativeVersionsMode VersionManagementType = "declarativeVersions"
-	// FullVersionsMode - full mode: complete version configurations (backward compatible)
-	FullVersionsMode VersionManagementType = "fullVersions"
+	// VersionPolicyNone - no version management, only project configuration
+	VersionPolicyNone VersionPolicy = "none"
+	// VersionPolicyTargetVersion - simplest mode: specify only target version
+	VersionPolicyTargetVersion VersionPolicy = "targetVersion"
+	// VersionPolicyDeclarativeVersions - declarative mode: version name list + template
+	VersionPolicyDeclarativeVersions VersionPolicy = "declarativeVersions"
+	// VersionPolicyFullVersions - full mode: complete version configurations (backward compatible)
+	VersionPolicyFullVersions VersionPolicy = "fullVersions"
+	// VersionPolicyGitOps - GitOps workflow: preview + production two-stage deployment
+	VersionPolicyGitOps VersionPolicy = "gitops"
+	// VersionPolicyLatestPreview - automatically track latest preview deployment
+	VersionPolicyLatestPreview VersionPolicy = "latestPreview"
+	// VersionPolicyAutoPromote - auto-promote after preview succeeds
+	VersionPolicyAutoPromote VersionPolicy = "autoPromote"
+	// VersionPolicyExternal - version controlled by external system
+	VersionPolicyExternal VersionPolicy = "external"
 )
 
 // SourceTemplateType defines the type of source template.
@@ -33,24 +43,137 @@ const (
 	OCISourceTemplateType SourceTemplateType = "oci"
 )
 
+// GitOpsVersionConfig defines GitOps workflow configuration.
+// CI system modifies previewVersion to trigger preview deployment.
+// Operators manually modify productionVersion to promote to production.
+type GitOpsVersionConfig struct {
+	// PreviewVersion is the current preview environment version name.
+	// CI system modifies this field to trigger preview deployment.
+	// +kubebuilder:validation:Optional
+	PreviewVersion string `json:"previewVersion,omitempty"`
+
+	// ProductionVersion is the current production environment version name.
+	// Operators manually modify this field to trigger promotion.
+	// Must have passed preview validation when RequirePreviewValidation is true.
+	// +kubebuilder:validation:Optional
+	ProductionVersion string `json:"productionVersion,omitempty"`
+
+	// SourceTemplate defines how to construct the source URL from version.
+	// +kubebuilder:validation:Optional
+	SourceTemplate *SourceTemplate `json:"sourceTemplate,omitempty"`
+
+	// RequirePreviewValidation requires productionVersion to have passed preview validation.
+	// When true (default), promotion fails if the version hasn't been successfully deployed as preview.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=true
+	RequirePreviewValidation *bool `json:"requirePreviewValidation,omitempty"`
+
+	// ValidationLabels are labels that mark a version as validated.
+	// The version must have all these labels to be considered validated.
+	// +kubebuilder:validation:Optional
+	ValidationLabels map[string]string `json:"validationLabels,omitempty"`
+}
+
+// LatestPreviewConfig defines configuration for automatically tracking the latest preview deployment.
+type LatestPreviewConfig struct {
+	// SourceTemplate defines how to construct the source URL from version.
+	// +kubebuilder:validation:Optional
+	SourceTemplate *SourceTemplate `json:"sourceTemplate,omitempty"`
+
+	// LabelSelector selects which PagesDeployment resources to track.
+	// +kubebuilder:validation:Optional
+	LabelSelector *metav1.LabelSelector `json:"labelSelector,omitempty"`
+
+	// AutoPromote automatically promotes the latest successful preview to production.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=false
+	AutoPromote bool `json:"autoPromote,omitempty"`
+}
+
+// AutoPromoteConfig defines configuration for automatic promotion after preview succeeds.
+type AutoPromoteConfig struct {
+	// SourceTemplate defines how to construct the source URL from version.
+	// +kubebuilder:validation:Optional
+	SourceTemplate *SourceTemplate `json:"sourceTemplate,omitempty"`
+
+	// PromoteAfter specifies the wait time after preview succeeds before promoting.
+	// Default is immediate promotion.
+	// +kubebuilder:validation:Optional
+	PromoteAfter *metav1.Duration `json:"promoteAfter,omitempty"`
+
+	// RequireHealthCheck requires a health check before promotion.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=false
+	RequireHealthCheck bool `json:"requireHealthCheck,omitempty"`
+
+	// HealthCheckURL is the URL to check for health before promotion.
+	// Only used when RequireHealthCheck is true.
+	// +kubebuilder:validation:Optional
+	HealthCheckURL string `json:"healthCheckUrl,omitempty"`
+
+	// HealthCheckTimeout is the timeout for health check.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default="30s"
+	HealthCheckTimeout *metav1.Duration `json:"healthCheckTimeout,omitempty"`
+}
+
+// ExternalVersionConfig defines configuration for external version control.
+type ExternalVersionConfig struct {
+	// WebhookURL is the URL to notify when version changes are needed.
+	// +kubebuilder:validation:Optional
+	WebhookURL string `json:"webhookUrl,omitempty"`
+
+	// SyncInterval is the interval to sync version status from external system.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default="5m"
+	SyncInterval *metav1.Duration `json:"syncInterval,omitempty"`
+
+	// CurrentVersion is the externally-controlled current version.
+	// External systems update this field to control which version is deployed.
+	// +kubebuilder:validation:Optional
+	CurrentVersion string `json:"currentVersion,omitempty"`
+
+	// ProductionVersion is the externally-controlled production version.
+	// +kubebuilder:validation:Optional
+	ProductionVersion string `json:"productionVersion,omitempty"`
+}
+
 // VersionManagement defines version management configuration.
 // Only one mode should be used at a time.
 type VersionManagement struct {
-	// Type specifies the version management mode.
-	// +kubebuilder:validation:Required
-	Type VersionManagementType `json:"type"`
+	// Policy specifies the version management policy.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=none;targetVersion;declarativeVersions;fullVersions;gitops;latestPreview;autoPromote;external
+	// +kubebuilder:default="none"
+	Policy VersionPolicy `json:"policy,omitempty"`
 
-	// TargetVersion configuration (used when type=targetVersion).
+	// TargetVersion configuration (used when policy=targetVersion).
 	// +kubebuilder:validation:Optional
 	TargetVersion *TargetVersionSpec `json:"targetVersion,omitempty"`
 
-	// DeclarativeVersions configuration (used when type=declarativeVersions).
+	// DeclarativeVersions configuration (used when policy=declarativeVersions).
 	// +kubebuilder:validation:Optional
 	DeclarativeVersions *DeclarativeVersionsSpec `json:"declarativeVersions,omitempty"`
 
-	// FullVersions configuration (used when type=fullVersions).
+	// FullVersions configuration (used when policy=fullVersions).
 	// +kubebuilder:validation:Optional
 	FullVersions *FullVersionsSpec `json:"fullVersions,omitempty"`
+
+	// GitOps configuration (used when policy=gitops).
+	// +kubebuilder:validation:Optional
+	GitOps *GitOpsVersionConfig `json:"gitops,omitempty"`
+
+	// LatestPreview configuration (used when policy=latestPreview).
+	// +kubebuilder:validation:Optional
+	LatestPreview *LatestPreviewConfig `json:"latestPreview,omitempty"`
+
+	// AutoPromote configuration (used when policy=autoPromote).
+	// +kubebuilder:validation:Optional
+	AutoPromote *AutoPromoteConfig `json:"autoPromote,omitempty"`
+
+	// External configuration (used when policy=external).
+	// +kubebuilder:validation:Optional
+	External *ExternalVersionConfig `json:"external,omitempty"`
 }
 
 // TargetVersionSpec defines the simplest mode configuration - just a single target version.
@@ -593,6 +716,66 @@ type ProjectVersion struct {
 	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
+// PreviewDeploymentInfo contains information about the current preview deployment.
+type PreviewDeploymentInfo struct {
+	// VersionName is the version name being previewed.
+	// +kubebuilder:validation:Required
+	VersionName string `json:"versionName"`
+
+	// DeploymentID is the Cloudflare deployment ID.
+	// +kubebuilder:validation:Optional
+	DeploymentID string `json:"deploymentId,omitempty"`
+
+	// DeploymentName is the PagesDeployment resource name.
+	// +kubebuilder:validation:Required
+	DeploymentName string `json:"deploymentName"`
+
+	// URL is the preview deployment URL.
+	// +kubebuilder:validation:Optional
+	URL string `json:"url,omitempty"`
+
+	// HashURL is the deployment-specific URL (e.g., abc123.my-app.pages.dev).
+	// +kubebuilder:validation:Optional
+	HashURL string `json:"hashUrl,omitempty"`
+
+	// State is the current state of the preview deployment.
+	// +kubebuilder:validation:Optional
+	State string `json:"state,omitempty"`
+
+	// DeployedAt is when this preview version was deployed.
+	// +kubebuilder:validation:Optional
+	DeployedAt *metav1.Time `json:"deployedAt,omitempty"`
+}
+
+// VersionValidation records validation history for a version.
+type VersionValidation struct {
+	// VersionName is the version name that was validated.
+	// +kubebuilder:validation:Required
+	VersionName string `json:"versionName"`
+
+	// DeploymentID is the Cloudflare deployment ID that was validated.
+	// +kubebuilder:validation:Optional
+	DeploymentID string `json:"deploymentId,omitempty"`
+
+	// ValidatedAt is when the version was validated.
+	// +kubebuilder:validation:Optional
+	ValidatedAt *metav1.Time `json:"validatedAt,omitempty"`
+
+	// ValidatedBy indicates how the version was validated.
+	// Values: "preview", "manual", "autoPromote"
+	// +kubebuilder:validation:Optional
+	ValidatedBy string `json:"validatedBy,omitempty"`
+
+	// ValidationResult indicates whether validation passed or failed.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=passed;failed
+	ValidationResult string `json:"validationResult,omitempty"`
+
+	// Message contains additional information about the validation.
+	// +kubebuilder:validation:Optional
+	Message string `json:"message,omitempty"`
+}
+
 // ProductionDeploymentInfo contains information about the current production deployment.
 type ProductionDeploymentInfo struct {
 	// Version is the version name (from ProjectVersion).
@@ -789,28 +972,6 @@ type PagesProjectSpec struct {
 	// +kubebuilder:validation:Maximum=100
 	// +kubebuilder:default=10
 	RevisionHistoryLimit *int32 `json:"revisionHistoryLimit,omitempty"`
-
-	// ===== DEPRECATED FIELDS (for backward compatibility) =====
-	// These fields will be removed in v1alpha3. Use VersionManagement instead.
-
-	// Versions defines a declarative list of deployment versions.
-	//
-	// Deprecated: Use VersionManagement.FullVersions instead.
-	// The controller automatically creates a PagesDeployment for each version.
-	// Managed deployments have ownerReference and special labels for tracking.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:MaxItems=100
-	Versions []ProjectVersion `json:"versions,omitempty"`
-
-	// ProductionTarget specifies which version to promote to production.
-	//
-	// Deprecated: Use VersionManagement.*.ProductionTarget instead.
-	// - "latest": Use versions[0] (the first/newest version in the list)
-	// - "<version-name>": Use a specific version by name (e.g., "v1.2.3", "sha-abc123")
-	// - "": Do not automatically promote to production
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Pattern=`^(latest|[a-z0-9]([-a-z0-9]*[a-z0-9])?)?$`
-	ProductionTarget string `json:"productionTarget,omitempty"`
 }
 
 // PagesProjectStatus defines the observed state of PagesProject
@@ -877,12 +1038,12 @@ type PagesProjectStatus struct {
 	LastSuccessfulDeploymentID string `json:"lastSuccessfulDeploymentId,omitempty"`
 
 	// CurrentProduction contains information about the current production deployment.
-	// Only populated when using declarative version management (Spec.Versions).
+	// Only populated when using version management policies.
 	// +kubebuilder:validation:Optional
 	CurrentProduction *ProductionDeploymentInfo `json:"currentProduction,omitempty"`
 
 	// ManagedDeployments is the count of PagesDeployment resources managed by this PagesProject.
-	// Only counts deployments created from Spec.Versions.
+	// Only counts deployments created from spec.versionManagement.
 	// +kubebuilder:validation:Optional
 	ManagedDeployments int32 `json:"managedDeployments,omitempty"`
 
@@ -894,6 +1055,26 @@ type PagesProjectStatus struct {
 	// WebAnalytics contains the Web Analytics configuration status.
 	// +kubebuilder:validation:Optional
 	WebAnalytics *WebAnalyticsStatus `json:"webAnalytics,omitempty"`
+
+	// VersionMapping contains the current versionName -> deploymentId mapping.
+	// Only populated when using GitOps or other version-based policies.
+	// +kubebuilder:validation:Optional
+	VersionMapping map[string]string `json:"versionMapping,omitempty"`
+
+	// PreviewDeployment contains information about the current preview deployment.
+	// Only populated when using GitOps or latestPreview policies.
+	// +kubebuilder:validation:Optional
+	PreviewDeployment *PreviewDeploymentInfo `json:"previewDeployment,omitempty"`
+
+	// ValidationHistory contains version validation history.
+	// Records which versions have been validated through preview.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=50
+	ValidationHistory []VersionValidation `json:"validationHistory,omitempty"`
+
+	// ActivePolicy is the current active version management policy.
+	// +kubebuilder:validation:Optional
+	ActivePolicy VersionPolicy `json:"activePolicy,omitempty"`
 }
 
 // PagesProjectOriginalConfig stores the original Cloudflare configuration before adoption.

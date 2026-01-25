@@ -674,16 +674,6 @@ spec:
               productionBranch:
                 description: ProductionBranch is the production branch for the project.
                 type: string
-              productionTarget:
-                description: |-
-                  ProductionTarget specifies which version to promote to production.
-
-                  Deprecated: Use VersionManagement.*.ProductionTarget instead.
-                  - "latest": Use versions[0] (the first/newest version in the list)
-                  - "<version-name>": Use a specific version by name (e.g., "v1.2.3", "sha-abc123")
-                  - "": Do not automatically promote to production
-                pattern: ^(latest|[a-z0-9]([-a-z0-9]*[a-z0-9])?)?$
-                type: string
               revisionHistoryLimit:
                 default: 10
                 description: |-
@@ -773,8 +763,135 @@ spec:
                   This is the recommended way to manage deployment versions.
                   When specified, the controller uses this instead of the deprecated Versions field.
                 properties:
+                  autoPromote:
+                    description: AutoPromote configuration (used when policy=autoPromote).
+                    properties:
+                      healthCheckTimeout:
+                        default: 30s
+                        description: HealthCheckTimeout is the timeout for health
+                          check.
+                        type: string
+                      healthCheckUrl:
+                        description: |-
+                          HealthCheckURL is the URL to check for health before promotion.
+                          Only used when RequireHealthCheck is true.
+                        type: string
+                      promoteAfter:
+                        description: |-
+                          PromoteAfter specifies the wait time after preview succeeds before promoting.
+                          Default is immediate promotion.
+                        type: string
+                      requireHealthCheck:
+                        default: false
+                        description: RequireHealthCheck requires a health check before
+                          promotion.
+                        type: boolean
+                      sourceTemplate:
+                        description: SourceTemplate defines how to construct the source
+                          URL from version.
+                        properties:
+                          http:
+                            description: HTTP configuration (used when type=http).
+                            properties:
+                              archiveType:
+                                default: tar.gz
+                                description: 'ArchiveType is the archive type (default:
+                                  "tar.gz").'
+                                enum:
+                                - tar.gz
+                                - tar
+                                - zip
+                                - none
+                                type: string
+                              headersSecretRef:
+                                description: HeadersSecretRef references a Secret
+                                  containing HTTP headers.
+                                type: string
+                              urlTemplate:
+                                description: |-
+                                  URLTemplate is the URL template with {{.Version}} placeholder.
+                                  Example: "https://releases.example.com/{{.Version}}/dist.tar.gz"
+                                pattern: ^https?://
+                                type: string
+                            required:
+                            - urlTemplate
+                            type: object
+                          oci:
+                            description: OCI configuration (used when type=oci).
+                            properties:
+                              credentialsSecretRef:
+                                description: CredentialsSecretRef references a Secret
+                                  containing registry credentials.
+                                type: string
+                              repository:
+                                description: |-
+                                  Repository is the OCI repository address.
+                                  Example: "registry.example.com/my-app"
+                                type: string
+                              tagTemplate:
+                                description: |-
+                                  TagTemplate is the tag template with {{.Version}} placeholder.
+                                  Example: "{{.Version}}" or "v{{.Version}}"
+                                type: string
+                            required:
+                            - repository
+                            - tagTemplate
+                            type: object
+                          s3:
+                            description: S3 configuration (used when type=s3).
+                            properties:
+                              archiveType:
+                                default: tar.gz
+                                description: 'ArchiveType is the archive type (default:
+                                  "tar.gz").'
+                                enum:
+                                - tar.gz
+                                - tar
+                                - zip
+                                - none
+                                type: string
+                              bucket:
+                                description: Bucket is the S3 bucket name.
+                                type: string
+                              credentialsSecretRef:
+                                description: CredentialsSecretRef references a Secret
+                                  containing AWS credentials.
+                                type: string
+                              endpoint:
+                                description: Endpoint is the S3 endpoint URL (optional,
+                                  for S3-compatible services).
+                                type: string
+                              keyTemplate:
+                                description: |-
+                                  KeyTemplate is the object key template with {{.Version}} placeholder.
+                                  Example: "pages-artifacts/my-app/{{.Version}}.tar.gz"
+                                type: string
+                              region:
+                                description: Region is the AWS region.
+                                type: string
+                              usePathStyle:
+                                default: false
+                                description: UsePathStyle forces path-style addressing
+                                  instead of virtual hosted-style.
+                                type: boolean
+                            required:
+                            - bucket
+                            - keyTemplate
+                            - region
+                            type: object
+                          type:
+                            description: Type specifies the template type.
+                            enum:
+                            - s3
+                            - http
+                            - oci
+                            type: string
+                        required:
+                        - type
+                        type: object
+                    type: object
                   declarativeVersions:
-                    description: DeclarativeVersions configuration (used when type=declarativeVersions).
+                    description: DeclarativeVersions configuration (used when policy=declarativeVersions).
                     properties:
                       productionTarget:
                         default: latest
@@ -899,8 +1016,30 @@ spec:
                     - sourceTemplate
                     - versions
                     type: object
+                  external:
+                    description: External configuration (used when policy=external).
+                    properties:
+                      currentVersion:
+                        description: |-
+                          CurrentVersion is the externally-controlled current version.
+                          External systems update this field to control which version is deployed.
+                        type: string
+                      productionVersion:
+                        description: ProductionVersion is the externally-controlled
+                          production version.
+                        type: string
+                      syncInterval:
+                        default: 5m
+                        description: SyncInterval is the interval to sync version
+                          status from external system.
+                        type: string
+                      webhookUrl:
+                        description: WebhookURL is the URL to notify when version
+                          changes are needed.
+                        type: string
+                    type: object
                   fullVersions:
-                    description: FullVersions configuration (used when type=fullVersions).
+                    description: FullVersions configuration (used when policy=fullVersions).
                     properties:
                       productionTarget:
                         default: latest
@@ -1151,8 +1290,321 @@ spec:
                     required:
                     - versions
                     type: object
+                  gitops:
+                    description: GitOps configuration (used when policy=gitops).
+                    properties:
+                      previewVersion:
+                        description: |-
+                          PreviewVersion is the current preview environment version name.
+                          CI system modifies this field to trigger preview deployment.
+                        type: string
+                      productionVersion:
+                        description: |-
+                          ProductionVersion is the current production environment version name.
+                          Operators manually modify this field to trigger promotion.
+                          Must have passed preview validation when RequirePreviewValidation is true.
+                        type: string
+                      requirePreviewValidation:
+                        default: true
+                        description: |-
+                          RequirePreviewValidation requires productionVersion to have passed preview validation.
+                          When true (default), promotion fails if the version hasn't been successfully deployed as preview.
+                        type: boolean
+                      sourceTemplate:
+                        description: SourceTemplate defines how to construct the source
+                          URL from version.
+                        properties:
+                          http:
+                            description: HTTP configuration (used when type=http).
+                            properties:
+                              archiveType:
+                                default: tar.gz
+                                description: 'ArchiveType is the archive type (default:
+                                  "tar.gz").'
+                                enum:
+                                - tar.gz
+                                - tar
+                                - zip
+                                - none
+                                type: string
+                              headersSecretRef:
+                                description: HeadersSecretRef references a Secret
+                                  containing HTTP headers.
+                                type: string
+                              urlTemplate:
+                                description: |-
+                                  URLTemplate is the URL template with {{.Version}} placeholder.
+                                  Example: "https://releases.example.com/{{.Version}}/dist.tar.gz"
+                                pattern: ^https?://
+                                type: string
+                            required:
+                            - urlTemplate
+                            type: object
+                          oci:
+                            description: OCI configuration (used when type=oci).
+                            properties:
+                              credentialsSecretRef:
+                                description: CredentialsSecretRef references a Secret
+                                  containing registry credentials.
+                                type: string
+                              repository:
+                                description: |-
+                                  Repository is the OCI repository address.
+                                  Example: "registry.example.com/my-app"
+                                type: string
+                              tagTemplate:
+                                description: |-
+                                  TagTemplate is the tag template with {{.Version}} placeholder.
+                                  Example: "{{.Version}}" or "v{{.Version}}"
+                                type: string
+                            required:
+                            - repository
+                            - tagTemplate
+                            type: object
+                          s3:
+                            description: S3 configuration (used when type=s3).
+                            properties:
+                              archiveType:
+                                default: tar.gz
+                                description: 'ArchiveType is the archive type (default:
+                                  "tar.gz").'
+                                enum:
+                                - tar.gz
+                                - tar
+                                - zip
+                                - none
+                                type: string
+                              bucket:
+                                description: Bucket is the S3 bucket name.
+                                type: string
+                              credentialsSecretRef:
+                                description: CredentialsSecretRef references a Secret
+                                  containing AWS credentials.
+                                type: string
+                              endpoint:
+                                description: Endpoint is the S3 endpoint URL (optional,
+                                  for S3-compatible services).
+                                type: string
+                              keyTemplate:
+                                description: |-
+                                  KeyTemplate is the object key template with {{.Version}} placeholder.
+                                  Example: "pages-artifacts/my-app/{{.Version}}.tar.gz"
+                                type: string
+                              region:
+                                description: Region is the AWS region.
+                                type: string
+                              usePathStyle:
+                                default: false
+                                description: UsePathStyle forces path-style addressing
+                                  instead of virtual hosted-style.
+                                type: boolean
+                            required:
+                            - bucket
+                            - keyTemplate
+                            - region
+                            type: object
+                          type:
+                            description: Type specifies the template type.
+                            enum:
+                            - s3
+                            - http
+                            - oci
+                            type: string
+                        required:
+                        - type
+                        type: object
+                      validationLabels:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          ValidationLabels are labels that mark a version as validated.
+                          The version must have all these labels to be considered validated.
+                        type: object
+                    type: object
+                  latestPreview:
+                    description: LatestPreview configuration (used when policy=latestPreview).
+                    properties:
+                      autoPromote:
+                        default: false
+                        description: AutoPromote automatically promotes the latest
+                          successful preview to production.
+                        type: boolean
+                      labelSelector:
+                        description: LabelSelector selects which PagesDeployment resources
+                          to track.
+                        properties:
+                          matchExpressions:
+                            description: matchExpressions is a list of label selector
+                              requirements. The requirements are ANDed.
+                            items:
+                              description: |-
+                                A label selector requirement is a selector that contains values, a key, and an operator that
+                                relates the key and values.
+                              properties:
+                                key:
+                                  description: key is the label key that the selector
+                                    applies to.
+                                  type: string
+                                operator:
+                                  description: |-
+                                    operator represents a key's relationship to a set of values.
+                                    Valid operators are In, NotIn, Exists and DoesNotExist.
+                                  type: string
+                                values:
+                                  description: |-
+                                    values is an array of string values. If the operator is In or NotIn,
+                                    the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                    the values array must be empty. This array is replaced during a strategic
+                                    merge patch.
+                                  items:
+                                    type: string
+                                  type: array
+                                  x-kubernetes-list-type: atomic
+                              required:
+                              - key
+                              - operator
+                              type: object
+                            type: array
+                            x-kubernetes-list-type: atomic
+                          matchLabels:
+                            additionalProperties:
+                              type: string
+                            description: |-
+                              matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                              map is equivalent to an element of matchExpressions, whose key field is "key", the
+                              operator is "In", and the values array contains only "value". The requirements are ANDed.
+                            type: object
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      sourceTemplate:
+                        description: SourceTemplate defines how to construct the source
+                          URL from version.
+                        properties:
+                          http:
+                            description: HTTP configuration (used when type=http).
+                            properties:
+                              archiveType:
+                                default: tar.gz
+                                description: 'ArchiveType is the archive type (default:
+                                  "tar.gz").'
+                                enum:
+                                - tar.gz
+                                - tar
+                                - zip
+                                - none
+                                type: string
+                              headersSecretRef:
+                                description: HeadersSecretRef references a Secret
+                                  containing HTTP headers.
+                                type: string
+                              urlTemplate:
+                                description: |-
+                                  URLTemplate is the URL template with {{.Version}} placeholder.
+                                  Example: "https://releases.example.com/{{.Version}}/dist.tar.gz"
+                                pattern: ^https?://
+                                type: string
+                            required:
+                            - urlTemplate
+                            type: object
+                          oci:
+                            description: OCI configuration (used when type=oci).
+                            properties:
+                              credentialsSecretRef:
+                                description: CredentialsSecretRef references a Secret
+                                  containing registry credentials.
+                                type: string
+                              repository:
+                                description: |-
+                                  Repository is the OCI repository address.
+                                  Example: "registry.example.com/my-app"
+                                type: string
+                              tagTemplate:
+                                description: |-
+                                  TagTemplate is the tag template with {{.Version}} placeholder.
+                                  Example: "{{.Version}}" or "v{{.Version}}"
+                                type: string
+                            required:
+                            - repository
+                            - tagTemplate
+                            type: object
+                          s3:
+                            description: S3 configuration (used when type=s3).
+                            properties:
+                              archiveType:
+                                default: tar.gz
+                                description: 'ArchiveType is the archive type (default:
+                                  "tar.gz").'
+                                enum:
+                                - tar.gz
+                                - tar
+                                - zip
+                                - none
+                                type: string
+                              bucket:
+                                description: Bucket is the S3 bucket name.
+                                type: string
+                              credentialsSecretRef:
+                                description: CredentialsSecretRef references a Secret
+                                  containing AWS credentials.
+                                type: string
+                              endpoint:
+                                description: Endpoint is the S3 endpoint URL (optional,
+                                  for S3-compatible services).
+                                type: string
+                              keyTemplate:
+                                description: |-
+                                  KeyTemplate is the object key template with {{.Version}} placeholder.
+                                  Example: "pages-artifacts/my-app/{{.Version}}.tar.gz"
+                                type: string
+                              region:
+                                description: Region is the AWS region.
+                                type: string
+                              usePathStyle:
+                                default: false
+                                description: UsePathStyle forces path-style addressing
+                                  instead of virtual hosted-style.
+                                type: boolean
+                            required:
+                            - bucket
+                            - keyTemplate
+                            - region
+                            type: object
+                          type:
+                            description: Type specifies the template type.
+                            enum:
+                            - s3
+                            - http
+                            - oci
+                            type: string
+                        required:
+                        - type
+                        type: object
+                    type: object
+                  policy:
+                    allOf:
+                    - enum:
+                      - none
+                      - targetVersion
+                      - declarativeVersions
+                      - fullVersions
+                      - gitops
+                      - latestPreview
+                      - autoPromote
+                      - external
+                    - enum:
+                      - none
+                      - targetVersion
+                      - declarativeVersions
+                      - fullVersions
+                      - gitops
+                      - latestPreview
+                      - autoPromote
+                      - external
+                    default: none
+                    description: Policy specifies the version management policy.
+                    type: string
                   targetVersion:
-                    description: TargetVersion configuration (used when type=targetVersion).
+                    description: TargetVersion configuration (used when policy=targetVersion).
                     properties:
                       sourceTemplate:
                         description: SourceTemplate defines how to construct the source
@@ -1267,261 +1719,7 @@ spec:
                     - sourceTemplate
                     - version
                     type: object
-                  type:
-                    description: Type specifies the version management mode.
-                    enum:
-                    - targetVersion
-                    - declarativeVersions
-                    - fullVersions
-                    type: string
-                required:
-                - type
                 type: object
-              versions:
-                description: |-
-                  Versions defines a declarative list of deployment versions.
-
-                  Deprecated: Use VersionManagement.FullVersions instead.
-                  The controller automatically creates a PagesDeployment for each version.
-                  Managed deployments have ownerReference and special labels for tracking.
-                items:
-                  description: ProjectVersion defines a single deployment version
-                    for declarative version management.
-                  properties:
-                    metadata:
-                      additionalProperties:
-                        type: string
-                      description: |-
-                        Metadata contains optional metadata for this version.
-                        Examples: gitCommit, buildTime, author, releaseNotes.
-                      type: object
-                    name:
-                      description: |-
-                        Name is the version identifier (e.g., "v1.2.3", "2025-01-20").
-                        Must be unique within the versions list.
-                        Used to construct the PagesDeployment name as "<project-name>-<version-name>".
-                      maxLength: 63
-                      minLength: 1
-                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
-                      type: string
-                    source:
-                      description: |-
-                        Source defines where to fetch the deployment files from.
-                        Supports HTTP/HTTPS URLs, S3-compatible storage, and OCI registries.
-                        This field already includes Archive and Checksum configuration.
-                      properties:
-                        archive:
-                          description: |-
-                            Archive configuration for compressed files.
-                            Specifies how to extract the downloaded archive.
-                          properties:
-                            stripComponents:
-                              default: 0
-                              description: |-
-                                StripComponents removes leading path components when extracting.
-                                Similar to tar --strip-components.
-                                Useful when archive contains a top-level directory.
-                              maximum: 10
-                              minimum: 0
-                              type: integer
-                            subPath:
-                              description: |-
-                                SubPath extracts only a specific subdirectory from the archive.
-                                Files outside this path are ignored.
-                              type: string
-                            type:
-                              default: tar.gz
-                              description: |-
-                                Type is the archive type.
-                                - tar.gz: gzip compressed tar archive (default)
-                                - tar: uncompressed tar archive
-                                - zip: ZIP archive
-                                - none: no extraction, treat as single file
-                              enum:
-                              - tar.gz
-                              - tar
-                              - zip
-                              - none
-                              type: string
-                          type: object
-                        branch:
-                          description: |-
-                            Branch specifies the branch name for this deployment.
-                            For preview deployments, this creates a branch alias URL: <branch>.<project>.pages.dev
-                            If not specified:
-                            - For environment=preview: defaults to "preview"
-                            - For environment=production: empty (uses project's production branch)
-                            Common values: "staging", "feature-x", "pr-123"
-                          type: string
-                        checksum:
-                          description: |-
-                            Checksum for file integrity verification.
-                            When specified, the downloaded file will be verified before extraction.
-                          properties:
-                            algorithm:
-                              default: sha256
-                              description: Algorithm is the checksum algorithm.
-                              enum:
-                              - sha256
-                              - sha512
-                              - md5
-                              type: string
-                            value:
-                              description: Value is the expected checksum value in
-                                hexadecimal format.
-                              pattern: ^[a-fA-F0-9]+$
-                              type: string
-                          required:
-                          - value
-                          type: object
-                        source:
-                          description: |-
-                            Source defines where to fetch the deployment files from.
-                            Supports HTTP/HTTPS URLs, S3-compatible storage, and OCI registries.
-                          properties:
-                            http:
-                              description: |-
-                                HTTP source - fetch from HTTP/HTTPS URL.
-                                Supports presigned URLs for private storage (e.g., S3 presigned URLs, GCS signed URLs).
-                              properties:
-                                headers:
-                                  additionalProperties:
-                                    type: string
-                                  description: |-
-                                    Headers to include in the HTTP request.
-                                    Useful for authentication tokens or custom headers.
-                                  type: object
-                                headersSecretRef:
-                                  description: |-
-                                    HeadersSecretRef references a Secret containing HTTP headers.
-                                    Keys in the secret become header names, values become header values.
-                                    This is useful for sensitive authentication headers.
-                                  properties:
-                                    name:
-                                      default: ""
-                                      description: |-
-                                        Name of the referent.
-                                        This field is effectively required, but due to backwards compatibility is
-                                        allowed to be empty. Instances of this type with an empty value here are
-                                        almost certainly wrong.
-                                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                                      type: string
-                                  type: object
-                                  x-kubernetes-map-type: atomic
-                                insecureSkipVerify:
-                                  default: false
-                                  description: |-
-                                    InsecureSkipVerify skips TLS certificate verification.
-                                    Use with caution, only for testing or internal URLs.
-                                  type: boolean
-                                timeout:
-                                  default: 5m
-                                  description: Timeout for the HTTP request.
-                                  type: string
-                                url:
-                                  description: |-
-                                    URL is the HTTP/HTTPS URL to fetch files from.
-                                    Supports presigned URLs for private storage.
-                                  pattern: ^https?://
-                                  type: string
-                              required:
-                              - url
-                              type: object
-                            oci:
-                              description: |-
-                                OCI source - fetch from OCI registry.
-                                Useful for storing build artifacts in container registries.
-                              properties:
-                                credentialsSecretRef:
-                                  description: |-
-                                    CredentialsSecretRef references a Secret containing registry credentials.
-                                    Supports two formats:
-                                    - Docker config: .dockerconfigjson key (same as imagePullSecrets)
-                                    - Basic auth: username and password keys
-                                  properties:
-                                    name:
-                                      default: ""
-                                      description: |-
-                                        Name of the referent.
-                                        This field is effectively required, but due to backwards compatibility is
-                                        allowed to be empty. Instances of this type with an empty value here are
-                                        almost certainly wrong.
-                                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                                      type: string
-                                  type: object
-                                  x-kubernetes-map-type: atomic
-                                image:
-                                  description: |-
-                                    Image is the OCI image reference.
-                                    Format: registry.example.com/repo:tag or registry.example.com/repo@sha256:digest
-                                  type: string
-                                insecureRegistry:
-                                  default: false
-                                  description: |-
-                                    InsecureRegistry allows connecting to registries without TLS.
-                                    Use with caution, only for testing or internal registries.
-                                  type: boolean
-                              required:
-                              - image
-                              type: object
-                            s3:
-                              description: |-
-                                S3 source - fetch from S3-compatible storage.
-                                Supports AWS S3, MinIO, Cloudflare R2, and other S3-compatible services.
-                              properties:
-                                bucket:
-                                  description: Bucket is the S3 bucket name.
-                                  type: string
-                                credentialsSecretRef:
-                                  description: |-
-                                    CredentialsSecretRef references a Secret containing AWS credentials.
-                                    Expected keys: accessKeyId, secretAccessKey, sessionToken (optional)
-                                  properties:
-                                    name:
-                                      default: ""
-                                      description: |-
-                                        Name of the referent.
-                                        This field is effectively required, but due to backwards compatibility is
-                                        allowed to be empty. Instances of this type with an empty value here are
-                                        almost certainly wrong.
-                                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                                      type: string
-                                  type: object
-                                  x-kubernetes-map-type: atomic
-                                endpoint:
-                                  description: |-
-                                    Endpoint is the S3 endpoint URL.
-                                    Required for S3-compatible services like MinIO, Cloudflare R2.
-                                    Examples: "https://s3.us-west-2.amazonaws.com", "https://xxx.r2.cloudflarestorage.com"
-                                  type: string
-                                key:
-                                  description: Key is the object key (path) in the
-                                    bucket.
-                                  type: string
-                                region:
-                                  description: |-
-                                    Region is the S3 region.
-                                    Required for AWS S3, optional for other S3-compatible services.
-                                  type: string
-                                usePathStyle:
-                                  default: false
-                                  description: |-
-                                    UsePathStyle forces path-style addressing instead of virtual hosted-style.
-                                    Required for some S3-compatible services like MinIO.
-                                  type: boolean
-                              required:
-                              - bucket
-                              - key
-                              type: object
-                          type: object
-                      required:
-                      - source
-                      type: object
-                  required:
-                  - name
-                  type: object
-                maxItems: 100
-                type: array
             required:
             - cloudflare
             - productionBranch
@@ -1531,6 +1729,19 @@ spec:
             properties:
               accountId:
                 description: AccountID is the Cloudflare account ID.
+                type: string
+              activePolicy:
+                description: ActivePolicy is the current active version management
+                  policy.
+                enum:
+                - none
+                - targetVersion
+                - declarativeVersions
+                - fullVersions
+                - gitops
+                - latestPreview
+                - autoPromote
+                - external
                 type: string
               adopted:
                 description: Adopted indicates whether this project was adopted from
@@ -1603,7 +1814,7 @@ spec:
               currentProduction:
                 description: |-
                   CurrentProduction contains information about the current production deployment.
-                  Only populated when using declarative version management (Spec.Versions).
+                  Only populated when using version management policies.
                 properties:
                   deployedAt:
                     description: DeployedAt is when this version became production.
@@ -1719,7 +1930,7 @@ spec:
               managedDeployments:
                 description: |-
                   ManagedDeployments is the count of PagesDeployment resources managed by this PagesProject.
-                  Only counts deployments created from Spec.Versions.
+                  Only counts deployments created from spec.versionManagement.
                 format: int32
                 type: integer
               managedVersions:
@@ -2361,6 +2572,37 @@ spec:
                 required:
                 - capturedAt
                 type: object
+              previewDeployment:
+                description: |-
+                  PreviewDeployment contains information about the current preview deployment.
+                  Only populated when using GitOps or latestPreview policies.
+                properties:
+                  deployedAt:
+                    description: DeployedAt is when this preview version was deployed.
+                    format: date-time
+                    type: string
+                  deploymentId:
+                    description: DeploymentID is the Cloudflare deployment ID.
+                    type: string
+                  deploymentName:
+                    description: DeploymentName is the PagesDeployment resource name.
+                    type: string
+                  hashUrl:
+                    description: HashURL is the deployment-specific URL (e.g., abc123.my-app.pages.dev).
+                    type: string
+                  state:
+                    description: State is the current state of the preview deployment.
+                    type: string
+                  url:
+                    description: URL is the preview deployment URL.
+                    type: string
+                  versionName:
+                    description: VersionName is the version name being previewed.
+                    type: string
+                required:
+                - deploymentName
+                - versionName
+                type: object
               projectId:
                 description: ProjectID is the Cloudflare project ID (same as name).
                 type: string
@@ -2377,6 +2619,53 @@ spec:
               subdomain:
                 description: Subdomain is the *.pages.dev subdomain.
                 type: string
+              validationHistory:
+                description: |-
+                  ValidationHistory contains version validation history.
+                  Records which versions have been validated through preview.
+                items:
+                  description: VersionValidation records validation history for a
+                    version.
+                  properties:
+                    deploymentId:
+                      description: DeploymentID is the Cloudflare deployment ID that
+                        was validated.
+                      type: string
+                    message:
+                      description: Message contains additional information about the
+                        validation.
+                      type: string
+                    validatedAt:
+                      description: ValidatedAt is when the version was validated.
+                      format: date-time
+                      type: string
+                    validatedBy:
+                      description: |-
+                        ValidatedBy indicates how the version was validated.
+                        Values: "preview", "manual", "autoPromote"
+                      type: string
+                    validationResult:
+                      description: ValidationResult indicates whether validation passed
+                        or failed.
+                      enum:
+                      - passed
+                      - failed
+                      type: string
+                    versionName:
+                      description: VersionName is the version name that was validated.
+                      type: string
+                  required:
+                  - versionName
+                  type: object
+                maxItems: 50
+                type: array
+              versionMapping:
+                additionalProperties:
+                  type: string
+                description: |-
+                  VersionMapping contains the current versionName -> deploymentId mapping.
+                  Only populated when using GitOps or other version-based policies.
+                type: object
               webAnalytics:
                 description: WebAnalytics contains the Web Analytics configuration
                   status.

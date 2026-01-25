@@ -153,6 +153,12 @@ spec:
                       Name is the name of a K8s PagesDeployment resource in the same namespace.
                       The controller will wait for this deployment to succeed before promoting.
                     type: string
+                  versionName:
+                    description: |-
+                      VersionName references a deployment by its version name (spec.versionName or status.versionName).
+                      The controller finds the PagesDeployment with matching versionName in the same namespace.
+                      This is the preferred method for GitOps workflows where deployments are identified by version.
+                    type: string
                 type: object
               projectRef:
                 description: |-

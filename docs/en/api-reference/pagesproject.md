@@ -7,7 +7,7 @@ PagesProject is a namespace-scoped resource that represents a Cloudflare Pages p
 PagesProject provides comprehensive management of Cloudflare Pages projects, including:
 
 - **Project Configuration**: Build settings, deployment environments, resource bindings
-- **Version Management**: Declarative multi-version deployment with automatic rollback
+- **Version Management**: 8 policies for declarative multi-version deployment with automatic rollback
 - **Adoption Support**: Import existing Cloudflare projects into Kubernetes management
 - **Resource Bindings**: D1, KV, R2, Durable Objects, Workers AI, and more
 
@@ -25,8 +25,7 @@ PagesProject provides comprehensive management of Cloudflare Pages projects, inc
 | `deploymentHistoryLimit` | int | No | `10` | Number of deployment records to keep (0-100) |
 | `enableWebAnalytics` | bool | No | `true` | Enable Cloudflare Web Analytics |
 | `deletionPolicy` | string | No | `Delete` | Deletion policy: `Delete`, `Orphan` |
-| `versions` | []ProjectVersion | No | - | Declarative version list (max 100) |
-| `productionTarget` | string | No | - | Production version target |
+| `versionManagement` | VersionManagement | No | - | Version management configuration (see below) |
 | `revisionHistoryLimit` | int32 | No | `10` | Managed deployment retention limit (0-100) |
 
 ### Adoption Policies
@@ -162,17 +161,70 @@ PagesProject provides comprehensive management of Cloudflare Pages projects, inc
 
 ## Version Management
 
-### ProjectVersion
+PagesProject supports 8 version management policies through `spec.versionManagement`:
 
-Declarative version management enables multi-version deployments with automatic promotion and rollback.
+| Policy | Description | Use Case |
+|--------|-------------|----------|
+| `none` | No version management, project config only | Project metadata management |
+| `targetVersion` | Single version deployment | Simple scenarios |
+| `declarativeVersions` | Version list + template | Batch management |
+| `fullVersions` | Complete version configurations | Complex scenarios |
+| `gitops` | Preview + Production two-stage | **GitOps workflows** |
+| `latestPreview` | Track latest preview deployment | Continuous deployment |
+| `autoPromote` | Auto-promote after preview succeeds | Automated pipelines |
+| `external` | External system controls versions | Third-party integration |
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `name` | string | **Yes** | Version identifier (e.g., `v1.2.3`, `2025-01-20`) |
-| `source` | PagesDirectUploadSourceSpec | No | Deployment source (HTTP, S3, OCI) |
-| `metadata` | map[string]string | No | Version metadata (gitCommit, buildTime, author, etc.) |
+### VersionManagement
 
-### Version Management Features
+| Field | Type | Description |
+|-------|------|-------------|
+| `policy` | string | Version management policy (see above) |
+| `targetVersion` | TargetVersionSpec | Config for `targetVersion` policy |
+| `declarativeVersions` | DeclarativeVersionsSpec | Config for `declarativeVersions` policy |
+| `fullVersions` | FullVersionsSpec | Config for `fullVersions` policy |
+| `gitops` | GitOpsVersionConfig | Config for `gitops` policy |
+| `latestPreview` | LatestPreviewConfig | Config for `latestPreview` policy |
+| `autoPromote` | AutoPromoteConfig | Config for `autoPromote` policy |
+| `external` | ExternalVersionConfig | Config for `external` policy |
+
+### GitOpsVersionConfig
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `previewVersion` | string | - | Version to deploy as preview (CI modifies this) |
+| `productionVersion` | string | - | Version to promote to production (ops modifies this) |
+| `sourceTemplate` | SourceTemplate | - | Template to construct source URL from version |
+| `requirePreviewValidation` | bool | `true` | Require version to pass preview before promotion |
+| `validationLabels` | map[string]string | - | Labels that mark a version as validated |
+
+### LatestPreviewConfig
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `sourceTemplate` | SourceTemplate | - | Template to construct source URL from version |
+| `labelSelector` | LabelSelector | - | Select which PagesDeployment to track |
+| `autoPromote` | bool | `false` | Auto-promote latest successful preview |
+
+### AutoPromoteConfig
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `sourceTemplate` | SourceTemplate | - | Template to construct source URL from version |
+| `promoteAfter` | Duration | immediate | Wait time after preview succeeds |
+| `requireHealthCheck` | bool | `false` | Require health check before promotion |
+| `healthCheckUrl` | string | - | URL to check for health |
+| `healthCheckTimeout` | Duration | `30s` | Health check timeout |
+
+### ExternalVersionConfig
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `webhookUrl` | string | - | URL to notify when version changes |
+| `syncInterval` | Duration | `5m` | Interval to sync version status |
+| `currentVersion` | string | - | Externally-controlled current version |
+| `productionVersion` | string | - | Externally-controlled production version |
+
+### Version Management Architecture
 
 ```mermaid
 ---
@@ -181,48 +233,36 @@ config:
 ---
 graph TB
     subgraph User["User Actions"]
-        A1[Define versions list]
-        A2[Set productionTarget]
-        A3[Add new version]
+        A1[Set versionManagement.policy]
+        A2[Configure policy-specific fields]
+        A3[Modify version fields]
     end
 
     subgraph Controller["PagesProject Controller"]
         C1[Create PagesDeployment<br/>for each version]
-        C2[Promote to production<br/>based on productionTarget]
+        C2[Promote to production<br/>based on policy]
         C3[Aggregate status from<br/>child deployments]
         C4[Prune old deployments<br/>per revisionHistoryLimit]
     end
 
     subgraph Deployment["PagesDeployment Resources"]
         D1[my-app-v1.2.3<br/>Production]
-        D2[my-app-v1.2.2<br/>Preview]
-        D3[my-app-v1.2.1<br/>Preview]
+        D2[my-app-v1.3.0<br/>Preview]
     end
 
     A1 --> C1
-    A2 --> C2
-    A3 --> C1
+    A2 --> C1
+    A3 --> C2
     C1 --> D1
     C1 --> D2
-    C1 --> D3
     C2 -.Promote.-> D1
     D1 -.Status.-> C3
     D2 -.Status.-> C3
-    D3 -.Status.-> C3
     C3 --> C4
 
     style D1 fill:#90EE90
     style D2 fill:#FFE4B5
-    style D3 fill:#FFE4B5
 ```
-
-### Production Target Strategies
-
-| Value | Behavior |
-|-------|----------|
-| `latest` | Always use `versions[0]` (first/newest version) |
-| `vX.Y.Z` | Use specific version by name |
-| `""` (empty) | Do not automatically promote to production |
 
 ## Status
 
@@ -243,8 +283,12 @@ graph TB
 | `deploymentHistory` | []DeploymentHistoryEntry | Recent deployment records (for rollback) |
 | `lastSuccessfulDeploymentId` | string | ID of last successful deployment |
 | `currentProduction` | ProductionDeploymentInfo | Current production deployment (version mode) |
+| `previewDeployment` | PreviewDeploymentInfo | Current preview deployment (version mode) |
 | `managedDeployments` | int32 | Count of managed PagesDeployment resources |
 | `managedVersions` | []ManagedVersionStatus | Status summary for each managed version |
+| `versionMapping` | map[string]string | Version name to deployment ID mapping |
+| `validationHistory` | []VersionValidation | Version validation history |
+| `activePolicy` | string | Currently active version policy |
 
 ### Project States
 
@@ -261,7 +305,7 @@ graph TB
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `version` | string | Version name (from ProjectVersion) |
+| `version` | string | Version name |
 | `deploymentId` | string | Cloudflare deployment ID |
 | `deploymentName` | string | PagesDeployment resource name |
 | `url` | string | Production deployment URL |
@@ -340,63 +384,183 @@ spec:
     secret: cloudflare-credentials
 ```
 
-### Full-Stack Application with Resource Bindings
+### GitOps Two-Stage Deployment
 
 ```yaml
 apiVersion: networking.cloudflare-operator.io/v1alpha2
 kind: PagesProject
 metadata:
-  name: fullstack-app
+  name: my-app-gitops
   namespace: default
 spec:
-  name: fullstack-app
+  name: my-app-gitops
   productionBranch: main
 
-  deploymentConfigs:
-    production:
-      environmentVariables:
-        API_URL:
-          value: "https://api.example.com"
-          type: plain_text
-        SECRET_KEY:
-          value: "supersecret"
-          type: secret_text
+  versionManagement:
+    policy: gitops
+    gitops:
+      # CI modifies this to deploy preview
+      previewVersion: "v1.3.0"
 
-      compatibilityDate: "2024-01-01"
-      compatibilityFlags:
-        - nodejs_compat
+      # Ops modifies this to promote to production
+      productionVersion: "v1.2.3"
 
-      # D1 Database
-      d1Bindings:
-        - name: DB
-          databaseId: "<d1-database-id>"
+      # Source template
+      sourceTemplate:
+        type: s3
+        s3:
+          bucket: "my-artifacts"
+          keyTemplate: "builds/{{.Version}}/dist.tar.gz"
+          region: "us-east-1"
+          archiveType: tar.gz
 
-      # KV Namespace
-      kvBindings:
-        - name: CACHE
-          namespaceId: "<kv-namespace-id>"
+      # Require preview validation (default: true)
+      requirePreviewValidation: true
 
-      # R2 Bucket
-      r2Bindings:
-        - name: UPLOADS
-          bucketName: my-uploads-bucket
-
-      # Workers AI
-      aiBindings:
-        - name: AI
-
-      # Vectorize
-      vectorizeBindings:
-        - name: VECTORS
-          indexName: my-index
-
-      usageModel: bundled
-      failOpen: false
+  revisionHistoryLimit: 10
 
   cloudflare:
     accountId: "<account-id>"
-    domain: example.com
-    secret: cloudflare-credentials
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+### Declarative Versions with Template
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesProject
+metadata:
+  name: my-app-declarative
+  namespace: default
+spec:
+  name: my-app-declarative
+  productionBranch: main
+
+  versionManagement:
+    policy: declarativeVersions
+    declarativeVersions:
+      versions:
+        - "v1.2.3"
+        - "v1.2.2"
+        - "v1.2.1"
+
+      sourceTemplate:
+        type: http
+        http:
+          urlTemplate: "https://artifacts.example.com/my-app/{{.Version}}/dist.tar.gz"
+          archiveType: tar.gz
+
+      # "latest" = versions[0], or specify version name
+      productionTarget: "latest"
+
+  revisionHistoryLimit: 10
+
+  cloudflare:
+    accountId: "<account-id>"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+### Auto-Promote After Health Check
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesProject
+metadata:
+  name: my-app-autopromote
+  namespace: default
+spec:
+  name: my-app-autopromote
+  productionBranch: main
+
+  versionManagement:
+    policy: autoPromote
+    autoPromote:
+      # Wait 5 minutes after preview succeeds
+      promoteAfter: 5m
+
+      # Require health check
+      requireHealthCheck: true
+      healthCheckUrl: "https://preview.my-app.pages.dev/health"
+      healthCheckTimeout: 30s
+
+      sourceTemplate:
+        type: http
+        http:
+          urlTemplate: "https://artifacts.example.com/{{.Version}}/dist.tar.gz"
+          archiveType: tar.gz
+
+  revisionHistoryLimit: 10
+
+  cloudflare:
+    accountId: "<account-id>"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+### Track Latest Preview
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesProject
+metadata:
+  name: my-app-latestpreview
+  namespace: default
+spec:
+  name: my-app-latestpreview
+  productionBranch: main
+
+  versionManagement:
+    policy: latestPreview
+    latestPreview:
+      # Only track deployments matching this selector
+      labelSelector:
+        matchLabels:
+          team: frontend
+
+      # Auto-promote latest successful preview
+      autoPromote: true
+
+  revisionHistoryLimit: 10
+
+  cloudflare:
+    accountId: "<account-id>"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+### External System Control
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesProject
+metadata:
+  name: my-app-external
+  namespace: default
+spec:
+  name: my-app-external
+  productionBranch: main
+
+  versionManagement:
+    policy: external
+    external:
+      # External system updates these fields
+      currentVersion: "v1.2.3"
+      productionVersion: "v1.2.3"
+
+      # Sync interval
+      syncInterval: 5m
+
+      # Optional webhook
+      webhookUrl: "https://ci.example.com/webhook"
+
+  revisionHistoryLimit: 10
+
+  cloudflare:
+    accountId: "<account-id>"
+    credentialsRef:
+      name: cloudflare-credentials
 ```
 
 ### Adopt Existing Project
@@ -423,120 +587,42 @@ spec:
     secret: cloudflare-credentials
 ```
 
-### Version Management with Multiple Deployments
-
-```yaml
-apiVersion: networking.cloudflare-operator.io/v1alpha2
-kind: PagesProject
-metadata:
-  name: versioned-app
-  namespace: default
-spec:
-  name: versioned-app
-  productionBranch: main
-
-  # Define version list
-  versions:
-    - name: "v1.2.3"
-      source:
-        source:
-          http:
-            url: "https://releases.example.com/v1.2.3/dist.tar.gz"
-        archive:
-          type: tar.gz
-        checksum:
-          algorithm: sha256
-          value: "abc123..."
-      metadata:
-        gitCommit: "abc123"
-        buildTime: "2025-01-20T10:00:00Z"
-        author: "deploy-bot"
-
-    - name: "v1.2.2"
-      source:
-        source:
-          http:
-            url: "https://releases.example.com/v1.2.2/dist.tar.gz"
-        archive:
-          type: tar.gz
-      metadata:
-        gitCommit: "def456"
-        buildTime: "2025-01-19T10:00:00Z"
-
-    - name: "v1.2.1"
-      source:
-        source:
-          http:
-            url: "https://releases.example.com/v1.2.1/dist.tar.gz"
-        archive:
-          type: tar.gz
-
-  # Auto-promote latest version to production
-  productionTarget: "latest"
-
-  # Keep 10 most recent deployments
-  revisionHistoryLimit: 10
-
-  cloudflare:
-    accountId: "<account-id>"
-    domain: example.com
-    secret: cloudflare-credentials
-```
-
-### Rollback to Previous Version
-
-```yaml
-apiVersion: networking.cloudflare-operator.io/v1alpha2
-kind: PagesProject
-metadata:
-  name: versioned-app
-  namespace: default
-spec:
-  name: versioned-app
-  productionBranch: main
-
-  versions:
-    - name: "v1.2.3"
-      source: {...}
-    - name: "v1.2.2"
-      source: {...}
-
-  # Rollback: change from "latest" to specific version
-  productionTarget: "v1.2.2"
-
-  cloudflare:
-    accountId: "<account-id>"
-    domain: example.com
-    secret: cloudflare-credentials
-```
-
 ## Use Cases
 
-### Continuous Deployment
+### GitOps Workflow
 
-Deploy new versions automatically while keeping production stable:
+1. CI system modifies `spec.versionManagement.gitops.previewVersion` to deploy new version as preview
+2. Controller creates PagesDeployment for preview
+3. After validation, ops modifies `spec.versionManagement.gitops.productionVersion`
+4. Controller promotes the validated version to production
 
-1. Add new version to `versions` list (at position 0)
-2. Set `productionTarget: "latest"` for automatic promotion
-3. Controller creates PagesDeployment for the new version
-4. Once successful, promotes to production
+```yaml
+# Step 1: CI deploys v1.3.0 as preview
+versionManagement:
+  policy: gitops
+  gitops:
+    previewVersion: "v1.3.0"
+    productionVersion: "v1.2.3"
 
-### Blue-Green Deployment
+# Step 2: Ops promotes v1.3.0 to production
+versionManagement:
+  policy: gitops
+  gitops:
+    previewVersion: "v1.3.0"
+    productionVersion: "v1.3.0"  # Changed
+```
 
-Maintain multiple versions and switch between them:
+### Rollback
 
-1. Define multiple versions in `versions` list
-2. Test each version in preview environment
-3. Switch `productionTarget` to promote desired version
-4. Instant rollback by changing `productionTarget` back
+Change `productionVersion` back to a previous version:
 
-### Canary Deployment
-
-Gradually roll out new versions:
-
-1. Deploy new version to preview (`productionTarget: "v1.2.2"`)
-2. Monitor metrics and user feedback
-3. When confident, switch to new version (`productionTarget: "v1.2.3"`)
+```yaml
+versionManagement:
+  policy: gitops
+  gitops:
+    previewVersion: "v1.3.0"
+    productionVersion: "v1.2.3"  # Rollback to v1.2.3
+```
 
 ### Multi-Environment Management
 

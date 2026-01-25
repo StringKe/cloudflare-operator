@@ -25,7 +25,7 @@ const (
 )
 
 // PagesDeploymentRef references a deployment to promote.
-// Either Name (for K8s PagesDeployment) or DeploymentID (for direct CF deployment) must be specified.
+// One of Name, DeploymentID, or VersionName must be specified.
 type PagesDeploymentRef struct {
 	// Name is the name of a K8s PagesDeployment resource in the same namespace.
 	// The controller will wait for this deployment to succeed before promoting.
@@ -36,6 +36,12 @@ type PagesDeploymentRef struct {
 	// Use this when the deployment was created outside of K8s management.
 	// +kubebuilder:validation:Optional
 	DeploymentID string `json:"deploymentId,omitempty"`
+
+	// VersionName references a deployment by its version name (spec.versionName or status.versionName).
+	// The controller finds the PagesDeployment with matching versionName in the same namespace.
+	// This is the preferred method for GitOps workflows where deployments are identified by version.
+	// +kubebuilder:validation:Optional
+	VersionName string `json:"versionName,omitempty"`
 }
 
 // PromotedDeploymentInfo contains information about the promoted deployment.

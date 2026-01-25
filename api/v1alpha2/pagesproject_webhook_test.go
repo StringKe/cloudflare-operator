@@ -18,82 +18,202 @@ func TestPagesProjectValidator_ValidateCreate(t *testing.T) {
 		errMsg  string
 	}{
 		{
-			name: "valid project with latest production target",
+			name: "valid project with no version management",
 			project: &PagesProject{
 				Spec: PagesProjectSpec{
-					ProductionTarget: "latest",
-					Versions: []ProjectVersion{
-						{Name: "v1.0.0"},
-						{Name: "v0.9.0"},
+					ProductionBranch: "main",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid project with gitops policy",
+			project: &PagesProject{
+				Spec: PagesProjectSpec{
+					ProductionBranch: "main",
+					VersionManagement: &VersionManagement{
+						Policy: VersionPolicyGitOps,
+						GitOps: &GitOpsVersionConfig{
+							PreviewVersion: "v1.0.0",
+						},
 					},
 				},
 			},
 			wantErr: false,
 		},
 		{
-			name: "valid project with specific version target",
+			name: "valid project with gitops policy and both versions",
 			project: &PagesProject{
 				Spec: PagesProjectSpec{
-					ProductionTarget: "v1.0.0",
-					Versions: []ProjectVersion{
-						{Name: "v1.0.0"},
-						{Name: "v0.9.0"},
+					ProductionBranch: "main",
+					VersionManagement: &VersionManagement{
+						Policy: VersionPolicyGitOps,
+						GitOps: &GitOpsVersionConfig{
+							PreviewVersion:    "v2.0.0",
+							ProductionVersion: "v1.0.0",
+						},
 					},
 				},
 			},
 			wantErr: false,
 		},
 		{
-			name: "valid project with empty production target",
+			name: "valid project with targetVersion policy",
 			project: &PagesProject{
 				Spec: PagesProjectSpec{
-					ProductionTarget: "",
-					Versions: []ProjectVersion{
-						{Name: "v1.0.0"},
+					ProductionBranch: "main",
+					VersionManagement: &VersionManagement{
+						Policy: VersionPolicyTargetVersion,
+						TargetVersion: &TargetVersionSpec{
+							Version: "sha-abc123",
+							SourceTemplate: SourceTemplate{
+								Type: HTTPSourceTemplateType,
+								HTTP: &HTTPSourceTemplate{
+									URLTemplate: "https://example.com/{{.Version}}/dist.tar.gz",
+								},
+							},
+						},
 					},
 				},
 			},
 			wantErr: false,
 		},
 		{
-			name: "invalid production target - version not found",
+			name: "valid project with declarativeVersions policy",
 			project: &PagesProject{
 				Spec: PagesProjectSpec{
-					ProductionTarget: "v2.0.0",
-					Versions: []ProjectVersion{
-						{Name: "v1.0.0"},
-						{Name: "v0.9.0"},
+					ProductionBranch: "main",
+					VersionManagement: &VersionManagement{
+						Policy: VersionPolicyDeclarativeVersions,
+						DeclarativeVersions: &DeclarativeVersionsSpec{
+							Versions: []string{"v1.0.0", "v0.9.0"},
+							SourceTemplate: SourceTemplate{
+								Type: HTTPSourceTemplateType,
+								HTTP: &HTTPSourceTemplate{
+									URLTemplate: "https://example.com/{{.Version}}/dist.tar.gz",
+								},
+							},
+							ProductionTarget: "latest",
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid - targetVersion policy without targetVersion config",
+			project: &PagesProject{
+				Spec: PagesProjectSpec{
+					ProductionBranch: "main",
+					VersionManagement: &VersionManagement{
+						Policy: VersionPolicyTargetVersion,
 					},
 				},
 			},
 			wantErr: true,
-			errMsg:  "version \"v2.0.0\" not found",
+			errMsg:  "targetVersion is required",
 		},
 		{
-			name: "invalid - duplicate version names",
+			name: "invalid - declarativeVersions policy without config",
 			project: &PagesProject{
 				Spec: PagesProjectSpec{
-					Versions: []ProjectVersion{
-						{Name: "v1.0.0"},
-						{Name: "v1.0.0"},
+					ProductionBranch: "main",
+					VersionManagement: &VersionManagement{
+						Policy: VersionPolicyDeclarativeVersions,
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "declarativeVersions is required",
+		},
+		{
+			name: "invalid - gitops policy without config",
+			project: &PagesProject{
+				Spec: PagesProjectSpec{
+					ProductionBranch: "main",
+					VersionManagement: &VersionManagement{
+						Policy: VersionPolicyGitOps,
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "gitops is required",
+		},
+		{
+			name: "valid - none policy",
+			project: &PagesProject{
+				Spec: PagesProjectSpec{
+					ProductionBranch: "main",
+					VersionManagement: &VersionManagement{
+						Policy: VersionPolicyNone,
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid - latestPreview policy",
+			project: &PagesProject{
+				Spec: PagesProjectSpec{
+					ProductionBranch: "main",
+					VersionManagement: &VersionManagement{
+						Policy:        VersionPolicyLatestPreview,
+						LatestPreview: &LatestPreviewConfig{},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid - autoPromote policy",
+			project: &PagesProject{
+				Spec: PagesProjectSpec{
+					ProductionBranch: "main",
+					VersionManagement: &VersionManagement{
+						Policy:      VersionPolicyAutoPromote,
+						AutoPromote: &AutoPromoteConfig{},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid - external policy",
+			project: &PagesProject{
+				Spec: PagesProjectSpec{
+					ProductionBranch: "main",
+					VersionManagement: &VersionManagement{
+						Policy: VersionPolicyExternal,
+						External: &ExternalVersionConfig{
+							CurrentVersion:    "v1.0.0",
+							ProductionVersion: "v1.0.0",
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid - duplicate versions in declarativeVersions",
+			project: &PagesProject{
+				Spec: PagesProjectSpec{
+					ProductionBranch: "main",
+					VersionManagement: &VersionManagement{
+						Policy: VersionPolicyDeclarativeVersions,
+						DeclarativeVersions: &DeclarativeVersionsSpec{
+							Versions: []string{"v1.0.0", "v1.0.0"},
+							SourceTemplate: SourceTemplate{
+								Type: HTTPSourceTemplateType,
+								HTTP: &HTTPSourceTemplate{
+									URLTemplate: "https://example.com/{{.Version}}/dist.tar.gz",
+								},
+							},
+						},
 					},
 				},
 			},
 			wantErr: true,
 			errMsg:  "Duplicate value",
-		},
-		{
-			name: "valid - unique version names",
-			project: &PagesProject{
-				Spec: PagesProjectSpec{
-					Versions: []ProjectVersion{
-						{Name: "v1.0.0"},
-						{Name: "v0.9.0"},
-						{Name: "v0.8.0"},
-					},
-				},
-			},
-			wantErr: false,
 		},
 	}
 
@@ -118,141 +238,83 @@ func TestPagesProjectValidator_ValidateUpdate(t *testing.T) {
 
 	oldProject := &PagesProject{
 		Spec: PagesProjectSpec{
-			ProductionTarget: "v1.0.0",
-			Versions: []ProjectVersion{
-				{Name: "v1.0.0"},
+			ProductionBranch: "main",
+			VersionManagement: &VersionManagement{
+				Policy: VersionPolicyGitOps,
+				GitOps: &GitOpsVersionConfig{
+					PreviewVersion: "v1.0.0",
+				},
 			},
 		},
 	}
 
 	newProject := &PagesProject{
 		Spec: PagesProjectSpec{
-			ProductionTarget: "v2.0.0",
-			Versions: []ProjectVersion{
-				{Name: "v1.0.0"},
+			ProductionBranch: "main",
+			VersionManagement: &VersionManagement{
+				Policy: VersionPolicyGitOps,
+				GitOps: &GitOpsVersionConfig{
+					PreviewVersion:    "v2.0.0",
+					ProductionVersion: "v1.0.0",
+				},
 			},
 		},
 	}
 
 	_, err := validator.ValidateUpdate(context.Background(), oldProject, newProject)
-	if err == nil {
-		t.Error("ValidateUpdate() expected error for invalid production target, got nil")
+	if err != nil {
+		t.Errorf("ValidateUpdate() unexpected error: %v", err)
 	}
 }
 
-func TestPagesProjectValidator_validateProductionTarget(t *testing.T) {
+func TestPagesProjectValidator_validateGitOps(t *testing.T) {
 	validator := &PagesProjectValidator{}
 
 	tests := []struct {
 		name    string
-		project *PagesProject
+		gitops  *GitOpsVersionConfig
 		wantErr bool
 	}{
 		{
-			name: "latest is always valid",
-			project: &PagesProject{
-				Spec: PagesProjectSpec{
-					ProductionTarget: "latest",
-					Versions:         []ProjectVersion{},
-				},
+			name: "valid with preview version only",
+			gitops: &GitOpsVersionConfig{
+				PreviewVersion: "v1.0.0",
 			},
 			wantErr: false,
 		},
 		{
-			name: "empty target is valid",
-			project: &PagesProject{
-				Spec: PagesProjectSpec{
-					ProductionTarget: "",
-				},
+			name: "valid with both versions",
+			gitops: &GitOpsVersionConfig{
+				PreviewVersion:    "v2.0.0",
+				ProductionVersion: "v1.0.0",
 			},
 			wantErr: false,
 		},
 		{
-			name: "existing version is valid",
-			project: &PagesProject{
-				Spec: PagesProjectSpec{
-					ProductionTarget: "v1.0.0",
-					Versions: []ProjectVersion{
-						{Name: "v1.0.0"},
+			name: "valid with source template",
+			gitops: &GitOpsVersionConfig{
+				PreviewVersion: "v1.0.0",
+				SourceTemplate: &SourceTemplate{
+					Type: HTTPSourceTemplateType,
+					HTTP: &HTTPSourceTemplate{
+						URLTemplate: "https://example.com/{{.Version}}/dist.tar.gz",
 					},
 				},
 			},
 			wantErr: false,
 		},
 		{
-			name: "non-existing version is invalid",
-			project: &PagesProject{
-				Spec: PagesProjectSpec{
-					ProductionTarget: "v99.99.99",
-					Versions: []ProjectVersion{
-						{Name: "v1.0.0"},
-					},
-				},
-			},
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validator.validateProductionTarget(tt.project)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("validateProductionTarget() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestPagesProjectValidator_validateVersionUniqueness(t *testing.T) {
-	validator := &PagesProjectValidator{}
-
-	tests := []struct {
-		name    string
-		project *PagesProject
-		wantErr bool
-	}{
-		{
-			name: "all unique versions",
-			project: &PagesProject{
-				Spec: PagesProjectSpec{
-					Versions: []ProjectVersion{
-						{Name: "v1.0.0"},
-						{Name: "v0.9.0"},
-						{Name: "v0.8.0"},
-					},
-				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "duplicate versions",
-			project: &PagesProject{
-				Spec: PagesProjectSpec{
-					Versions: []ProjectVersion{
-						{Name: "v1.0.0"},
-						{Name: "v0.9.0"},
-						{Name: "v1.0.0"},
-					},
-				},
-			},
-			wantErr: true,
-		},
-		{
-			name: "empty versions list",
-			project: &PagesProject{
-				Spec: PagesProjectSpec{
-					Versions: []ProjectVersion{},
-				},
-			},
+			name:    "empty config is valid",
+			gitops:  &GitOpsVersionConfig{},
 			wantErr: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validator.validateVersionUniqueness(tt.project)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("validateVersionUniqueness() error = %v, wantErr %v", err, tt.wantErr)
+			errs := validator.validateGitOps(nil, tt.gitops)
+			if (len(errs) > 0) != tt.wantErr {
+				t.Errorf("validateGitOps() errors = %v, wantErr %v", errs, tt.wantErr)
 			}
 		})
 	}

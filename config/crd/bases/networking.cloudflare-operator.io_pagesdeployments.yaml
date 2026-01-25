@@ -689,6 +689,15 @@ spec:
                   TargetDeploymentID is the deployment ID to retry or rollback to.
                   Deprecated: Use Rollback.DeploymentID or create a new deployment instead.
                 type: string
+              versionName:
+                description: |-
+                  VersionName is a human-readable version identifier for this deployment.
+                  Used by GitOps workflows to reference deployments by version.
+                  When set, this deployment can be referenced by PagesProject or PagesPromotion via versionName.
+                  Example values: "v1.2.3", "sha-abc123", "feature-x-v1"
+                maxLength: 63
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                type: string
             required:
             - cloudflare
             - projectRef
@@ -914,7 +923,7 @@ spec:
               versionName:
                 description: |-
                   VersionName is the human-readable version identifier.
-                  For managed deployments: the version name from PagesProject.spec.versions (e.g., "sha-abc123")
+                  For managed deployments: the version name from PagesProject.spec.versionManagement (e.g., "sha-abc123")
                   For direct deployments: extracted from the deployment name or source key.
                 type: string
             type: object

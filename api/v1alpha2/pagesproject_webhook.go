@@ -46,17 +46,6 @@ func (v *PagesProjectValidator) ValidateCreate(ctx context.Context, obj runtime.
 	allErrs = append(allErrs, errs...)
 	warnings = append(warnings, warns...)
 
-	// Legacy validation (if using old fields)
-	if project.Spec.VersionManagement == nil {
-		if err := v.validateProductionTarget(project); err != nil {
-			allErrs = append(allErrs, err)
-		}
-
-		if err := v.validateVersionUniqueness(project); err != nil {
-			allErrs = append(allErrs, err)
-		}
-	}
-
 	if len(allErrs) > 0 {
 		return warnings, apierrors.NewInvalid(
 			schema.GroupKind{Group: GroupVersion.Group, Kind: "PagesProject"},
@@ -77,81 +66,51 @@ func (v *PagesProjectValidator) ValidateDelete(ctx context.Context, obj runtime.
 	return nil, nil
 }
 
-// validateProductionTarget validates that the production target references an existing version.
-func (v *PagesProjectValidator) validateProductionTarget(project *PagesProject) *field.Error {
-	if project.Spec.ProductionTarget == "" || project.Spec.ProductionTarget == "latest" {
-		return nil
+// getEffectivePolicy returns the effective version management policy.
+func getEffectivePolicy(vm *VersionManagement) VersionPolicy {
+	if vm == nil {
+		return VersionPolicyNone
 	}
-
-	// Check if the specified version exists
-	for _, ver := range project.Spec.Versions {
-		if ver.Name == project.Spec.ProductionTarget {
-			return nil
-		}
+	if vm.Policy != "" {
+		return vm.Policy
 	}
-
-	return field.Invalid(
-		field.NewPath("spec", "productionTarget"),
-		project.Spec.ProductionTarget,
-		fmt.Sprintf("version %q not found in spec.versions", project.Spec.ProductionTarget))
-}
-
-// validateVersionUniqueness ensures all version names are unique.
-func (v *PagesProjectValidator) validateVersionUniqueness(project *PagesProject) *field.Error {
-	seen := make(map[string]bool)
-	for i, ver := range project.Spec.Versions {
-		if seen[ver.Name] {
-			return field.Duplicate(
-				field.NewPath("spec", "versions").Index(i).Child("name"), ver.Name)
-		}
-		seen[ver.Name] = true
-	}
-	return nil
+	return VersionPolicyNone
 }
 
 // validateVersionManagement validates the versionManagement configuration.
+//
+//nolint:revive // cognitive complexity acceptable for validation
 func (v *PagesProjectValidator) validateVersionManagement(project *PagesProject) (field.ErrorList, admission.Warnings) {
 	var errs field.ErrorList
 	var warnings admission.Warnings
 	vm := project.Spec.VersionManagement
-
-	// Check for mutual exclusivity with legacy fields
-	if vm != nil && (len(project.Spec.Versions) > 0 || project.Spec.ProductionTarget != "") {
-		warnings = append(warnings,
-			"Both versionManagement and deprecated fields (versions/productionTarget) are specified. "+
-				"versionManagement will take precedence. Consider removing the deprecated fields.")
-	}
 
 	if vm == nil {
 		return errs, warnings
 	}
 
 	path := field.NewPath("spec", "versionManagement")
+	policy := getEffectivePolicy(vm)
 
-	// Validate type and corresponding configuration
-	switch vm.Type {
-	case TargetVersionMode:
+	// Validate policy and corresponding configuration
+	switch policy {
+	case VersionPolicyNone, "":
+		// No validation needed for none policy
+
+	case VersionPolicyTargetVersion:
 		if vm.TargetVersion == nil {
 			errs = append(errs, field.Required(path.Child("targetVersion"),
-				"targetVersion is required when type is targetVersion"))
+				"targetVersion is required when policy is targetVersion"))
 		} else {
 			errs = append(errs, v.validateSourceTemplate(
 				path.Child("targetVersion", "sourceTemplate"),
 				&vm.TargetVersion.SourceTemplate)...)
 		}
-		if vm.DeclarativeVersions != nil {
-			errs = append(errs, field.Forbidden(path.Child("declarativeVersions"),
-				"declarativeVersions must not be set when type is targetVersion"))
-		}
-		if vm.FullVersions != nil {
-			errs = append(errs, field.Forbidden(path.Child("fullVersions"),
-				"fullVersions must not be set when type is targetVersion"))
-		}
 
-	case DeclarativeVersionsMode:
+	case VersionPolicyDeclarativeVersions:
 		if vm.DeclarativeVersions == nil {
 			errs = append(errs, field.Required(path.Child("declarativeVersions"),
-				"declarativeVersions is required when type is declarativeVersions"))
+				"declarativeVersions is required when policy is declarativeVersions"))
 		} else {
 			errs = append(errs, v.validateDeclarativeVersions(
 				path.Child("declarativeVersions"), vm.DeclarativeVersions)...)
@@ -159,38 +118,68 @@ func (v *PagesProjectValidator) validateVersionManagement(project *PagesProject)
 				path.Child("declarativeVersions", "sourceTemplate"),
 				&vm.DeclarativeVersions.SourceTemplate)...)
 		}
-		if vm.TargetVersion != nil {
-			errs = append(errs, field.Forbidden(path.Child("targetVersion"),
-				"targetVersion must not be set when type is declarativeVersions"))
-		}
-		if vm.FullVersions != nil {
-			errs = append(errs, field.Forbidden(path.Child("fullVersions"),
-				"fullVersions must not be set when type is declarativeVersions"))
-		}
 
-	case FullVersionsMode:
+	case VersionPolicyFullVersions:
 		if vm.FullVersions == nil {
 			errs = append(errs, field.Required(path.Child("fullVersions"),
-				"fullVersions is required when type is fullVersions"))
+				"fullVersions is required when policy is fullVersions"))
 		} else {
 			errs = append(errs, v.validateFullVersions(
 				path.Child("fullVersions"), vm.FullVersions)...)
 		}
-		if vm.TargetVersion != nil {
-			errs = append(errs, field.Forbidden(path.Child("targetVersion"),
-				"targetVersion must not be set when type is fullVersions"))
-		}
-		if vm.DeclarativeVersions != nil {
-			errs = append(errs, field.Forbidden(path.Child("declarativeVersions"),
-				"declarativeVersions must not be set when type is fullVersions"))
+
+	case VersionPolicyGitOps:
+		if vm.GitOps == nil {
+			errs = append(errs, field.Required(path.Child("gitops"),
+				"gitops is required when policy is gitops"))
+		} else {
+			errs = append(errs, v.validateGitOps(path.Child("gitops"), vm.GitOps)...)
 		}
 
+	case VersionPolicyLatestPreview:
+		// latestPreview has no required fields, just validate if present
+		if vm.LatestPreview != nil && vm.LatestPreview.SourceTemplate != nil {
+			errs = append(errs, v.validateSourceTemplate(
+				path.Child("latestPreview", "sourceTemplate"),
+				vm.LatestPreview.SourceTemplate)...)
+		}
+
+	case VersionPolicyAutoPromote:
+		// autoPromote has no required fields, just validate if present
+		if vm.AutoPromote != nil && vm.AutoPromote.SourceTemplate != nil {
+			errs = append(errs, v.validateSourceTemplate(
+				path.Child("autoPromote", "sourceTemplate"),
+				vm.AutoPromote.SourceTemplate)...)
+		}
+
+	case VersionPolicyExternal:
+		// external has no required fields
+
 	default:
-		errs = append(errs, field.Invalid(path.Child("type"), vm.Type,
-			"must be one of: targetVersion, declarativeVersions, fullVersions"))
+		errs = append(errs, field.Invalid(path.Child("policy"), policy,
+			"must be one of: none, targetVersion, declarativeVersions, fullVersions, gitops, latestPreview, autoPromote, external"))
 	}
 
 	return errs, warnings
+}
+
+// validateGitOps validates GitOps configuration.
+func (v *PagesProjectValidator) validateGitOps(path *field.Path, gitops *GitOpsVersionConfig) field.ErrorList {
+	var errs field.ErrorList
+
+	// At least one version should be specified
+	if gitops.PreviewVersion == "" && gitops.ProductionVersion == "" {
+		warnings := "GitOps policy has no previewVersion or productionVersion specified. " +
+			"Consider specifying at least one version."
+		_ = warnings // warnings handled differently
+	}
+
+	// Validate source template if present
+	if gitops.SourceTemplate != nil {
+		errs = append(errs, v.validateSourceTemplate(path.Child("sourceTemplate"), gitops.SourceTemplate)...)
+	}
+
+	return errs
 }
 
 // validateSourceTemplate validates a source template configuration.

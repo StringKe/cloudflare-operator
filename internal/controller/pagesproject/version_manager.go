@@ -22,6 +22,12 @@ import (
 type ResolvedVersions struct {
 	Versions         []networkingv1alpha2.ProjectVersion
 	ProductionTarget string
+	// PreviewVersion is the version to deploy as preview (GitOps mode)
+	PreviewVersion string
+	// ProductionVersion is the version to deploy as production (GitOps mode)
+	ProductionVersion string
+	// Policy is the active version management policy
+	Policy networkingv1alpha2.VersionPolicy
 }
 
 // VersionManager manages declarative versions for PagesProject.
@@ -40,33 +46,70 @@ func NewVersionManager(k8sClient client.Client, scheme *runtime.Scheme, log logr
 	}
 }
 
+// getEffectivePolicy returns the effective version management policy.
+// It handles backward compatibility with the deprecated Type field.
+func getEffectivePolicy(mgmt *networkingv1alpha2.VersionManagement) networkingv1alpha2.VersionPolicy {
+	if mgmt == nil {
+		return networkingv1alpha2.VersionPolicyNone
+	}
+
+	if mgmt.Policy != "" {
+		return mgmt.Policy
+	}
+	return networkingv1alpha2.VersionPolicyNone
+}
+
 // ResolveVersions resolves versions based on the version management configuration.
-// This supports three modes: targetVersion, declarativeVersions, and fullVersions.
-// For backward compatibility, it also supports the legacy spec.versions field.
+// Supports 8 modes: none, targetVersion, declarativeVersions, fullVersions, gitops, latestPreview, autoPromote, external.
 func (vm *VersionManager) ResolveVersions(project *networkingv1alpha2.PagesProject) (*ResolvedVersions, error) {
 	mgmt := project.Spec.VersionManagement
 
-	// Backward compatibility: use legacy fields if VersionManagement is not set
-	if mgmt == nil {
-		//nolint:staticcheck // Intentionally using deprecated fields for backward compatibility
+	policy := getEffectivePolicy(mgmt)
+
+	switch policy {
+	case networkingv1alpha2.VersionPolicyNone, "":
 		return &ResolvedVersions{
-			Versions:         project.Spec.Versions,
-			ProductionTarget: project.Spec.ProductionTarget,
+			Policy: networkingv1alpha2.VersionPolicyNone,
 		}, nil
-	}
 
-	switch mgmt.Type {
-	case networkingv1alpha2.TargetVersionMode:
-		return vm.resolveTargetVersion(mgmt.TargetVersion)
+	case networkingv1alpha2.VersionPolicyTargetVersion:
+		result, err := vm.resolveTargetVersion(mgmt.TargetVersion)
+		if err != nil {
+			return nil, err
+		}
+		result.Policy = policy
+		return result, nil
 
-	case networkingv1alpha2.DeclarativeVersionsMode:
-		return vm.resolveDeclarativeVersions(mgmt.DeclarativeVersions)
+	case networkingv1alpha2.VersionPolicyDeclarativeVersions:
+		result, err := vm.resolveDeclarativeVersions(mgmt.DeclarativeVersions)
+		if err != nil {
+			return nil, err
+		}
+		result.Policy = policy
+		return result, nil
 
-	case networkingv1alpha2.FullVersionsMode:
-		return vm.resolveFullVersions(mgmt.FullVersions)
+	case networkingv1alpha2.VersionPolicyFullVersions:
+		result, err := vm.resolveFullVersions(mgmt.FullVersions)
+		if err != nil {
+			return nil, err
+		}
+		result.Policy = policy
+		return result, nil
+
+	case networkingv1alpha2.VersionPolicyGitOps:
+		return vm.resolveGitOps(mgmt.GitOps)
+
+	case networkingv1alpha2.VersionPolicyLatestPreview:
+		return vm.resolveLatestPreview(mgmt.LatestPreview)
+
+	case networkingv1alpha2.VersionPolicyAutoPromote:
+		return vm.resolveAutoPromote(mgmt.AutoPromote)
+
+	case networkingv1alpha2.VersionPolicyExternal:
+		return vm.resolveExternal(mgmt.External)
 
 	default:
-		return nil, fmt.Errorf("unknown version management type: %s", mgmt.Type)
+		return nil, fmt.Errorf("unknown version management policy: %s", policy)
 	}
 }
 
@@ -120,23 +163,159 @@ func (*VersionManager) resolveFullVersions(spec *networkingv1alpha2.FullVersions
 	}, nil
 }
 
+// resolveGitOps resolves versions for GitOps workflow (preview + production two-stage).
+//
+//nolint:revive // cognitive complexity acceptable for GitOps resolution
+func (vm *VersionManager) resolveGitOps(spec *networkingv1alpha2.GitOpsVersionConfig) (*ResolvedVersions, error) {
+	if spec == nil {
+		return &ResolvedVersions{
+			Policy: networkingv1alpha2.VersionPolicyGitOps,
+		}, nil
+	}
+
+	result := &ResolvedVersions{
+		Policy:            networkingv1alpha2.VersionPolicyGitOps,
+		PreviewVersion:    spec.PreviewVersion,
+		ProductionVersion: spec.ProductionVersion,
+	}
+
+	// Build versions list from preview and production versions
+	versions := make([]networkingv1alpha2.ProjectVersion, 0, 2)
+
+	if spec.PreviewVersion != "" {
+		version, err := vm.buildVersionFromGitOps(spec.PreviewVersion, spec.SourceTemplate)
+		if err != nil {
+			return nil, fmt.Errorf("resolve preview version %s: %w", spec.PreviewVersion, err)
+		}
+		versions = append(versions, version)
+	}
+
+	// Only add production version if different from preview
+	if spec.ProductionVersion != "" && spec.ProductionVersion != spec.PreviewVersion {
+		version, err := vm.buildVersionFromGitOps(spec.ProductionVersion, spec.SourceTemplate)
+		if err != nil {
+			return nil, fmt.Errorf("resolve production version %s: %w", spec.ProductionVersion, err)
+		}
+		versions = append(versions, version)
+	}
+
+	result.Versions = versions
+	return result, nil
+}
+
+// buildVersionFromGitOps builds a ProjectVersion from GitOps config.
+func (*VersionManager) buildVersionFromGitOps(
+	versionName string, template *networkingv1alpha2.SourceTemplate,
+) (networkingv1alpha2.ProjectVersion, error) {
+	if template == nil {
+		return networkingv1alpha2.ProjectVersion{
+			Name: versionName,
+		}, nil
+	}
+
+	return resolveFromTemplate(versionName, template)
+}
+
+// resolveLatestPreview resolves versions for latestPreview mode.
+func (*VersionManager) resolveLatestPreview(_ *networkingv1alpha2.LatestPreviewConfig) (*ResolvedVersions, error) {
+	// latestPreview mode tracks existing PagesDeployment resources
+	// It doesn't create new versions, but watches for changes
+	return &ResolvedVersions{
+		Policy: networkingv1alpha2.VersionPolicyLatestPreview,
+	}, nil
+}
+
+// resolveAutoPromote resolves versions for autoPromote mode.
+func (*VersionManager) resolveAutoPromote(_ *networkingv1alpha2.AutoPromoteConfig) (*ResolvedVersions, error) {
+	// autoPromote mode automatically promotes successful preview deployments
+	// Similar to latestPreview but with automatic promotion
+	return &ResolvedVersions{
+		Policy: networkingv1alpha2.VersionPolicyAutoPromote,
+	}, nil
+}
+
+// resolveExternal resolves versions for external mode.
+func (*VersionManager) resolveExternal(spec *networkingv1alpha2.ExternalVersionConfig) (*ResolvedVersions, error) {
+	if spec == nil {
+		return &ResolvedVersions{
+			Policy: networkingv1alpha2.VersionPolicyExternal,
+		}, nil
+	}
+
+	result := &ResolvedVersions{
+		Policy: networkingv1alpha2.VersionPolicyExternal,
+	}
+
+	// Build versions from external config
+	if spec.CurrentVersion != "" {
+		result.Versions = append(result.Versions, networkingv1alpha2.ProjectVersion{
+			Name: spec.CurrentVersion,
+		})
+	}
+
+	if spec.ProductionVersion != "" {
+		result.ProductionTarget = spec.ProductionVersion
+		result.ProductionVersion = spec.ProductionVersion
+	}
+
+	return result, nil
+}
+
 // HasVersions checks if the project has any versions configured.
 func (*VersionManager) HasVersions(project *networkingv1alpha2.PagesProject) bool {
-	if project.Spec.VersionManagement != nil {
-		switch project.Spec.VersionManagement.Type {
-		case networkingv1alpha2.TargetVersionMode:
-			return project.Spec.VersionManagement.TargetVersion != nil
-		case networkingv1alpha2.DeclarativeVersionsMode:
-			return project.Spec.VersionManagement.DeclarativeVersions != nil &&
-				len(project.Spec.VersionManagement.DeclarativeVersions.Versions) > 0
-		case networkingv1alpha2.FullVersionsMode:
-			return project.Spec.VersionManagement.FullVersions != nil &&
-				len(project.Spec.VersionManagement.FullVersions.Versions) > 0
-		}
+	mgmt := project.Spec.VersionManagement
+	if mgmt == nil {
+		return false
 	}
-	// Legacy mode - intentionally using deprecated field for backward compatibility
-	//nolint:staticcheck
-	return len(project.Spec.Versions) > 0
+
+	policy := getEffectivePolicy(mgmt)
+
+	switch policy {
+	case networkingv1alpha2.VersionPolicyNone, "":
+		return false
+
+	case networkingv1alpha2.VersionPolicyTargetVersion:
+		return mgmt.TargetVersion != nil
+
+	case networkingv1alpha2.VersionPolicyDeclarativeVersions:
+		return mgmt.DeclarativeVersions != nil &&
+			len(mgmt.DeclarativeVersions.Versions) > 0
+
+	case networkingv1alpha2.VersionPolicyFullVersions:
+		return mgmt.FullVersions != nil &&
+			len(mgmt.FullVersions.Versions) > 0
+
+	case networkingv1alpha2.VersionPolicyGitOps:
+		return mgmt.GitOps != nil &&
+			(mgmt.GitOps.PreviewVersion != "" || mgmt.GitOps.ProductionVersion != "")
+
+	case networkingv1alpha2.VersionPolicyLatestPreview:
+		// latestPreview tracks existing deployments, always active if configured
+		return mgmt.LatestPreview != nil
+
+	case networkingv1alpha2.VersionPolicyAutoPromote:
+		// autoPromote tracks existing deployments, always active if configured
+		return mgmt.AutoPromote != nil
+
+	case networkingv1alpha2.VersionPolicyExternal:
+		return mgmt.External != nil &&
+			(mgmt.External.CurrentVersion != "" || mgmt.External.ProductionVersion != "")
+	}
+
+	return false
+}
+
+// IsGitOpsMode checks if the project is using GitOps version management.
+func (*VersionManager) IsGitOpsMode(project *networkingv1alpha2.PagesProject) bool {
+	if project.Spec.VersionManagement == nil {
+		return false
+	}
+	return getEffectivePolicy(project.Spec.VersionManagement) == networkingv1alpha2.VersionPolicyGitOps
+}
+
+// GetPolicy returns the effective version management policy.
+func (*VersionManager) GetPolicy(project *networkingv1alpha2.PagesProject) networkingv1alpha2.VersionPolicy {
+	return getEffectivePolicy(project.Spec.VersionManagement)
 }
 
 // Reconcile synchronizes the desired versions with actual PagesDeployment resources.

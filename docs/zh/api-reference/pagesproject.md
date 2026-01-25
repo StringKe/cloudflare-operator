@@ -7,7 +7,7 @@ PagesProject 是一个命名空间级别的资源，代表 Cloudflare Pages 项�
 PagesProject 提供对 Cloudflare Pages 项目的全面管理，包括:
 
 - **项目配置**: 构建设置、部署环境、资源绑定
-- **版本管理**: 声明式多版本部署与自动回滚
+- **版本管理**: 8 种策略支持声明式多版本部署与自动回滚
 - **项目采用**: 将现有 Cloudflare 项目导入 Kubernetes 管理
 - **资源绑定**: D1、KV、R2、Durable Objects、Workers AI 等
 
@@ -25,8 +25,7 @@ PagesProject 提供对 Cloudflare Pages 项目的全面管理，包括:
 | `deploymentHistoryLimit` | int | 否 | `10` | 保留的部署记录数量（0-100）|
 | `enableWebAnalytics` | bool | 否 | `true` | 启用 Cloudflare Web Analytics |
 | `deletionPolicy` | string | 否 | `Delete` | 删除策略: `Delete`、`Orphan` |
-| `versions` | []ProjectVersion | 否 | - | 声明式版本列表（最大 100 个）|
-| `productionTarget` | string | 否 | - | 生产版本目标 |
+| `versionManagement` | VersionManagement | 否 | - | 版本管理配置（见下文）|
 | `revisionHistoryLimit` | int32 | 否 | `10` | 托管部署保留限制（0-100）|
 
 ### 项目采用策略
@@ -162,17 +161,70 @@ PagesProject 提供对 Cloudflare Pages 项目的全面管理，包括:
 
 ## 版本管理
 
-### ProjectVersion
+PagesProject 通过 `spec.versionManagement` 支持 8 种版本管理策略：
 
-声明式版本管理支持多版本部署，具备自动升级和回滚功能。
+| 策略 | 说明 | 使用场景 |
+|------|------|----------|
+| `none` | 无版本管理，仅项目配置 | 项目元数据管理 |
+| `targetVersion` | 单版本部署 | 简单场景 |
+| `declarativeVersions` | 版本列表 + 模板 | 批量管理 |
+| `fullVersions` | 完整版本配置 | 复杂场景 |
+| `gitops` | Preview + Production 两阶段 | **GitOps 工作流** |
+| `latestPreview` | 追踪最新预览部署 | 持续部署 |
+| `autoPromote` | 预览成功后自动升级 | 自动化流水线 |
+| `external` | 外部系统控制版本 | 第三方集成 |
 
-| 字段 | 类型 | 必需 | 说明 |
-|------|------|------|------|
-| `name` | string | **是** | 版本标识符（例如 `v1.2.3`、`2025-01-20`）|
-| `source` | PagesDirectUploadSourceSpec | 否 | 部署源（HTTP、S3、OCI）|
-| `metadata` | map[string]string | 否 | 版本元数据（gitCommit、buildTime、author 等）|
+### VersionManagement
 
-### 版本管理功能
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `policy` | string | 版本管理策略（见上文）|
+| `targetVersion` | TargetVersionSpec | `targetVersion` 策略配置 |
+| `declarativeVersions` | DeclarativeVersionsSpec | `declarativeVersions` 策略配置 |
+| `fullVersions` | FullVersionsSpec | `fullVersions` 策略配置 |
+| `gitops` | GitOpsVersionConfig | `gitops` 策略配置 |
+| `latestPreview` | LatestPreviewConfig | `latestPreview` 策略配置 |
+| `autoPromote` | AutoPromoteConfig | `autoPromote` 策略配置 |
+| `external` | ExternalVersionConfig | `external` 策略配置 |
+
+### GitOpsVersionConfig
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `previewVersion` | string | - | 部署为预览的版本（CI 修改此字段）|
+| `productionVersion` | string | - | 升级到生产的版本（运维修改此字段）|
+| `sourceTemplate` | SourceTemplate | - | 从版本构造源 URL 的模板 |
+| `requirePreviewValidation` | bool | `true` | 要求版本在升级前通过预览验证 |
+| `validationLabels` | map[string]string | - | 标记版本已验证的标签 |
+
+### LatestPreviewConfig
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `sourceTemplate` | SourceTemplate | - | 从版本构造源 URL 的模板 |
+| `labelSelector` | LabelSelector | - | 选择要追踪的 PagesDeployment |
+| `autoPromote` | bool | `false` | 自动升级最新成功的预览 |
+
+### AutoPromoteConfig
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `sourceTemplate` | SourceTemplate | - | 从版本构造源 URL 的模板 |
+| `promoteAfter` | Duration | 立即 | 预览成功后的等待时间 |
+| `requireHealthCheck` | bool | `false` | 升级前要求健康检查 |
+| `healthCheckUrl` | string | - | 健康检查 URL |
+| `healthCheckTimeout` | Duration | `30s` | 健康检查超时时间 |
+
+### ExternalVersionConfig
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `webhookUrl` | string | - | 版本变更时通知的 URL |
+| `syncInterval` | Duration | `5m` | 同步版本状态的间隔 |
+| `currentVersion` | string | - | 外部控制的当前版本 |
+| `productionVersion` | string | - | 外部控制的生产版本 |
+
+### 版本管理架构
 
 ```mermaid
 ---
@@ -181,48 +233,36 @@ config:
 ---
 graph TB
     subgraph User["用户操作"]
-        A1[定义版本列表]
-        A2[设置生产目标]
-        A3[添加新版本]
+        A1[设置 versionManagement.policy]
+        A2[配置策略特定字段]
+        A3[修改版本字段]
     end
 
     subgraph Controller["PagesProject 控制器"]
         C1[为每个版本创建<br/>PagesDeployment]
-        C2[根据 productionTarget<br/>升级到生产环境]
+        C2[根据策略<br/>升级到生产环境]
         C3[聚合子部署的状态]
         C4[根据 revisionHistoryLimit<br/>清理旧部署]
     end
 
     subgraph Deployment["PagesDeployment 资源"]
         D1[my-app-v1.2.3<br/>生产环境]
-        D2[my-app-v1.2.2<br/>预览环境]
-        D3[my-app-v1.2.1<br/>预览环境]
+        D2[my-app-v1.3.0<br/>预览环境]
     end
 
     A1 --> C1
-    A2 --> C2
-    A3 --> C1
+    A2 --> C1
+    A3 --> C2
     C1 --> D1
     C1 --> D2
-    C1 --> D3
     C2 -.升级.-> D1
     D1 -.状态.-> C3
     D2 -.状态.-> C3
-    D3 -.状态.-> C3
     C3 --> C4
 
     style D1 fill:#90EE90
     style D2 fill:#FFE4B5
-    style D3 fill:#FFE4B5
 ```
-
-### 生产目标策略
-
-| 值 | 行为 |
-|----|------|
-| `latest` | 始终使用 `versions[0]`（第一个/最新版本）|
-| `vX.Y.Z` | 使用指定名称的版本 |
-| `""` (空) | 不自动升级到生产环境 |
 
 ## Status 字段
 
@@ -243,8 +283,12 @@ graph TB
 | `deploymentHistory` | []DeploymentHistoryEntry | 最近的部署记录（用于回滚）|
 | `lastSuccessfulDeploymentId` | string | 上次成功部署的 ID |
 | `currentProduction` | ProductionDeploymentInfo | 当前生产部署（版本模式）|
+| `previewDeployment` | PreviewDeploymentInfo | 当前预览部署（版本模式）|
 | `managedDeployments` | int32 | 托管的 PagesDeployment 资源数量 |
 | `managedVersions` | []ManagedVersionStatus | 每个托管版本的状态摘要 |
+| `versionMapping` | map[string]string | 版本名称到部署 ID 的映射 |
+| `validationHistory` | []VersionValidation | 版本验证历史 |
+| `activePolicy` | string | 当前活跃的版本策略 |
 
 ### 项目状态
 
@@ -261,7 +305,7 @@ graph TB
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `version` | string | 版本名称（来自 ProjectVersion）|
+| `version` | string | 版本名称 |
 | `deploymentId` | string | Cloudflare 部署 ID |
 | `deploymentName` | string | PagesDeployment 资源名称 |
 | `url` | string | 生产部署 URL |
@@ -340,63 +384,183 @@ spec:
     secret: cloudflare-credentials
 ```
 
-### 带资源绑定的全栈应用
+### GitOps 两阶段部署
 
 ```yaml
 apiVersion: networking.cloudflare-operator.io/v1alpha2
 kind: PagesProject
 metadata:
-  name: fullstack-app
+  name: my-app-gitops
   namespace: default
 spec:
-  name: fullstack-app
+  name: my-app-gitops
   productionBranch: main
 
-  deploymentConfigs:
-    production:
-      environmentVariables:
-        API_URL:
-          value: "https://api.example.com"
-          type: plain_text
-        SECRET_KEY:
-          value: "supersecret"
-          type: secret_text
+  versionManagement:
+    policy: gitops
+    gitops:
+      # CI 修改此字段部署预览
+      previewVersion: "v1.3.0"
 
-      compatibilityDate: "2024-01-01"
-      compatibilityFlags:
-        - nodejs_compat
+      # 运维修改此字段升级到生产
+      productionVersion: "v1.2.3"
 
-      # D1 数据库
-      d1Bindings:
-        - name: DB
-          databaseId: "<d1-database-id>"
+      # 源模板
+      sourceTemplate:
+        type: s3
+        s3:
+          bucket: "my-artifacts"
+          keyTemplate: "builds/{{.Version}}/dist.tar.gz"
+          region: "us-east-1"
+          archiveType: tar.gz
 
-      # KV 命名空间
-      kvBindings:
-        - name: CACHE
-          namespaceId: "<kv-namespace-id>"
+      # 要求预览验证（默认: true）
+      requirePreviewValidation: true
 
-      # R2 存储桶
-      r2Bindings:
-        - name: UPLOADS
-          bucketName: my-uploads-bucket
-
-      # Workers AI
-      aiBindings:
-        - name: AI
-
-      # Vectorize
-      vectorizeBindings:
-        - name: VECTORS
-          indexName: my-index
-
-      usageModel: bundled
-      failOpen: false
+  revisionHistoryLimit: 10
 
   cloudflare:
     accountId: "<account-id>"
-    domain: example.com
-    secret: cloudflare-credentials
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+### 声明式版本与模板
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesProject
+metadata:
+  name: my-app-declarative
+  namespace: default
+spec:
+  name: my-app-declarative
+  productionBranch: main
+
+  versionManagement:
+    policy: declarativeVersions
+    declarativeVersions:
+      versions:
+        - "v1.2.3"
+        - "v1.2.2"
+        - "v1.2.1"
+
+      sourceTemplate:
+        type: http
+        http:
+          urlTemplate: "https://artifacts.example.com/my-app/{{.Version}}/dist.tar.gz"
+          archiveType: tar.gz
+
+      # "latest" = versions[0]，或指定版本名称
+      productionTarget: "latest"
+
+  revisionHistoryLimit: 10
+
+  cloudflare:
+    accountId: "<account-id>"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+### 健康检查后自动升级
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesProject
+metadata:
+  name: my-app-autopromote
+  namespace: default
+spec:
+  name: my-app-autopromote
+  productionBranch: main
+
+  versionManagement:
+    policy: autoPromote
+    autoPromote:
+      # 预览成功后等待 5 分钟
+      promoteAfter: 5m
+
+      # 要求健康检查
+      requireHealthCheck: true
+      healthCheckUrl: "https://preview.my-app.pages.dev/health"
+      healthCheckTimeout: 30s
+
+      sourceTemplate:
+        type: http
+        http:
+          urlTemplate: "https://artifacts.example.com/{{.Version}}/dist.tar.gz"
+          archiveType: tar.gz
+
+  revisionHistoryLimit: 10
+
+  cloudflare:
+    accountId: "<account-id>"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+### 追踪最新预览
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesProject
+metadata:
+  name: my-app-latestpreview
+  namespace: default
+spec:
+  name: my-app-latestpreview
+  productionBranch: main
+
+  versionManagement:
+    policy: latestPreview
+    latestPreview:
+      # 只追踪匹配此选择器的部署
+      labelSelector:
+        matchLabels:
+          team: frontend
+
+      # 自动升级最新成功的预览
+      autoPromote: true
+
+  revisionHistoryLimit: 10
+
+  cloudflare:
+    accountId: "<account-id>"
+    credentialsRef:
+      name: cloudflare-credentials
+```
+
+### 外部系统控制
+
+```yaml
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: PagesProject
+metadata:
+  name: my-app-external
+  namespace: default
+spec:
+  name: my-app-external
+  productionBranch: main
+
+  versionManagement:
+    policy: external
+    external:
+      # 外部系统更新这些字段
+      currentVersion: "v1.2.3"
+      productionVersion: "v1.2.3"
+
+      # 同步间隔
+      syncInterval: 5m
+
+      # 可选的 webhook
+      webhookUrl: "https://ci.example.com/webhook"
+
+  revisionHistoryLimit: 10
+
+  cloudflare:
+    accountId: "<account-id>"
+    credentialsRef:
+      name: cloudflare-credentials
 ```
 
 ### 采用现有项目
@@ -423,120 +587,42 @@ spec:
     secret: cloudflare-credentials
 ```
 
-### 多版本管理部署
-
-```yaml
-apiVersion: networking.cloudflare-operator.io/v1alpha2
-kind: PagesProject
-metadata:
-  name: versioned-app
-  namespace: default
-spec:
-  name: versioned-app
-  productionBranch: main
-
-  # 定义版本列表
-  versions:
-    - name: "v1.2.3"
-      source:
-        source:
-          http:
-            url: "https://releases.example.com/v1.2.3/dist.tar.gz"
-        archive:
-          type: tar.gz
-        checksum:
-          algorithm: sha256
-          value: "abc123..."
-      metadata:
-        gitCommit: "abc123"
-        buildTime: "2025-01-20T10:00:00Z"
-        author: "deploy-bot"
-
-    - name: "v1.2.2"
-      source:
-        source:
-          http:
-            url: "https://releases.example.com/v1.2.2/dist.tar.gz"
-        archive:
-          type: tar.gz
-      metadata:
-        gitCommit: "def456"
-        buildTime: "2025-01-19T10:00:00Z"
-
-    - name: "v1.2.1"
-      source:
-        source:
-          http:
-            url: "https://releases.example.com/v1.2.1/dist.tar.gz"
-        archive:
-          type: tar.gz
-
-  # 自动升级最新版本到生产环境
-  productionTarget: "latest"
-
-  # 保留 10 个最近的部署
-  revisionHistoryLimit: 10
-
-  cloudflare:
-    accountId: "<account-id>"
-    domain: example.com
-    secret: cloudflare-credentials
-```
-
-### 回滚到之前的版本
-
-```yaml
-apiVersion: networking.cloudflare-operator.io/v1alpha2
-kind: PagesProject
-metadata:
-  name: versioned-app
-  namespace: default
-spec:
-  name: versioned-app
-  productionBranch: main
-
-  versions:
-    - name: "v1.2.3"
-      source: {...}
-    - name: "v1.2.2"
-      source: {...}
-
-  # 回滚: 从 "latest" 改为特定版本
-  productionTarget: "v1.2.2"
-
-  cloudflare:
-    accountId: "<account-id>"
-    domain: example.com
-    secret: cloudflare-credentials
-```
-
 ## 使用场景
 
-### 持续部署
+### GitOps 工作流
 
-自动部署新版本，同时保持生产环境稳定:
+1. CI 系统修改 `spec.versionManagement.gitops.previewVersion` 将新版本部署为预览
+2. 控制器为预览创建 PagesDeployment
+3. 验证后，运维修改 `spec.versionManagement.gitops.productionVersion`
+4. 控制器将已验证的版本升级到生产环境
 
-1. 将新版本添加到 `versions` 列表顶部（位置 0）
-2. 设置 `productionTarget: "latest"` 实现自动升级
-3. 控制器为新版本创建 PagesDeployment
-4. 成功后自动升级到生产环境
+```yaml
+# 步骤 1: CI 将 v1.3.0 部署为预览
+versionManagement:
+  policy: gitops
+  gitops:
+    previewVersion: "v1.3.0"
+    productionVersion: "v1.2.3"
 
-### 蓝绿部署
+# 步骤 2: 运维将 v1.3.0 升级到生产
+versionManagement:
+  policy: gitops
+  gitops:
+    previewVersion: "v1.3.0"
+    productionVersion: "v1.3.0"  # 已修改
+```
 
-维护多个版本并在它们之间切换:
+### 回滚
 
-1. 在 `versions` 列表中定义多个版本
-2. 在预览环境中测试每个版本
-3. 切换 `productionTarget` 升级所需版本
-4. 通过更改 `productionTarget` 实现即时回滚
+将 `productionVersion` 改回之前的版本：
 
-### 金丝雀部署
-
-逐步推出新版本:
-
-1. 将新版本部署到预览环境（`productionTarget: "v1.2.2"`）
-2. 监控指标和用户反馈
-3. 确认无误后切换到新版本（`productionTarget: "v1.2.3"`）
+```yaml
+versionManagement:
+  policy: gitops
+  gitops:
+    previewVersion: "v1.3.0"
+    productionVersion: "v1.2.3"  # 回滚到 v1.2.3
+```
 
 ### 多环境管理
 
