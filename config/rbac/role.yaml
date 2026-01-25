@@ -108,6 +108,7 @@ rules:
   - pagesdeployments
   - pagesdomains
   - pagesprojects
+  - pagespromotions
   - privateservices
   - r2bucketdomains
   - r2bucketnotifications
@@ -151,6 +152,7 @@ rules:
   - pagesdeployments/finalizers
   - pagesdomains/finalizers
   - pagesprojects/finalizers
+  - pagespromotions/finalizers
   - privateservices/finalizers
   - r2bucketdomains/finalizers
   - r2bucketnotifications/finalizers
@@ -189,6 +191,7 @@ rules:
   - pagesdeployments/status
   - pagesdomains/status
   - pagesprojects/status
+  - pagespromotions/status
   - privateservices/status
   - r2bucketdomains/status
   - r2bucketnotifications/status

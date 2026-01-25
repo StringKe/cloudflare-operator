@@ -234,7 +234,23 @@ func (r *PagesDeploymentReconciler) createDeployment(
 			if loadErr != nil {
 				return r.setErrorStatus(ctx, deployment, fmt.Errorf("failed to load files: %w", loadErr))
 			}
-			directResult, uploadErr := api.CreatePagesDirectUploadDeployment(ctx, projectName, files)
+
+			// Determine branch based on environment and user config:
+			// - production: empty string (uses project's production branch, updates main URL)
+			// - preview: use specified branch or default to "preview"
+			// The branch controls whether the deployment goes to production URL or creates a preview
+			uploadBranch := ""
+			if deployment.Spec.Environment == networkingv1alpha2.PagesDeploymentEnvironmentPreview {
+				// Check if user specified a custom branch name
+				if deployment.Spec.Source.DirectUpload != nil && deployment.Spec.Source.DirectUpload.Branch != "" {
+					uploadBranch = deployment.Spec.Source.DirectUpload.Branch
+				} else {
+					// Default to "preview" for preview deployments
+					uploadBranch = "preview"
+				}
+			}
+
+			directResult, uploadErr := api.CreatePagesDirectUploadDeployment(ctx, projectName, files, uploadBranch)
 			if uploadErr != nil {
 				return r.setErrorStatus(ctx, deployment, fmt.Errorf("failed to create direct upload deployment: %w", uploadErr))
 			}

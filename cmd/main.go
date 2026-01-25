@@ -32,6 +32,7 @@ import (
 	"github.com/StringKe/cloudflare-operator/internal/controller/pagesdeployment"
 	"github.com/StringKe/cloudflare-operator/internal/controller/pagesdomain"
 	"github.com/StringKe/cloudflare-operator/internal/controller/pagesproject"
+	"github.com/StringKe/cloudflare-operator/internal/controller/pagespromotion"
 	"github.com/StringKe/cloudflare-operator/internal/controller/privateservice"
 	"github.com/StringKe/cloudflare-operator/internal/controller/r2bucket"
 	"github.com/StringKe/cloudflare-operator/internal/controller/r2bucketdomain"
@@ -482,6 +483,14 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PagesDeployment")
+		os.Exit(1)
+	}
+	// Pages Promotion controller (L2)
+	if err = (&pagespromotion.PagesPromotionReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "PagesPromotion")
 		os.Exit(1)
 	}
 

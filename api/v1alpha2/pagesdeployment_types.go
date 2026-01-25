@@ -122,6 +122,15 @@ type PagesDirectUploadSourceSpec struct {
 	// Specifies how to extract the downloaded archive.
 	// +kubebuilder:validation:Optional
 	Archive *ArchiveConfig `json:"archive,omitempty"`
+
+	// Branch specifies the branch name for this deployment.
+	// For preview deployments, this creates a branch alias URL: <branch>.<project>.pages.dev
+	// If not specified:
+	// - For environment=preview: defaults to "preview"
+	// - For environment=production: empty (uses project's production branch)
+	// Common values: "staging", "feature-x", "pr-123"
+	// +kubebuilder:validation:Optional
+	Branch string `json:"branch,omitempty"`
 }
 
 // PagesDirectUpload configures direct upload deployment.

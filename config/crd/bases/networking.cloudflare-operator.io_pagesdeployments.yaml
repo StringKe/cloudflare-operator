@@ -486,6 +486,15 @@ spec:
                             - none
                             type: string
                         type: object
+                      branch:
+                        description: |-
+                          Branch specifies the branch name for this deployment.
+                          For preview deployments, this creates a branch alias URL: <branch>.<project>.pages.dev
+                          If not specified:
+                          - For environment=preview: defaults to "preview"
+                          - For environment=production: empty (uses project's production branch)
+                          Common values: "staging", "feature-x", "pr-123"
+                        type: string
                       checksum:
                         description: |-
                           Checksum for file integrity verification.

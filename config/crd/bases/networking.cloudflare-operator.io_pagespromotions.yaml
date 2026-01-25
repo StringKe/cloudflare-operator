@@ -1,0 +1,341 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  name: pagespromotions.networking.cloudflare-operator.io
+spec:
+  group: networking.cloudflare-operator.io
+  names:
+    kind: PagesPromotion
+    listKind: PagesPromotionList
+    plural: pagespromotions
+    shortNames:
+    - cfppromo
+    - pagespromotion
+    singular: pagespromotion
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.projectName
+      name: Project
+      type: string
+    - jsonPath: .spec.deploymentRef.name
+      name: Deployment
+      type: string
+    - jsonPath: .status.state
+      name: State
+      type: string
+    - jsonPath: .status.promotedDeployment.url
+      name: URL
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          PagesPromotion manages the promotion of a Pages deployment to production.
+          This resource separates the "upload" and "production switch" concerns, enabling
+          GitOps-friendly workflows where preview deployments can be verified before promotion.
+
+          The controller uses Cloudflare's rollback API to switch the production deployment.
+          This is an atomic operation that makes the specified deployment the new production.
+
+          Typical workflow:
+          1. Create a PagesDeployment with environment: preview
+          2. Verify the preview deployment
+          3. Create/update a PagesPromotion to promote to production
+          4. The controller waits for the deployment to succeed, then promotes it
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: PagesPromotionSpec defines the desired state of PagesPromotion
+            properties:
+              cloudflare:
+                description: Cloudflare contains Cloudflare-specific configuration.
+                properties:
+                  CLOUDFLARE_API_KEY:
+                    description: |-
+                      Key in the secret to use for Cloudflare API Key.
+                      If not specified, defaults to "CLOUDFLARE_API_KEY" at runtime.
+                      Needs Email also to be provided.
+                      For Delete operations for new tunnels only, or as an alternate to API Token.
+                    type: string
+                  CLOUDFLARE_API_TOKEN:
+                    description: |-
+                      Key in the secret to use for Cloudflare API token.
+                      If not specified, defaults to "CLOUDFLARE_API_TOKEN" at runtime.
+                    type: string
+                  CLOUDFLARE_TUNNEL_CREDENTIAL_FILE:
+                    description: |-
+                      Key in the secret to use as credentials.json for an existing tunnel.
+                      If not specified, defaults to "CLOUDFLARE_TUNNEL_CREDENTIAL_FILE" at runtime.
+                    type: string
+                  CLOUDFLARE_TUNNEL_CREDENTIAL_SECRET:
+                    description: |-
+                      Key in the secret to use as tunnel secret for an existing tunnel.
+                      If not specified, defaults to "CLOUDFLARE_TUNNEL_CREDENTIAL_SECRET" at runtime.
+                    type: string
+                  accountId:
+                    description: Account ID in Cloudflare. AccountId and AccountName
+                      cannot be both empty. If both are provided, Account ID is used
+                      if valid, else falls back to Account Name.
+                    type: string
+                  accountName:
+                    description: Account Name in Cloudflare. AccountName and AccountId
+                      cannot be both empty. If both are provided, Account ID is used
+                      if valid, else falls back to Account Name.
+                    type: string
+                  credentialsRef:
+                    description: |-
+                      CredentialsRef references a CloudflareCredentials resource for API authentication.
+                      When specified, this takes precedence over inline credential fields.
+                      This is the recommended way to configure credentials.
+                    properties:
+                      name:
+                        description: Name of the CloudflareCredentials resource to
+                          use
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  domain:
+                    description: |-
+                      Cloudflare Domain to which this tunnel belongs to.
+                      Required if not using credentialsRef with a defaultDomain.
+                    type: string
+                  email:
+                    description: Email to use along with API Key for Delete operations
+                      for new tunnels only, or as an alternate to API Token
+                    type: string
+                  secret:
+                    description: Secret containing Cloudflare API key/token (legacy,
+                      use credentialsRef instead)
+                    type: string
+                  zoneId:
+                    description: |-
+                      ZoneId is the Cloudflare Zone ID for DNS operations.
+                      If not specified, it will be looked up via CloudflareDomain or the domain field.
+                      Specifying this directly is useful for multi-zone scenarios.
+                    type: string
+                type: object
+              deploymentRef:
+                description: |-
+                  DeploymentRef references the deployment to promote to production.
+                  Either Name (K8s PagesDeployment) or DeploymentID (Cloudflare) must be specified.
+                properties:
+                  deploymentId:
+                    description: |-
+                      DeploymentID is a Cloudflare deployment ID to promote directly.
+                      Use this when the deployment was created outside of K8s management.
+                    type: string
+                  name:
+                    description: |-
+                      Name is the name of a K8s PagesDeployment resource in the same namespace.
+                      The controller will wait for this deployment to succeed before promoting.
+                    type: string
+                type: object
+              projectRef:
+                description: |-
+                  ProjectRef references the PagesProject.
+                  Either Name or CloudflareID/CloudflareName must be specified.
+                properties:
+                  cloudflareId:
+                    description: |-
+                      CloudflareID is the Cloudflare project name (same as ID for Pages).
+                      Use this to reference a project that is not managed by the operator.
+                    type: string
+                  cloudflareName:
+                    description: |-
+                      CloudflareName is an alias for CloudflareID (same as ID for Pages).
+                      Provided for clarity and consistency.
+                    type: string
+                  name:
+                    description: |-
+                      Name is the K8s PagesProject resource name.
+                      The controller will look up the Cloudflare project name from this resource.
+                    type: string
+                type: object
+              requireSuccessfulDeployment:
+                default: true
+                description: |-
+                  RequireSuccessfulDeployment requires the referenced PagesDeployment to be in Succeeded state.
+                  Only applies when DeploymentRef.Name is specified.
+                  When true (default), the promotion waits for the deployment to succeed.
+                  When false, the deployment is promoted regardless of state.
+                type: boolean
+            required:
+            - cloudflare
+            - deploymentRef
+            - projectRef
+            type: object
+          status:
+            description: PagesPromotionStatus defines the observed state of PagesPromotion
+            properties:
+              accountId:
+                description: AccountID is the Cloudflare account ID.
+                type: string
+              conditions:
+                description: Conditions represent the latest available observations.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              lastPromotionTime:
+                description: LastPromotionTime is when the last successful promotion
+                  occurred.
+                format: date-time
+                type: string
+              message:
+                description: Message provides additional information about the current
+                  state.
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the last observed generation.
+                format: int64
+                type: integer
+              previousDeployment:
+                description: |-
+                  PreviousDeployment contains information about the deployment that was replaced.
+                  Useful for tracking what was previously in production before this promotion.
+                properties:
+                  deploymentId:
+                    description: DeploymentID is the Cloudflare deployment ID that
+                      was replaced.
+                    type: string
+                  hashUrl:
+                    description: HashURL is the unique hash-based URL for the previous
+                      deployment.
+                    type: string
+                  replacedAt:
+                    description: ReplacedAt is when this deployment was replaced.
+                    format: date-time
+                    type: string
+                  url:
+                    description: URL was the production URL before promotion.
+                    type: string
+                required:
+                - deploymentId
+                type: object
+              projectName:
+                description: ProjectName is the Cloudflare project name.
+                type: string
+              promotedDeployment:
+                description: PromotedDeployment contains information about the current
+                  production deployment.
+                properties:
+                  deploymentId:
+                    description: DeploymentID is the Cloudflare deployment ID that
+                      was promoted.
+                    type: string
+                  hashUrl:
+                    description: |-
+                      HashURL is the unique hash-based URL for this deployment.
+                      Format: <hash>.<project>.pages.dev
+                    type: string
+                  promotedAt:
+                    description: PromotedAt is when this deployment was promoted to
+                      production.
+                    format: date-time
+                    type: string
+                  sourceDeploymentName:
+                    description: |-
+                      SourceDeploymentName is the K8s PagesDeployment resource name that was promoted.
+                      Only set when promoting from a K8s PagesDeployment.
+                    type: string
+                  url:
+                    description: |-
+                      URL is the production URL after promotion.
+                      Format: <project>.pages.dev
+                    type: string
+                required:
+                - deploymentId
+                type: object
+              state:
+                description: State is the current state of the promotion.
+                enum:
+                - Pending
+                - Validating
+                - Promoting
+                - Promoted
+                - Failed
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

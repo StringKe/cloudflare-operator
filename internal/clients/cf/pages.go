@@ -999,6 +999,11 @@ func isPagesSpecialFile(path string) bool {
 // 3. Upload missing files
 // 4. Upsert hashes and create deployment
 //
+// The branch parameter controls whether this is a production or preview deployment:
+// - If branch matches the project's production branch (e.g., "main"), it creates a production deployment
+// - If branch is different (e.g., "preview", "staging"), it creates a preview deployment
+// - If branch is empty, it defaults to production deployment behavior
+//
 // Important: Uses MD5 hashes (not SHA256) as required by Cloudflare Pages API.
 // Special files (_headers, _redirects, etc.) are excluded from manifest.
 //
@@ -1007,6 +1012,7 @@ func (api *API) CreatePagesDirectUploadDeployment(
 	ctx context.Context,
 	projectName string,
 	files map[string][]byte,
+	branch string,
 ) (*PagesDirectUploadResult, error) {
 	if api.CloudflareClient == nil {
 		return nil, errClientNotInitialized
@@ -1116,7 +1122,7 @@ func (api *API) CreatePagesDirectUploadDeployment(
 	}
 
 	// Step 5: Create deployment with manifest
-	result, err := api.pagesCreateDeployment(ctx, accountID, projectName, manifest)
+	result, err := api.pagesCreateDeployment(ctx, accountID, projectName, manifest, branch)
 	if err != nil {
 		return nil, fmt.Errorf("create deployment: %w", err)
 	}
@@ -1249,11 +1255,15 @@ func (api *API) pagesUpsertHashes(ctx context.Context, jwt string, hashes []stri
 }
 
 // pagesCreateDeployment creates a Pages deployment with the given manifest.
-func (api *API) pagesCreateDeployment(ctx context.Context, accountID, projectName string, manifest map[string]string) (*PagesDirectUploadResult, error) {
+// The branch parameter controls the deployment environment:
+// - If branch matches project's production branch → production deployment
+// - If branch is different → preview deployment with branch alias URL
+// - If branch is empty → defaults to production behavior
+func (api *API) pagesCreateDeployment(ctx context.Context, accountID, projectName string, manifest map[string]string, branch string) (*PagesDirectUploadResult, error) {
 	endpoint := fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/pages/projects/%s/deployments",
 		accountID, projectName)
 
-	// Use multipart/form-data with manifest field
+	// Use multipart/form-data with manifest and optional branch fields
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
@@ -1263,6 +1273,12 @@ func (api *API) pagesCreateDeployment(ctx context.Context, accountID, projectNam
 	}
 	if err := writer.WriteField("manifest", string(manifestJSON)); err != nil {
 		return nil, err
+	}
+	// Add branch field if specified - this controls preview vs production
+	if branch != "" {
+		if err := writer.WriteField("branch", branch); err != nil {
+			return nil, err
+		}
 	}
 	if err := writer.Close(); err != nil {
 		return nil, err
