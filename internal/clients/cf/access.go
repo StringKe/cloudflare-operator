@@ -1791,8 +1791,16 @@ func (c *API) DeleteDevicePostureRule(ctx context.Context, ruleID string) error 
 	return nil
 }
 
+// GetAccessGroupByName finds an Access Group by name.
+// Returns nil if no group with the given name is found.
+func (c *API) GetAccessGroupByName(ctx context.Context, name string) (*AccessGroupResult, error) {
+	return c.ListAccessGroupsByName(ctx, name)
+}
+
 // ListAccessGroupsByName finds an Access Group by name.
 // Returns nil if no group with the given name is found.
+//
+// Deprecated: Use GetAccessGroupByName instead.
 func (c *API) ListAccessGroupsByName(ctx context.Context, name string) (*AccessGroupResult, error) {
 	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")
@@ -1819,8 +1827,16 @@ func (c *API) ListAccessGroupsByName(ctx context.Context, name string) (*AccessG
 	return nil, nil // Not found, return nil without error
 }
 
+// GetAccessIdentityProviderByName finds an Access Identity Provider by name.
+// Returns nil if no provider with the given name is found.
+func (c *API) GetAccessIdentityProviderByName(ctx context.Context, name string) (*AccessIdentityProviderResult, error) {
+	return c.ListAccessIdentityProvidersByName(ctx, name)
+}
+
 // ListAccessIdentityProvidersByName finds an Access Identity Provider by name.
 // Returns nil if no provider with the given name is found.
+//
+// Deprecated: Use GetAccessIdentityProviderByName instead.
 func (c *API) ListAccessIdentityProvidersByName(ctx context.Context, name string) (*AccessIdentityProviderResult, error) {
 	if _, err := c.GetAccountId(ctx); err != nil {
 		c.Log.Error(err, "error getting account ID")

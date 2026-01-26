@@ -8,6 +8,7 @@ package pagesdomain
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -216,6 +217,9 @@ func (r *PagesDomainReconciler) handleExistingDomain(
 		"domain", domain.Spec.Domain,
 		"status", existingDomain.Status)
 
+	// Try to auto-configure DNS if domain is pending
+	r.autoConfigureDNSRecord(ctx, domain, apiResult, projectName, existingDomain)
+
 	// Update status from Cloudflare
 	return r.setSuccessStatus(ctx, domain, apiResult.AccountID, projectName, existingDomain)
 }
@@ -243,6 +247,9 @@ func (r *PagesDomainReconciler) handleCreateDomain(
 
 	r.Recorder.Event(domain, corev1.EventTypeNormal, "Created",
 		fmt.Sprintf("Pages domain '%s' added to project '%s'", domain.Spec.Domain, projectName))
+
+	// Try to auto-configure DNS if domain is pending
+	r.autoConfigureDNSRecord(ctx, domain, apiResult, projectName, result)
 
 	// Update status
 	return r.setSuccessStatus(ctx, domain, apiResult.AccountID, projectName, result)
@@ -313,6 +320,149 @@ func (r *PagesDomainReconciler) setSuccessStatus(
 	}
 
 	return common.NoRequeue(), nil
+}
+
+// autoConfigureDNSRecord automatically creates a CNAME DNS record if autoConfigureDNS is enabled.
+// This is called when the domain status is pending and requires DNS validation.
+//
+//nolint:revive // cyclomatic complexity is acceptable for this linear DNS configuration logic
+func (r *PagesDomainReconciler) autoConfigureDNSRecord(
+	ctx context.Context,
+	domain *networkingv1alpha2.PagesDomain,
+	apiResult *common.APIClientResult,
+	projectName string,
+	result *cf.PagesDomainResult,
+) {
+	logger := log.FromContext(ctx)
+
+	// Check if autoConfigureDNS is disabled
+	if domain.Spec.AutoConfigureDNS != nil && !*domain.Spec.AutoConfigureDNS {
+		logger.V(1).Info("autoConfigureDNS is disabled, skipping DNS auto-configuration")
+		return
+	}
+
+	// Only proceed if domain is pending
+	if result.Status != "pending" {
+		logger.V(1).Info("Domain is not pending, skipping DNS auto-configuration",
+			"status", result.Status)
+		return
+	}
+
+	// Resolve ZoneID
+	zoneID := r.resolveZoneID(ctx, domain, apiResult)
+	if zoneID == "" {
+		logger.Info("ZoneID not found, DNS auto-configuration not possible. " +
+			"Set spec.zoneID or ensure the domain zone is in the same Cloudflare account.")
+		r.Recorder.Event(domain, corev1.EventTypeWarning, "DNSAutoConfigSkipped",
+			"ZoneID not found. DNS must be configured manually.")
+		return
+	}
+
+	// Build CNAME target: <project>.pages.dev
+	cnameTarget := fmt.Sprintf("%s.pages.dev", projectName)
+
+	// Check if CNAME record already exists
+	existingRecordID, err := apiResult.API.GetDNSRecordIDInZone(ctx, zoneID, domain.Spec.Domain, cf.DNSRecordTypeCNAME)
+	if err != nil {
+		logger.Error(err, "Failed to check existing DNS record")
+		r.Recorder.Event(domain, corev1.EventTypeWarning, "DNSAutoConfigFailed",
+			fmt.Sprintf("Failed to check existing DNS record: %s", cf.SanitizeErrorMessage(err)))
+		return
+	}
+
+	if existingRecordID != "" {
+		// Record exists, update it
+		logger.Info("Updating existing CNAME record for Pages domain",
+			"domain", domain.Spec.Domain,
+			"target", cnameTarget,
+			"zoneID", zoneID,
+			"recordID", existingRecordID)
+
+		_, err = apiResult.API.UpdateDNSRecordInZone(ctx, zoneID, existingRecordID, cf.DNSRecordParams{
+			Name:    domain.Spec.Domain,
+			Type:    cf.DNSRecordTypeCNAME,
+			Content: cnameTarget,
+			TTL:     1, // Auto TTL
+			Proxied: true,
+			Comment: "Managed by cloudflare-operator for PagesDomain",
+		})
+		if err != nil {
+			logger.Error(err, "Failed to update CNAME record")
+			r.Recorder.Event(domain, corev1.EventTypeWarning, "DNSAutoConfigFailed",
+				fmt.Sprintf("Failed to update CNAME record: %s", cf.SanitizeErrorMessage(err)))
+			return
+		}
+
+		r.Recorder.Event(domain, corev1.EventTypeNormal, "DNSRecordUpdated",
+			fmt.Sprintf("CNAME record updated: %s → %s", domain.Spec.Domain, cnameTarget))
+	} else {
+		// Create new CNAME record
+		logger.Info("Creating CNAME record for Pages domain",
+			"domain", domain.Spec.Domain,
+			"target", cnameTarget,
+			"zoneID", zoneID)
+
+		_, err = apiResult.API.CreateDNSRecordInZone(ctx, zoneID, cf.DNSRecordParams{
+			Name:    domain.Spec.Domain,
+			Type:    cf.DNSRecordTypeCNAME,
+			Content: cnameTarget,
+			TTL:     1, // Auto TTL
+			Proxied: true,
+			Comment: "Managed by cloudflare-operator for PagesDomain",
+		})
+		if err != nil {
+			// Check if record already exists (race condition)
+			if strings.Contains(err.Error(), "already exists") {
+				logger.Info("CNAME record already exists, skipping creation")
+				return
+			}
+			logger.Error(err, "Failed to create CNAME record")
+			r.Recorder.Event(domain, corev1.EventTypeWarning, "DNSAutoConfigFailed",
+				fmt.Sprintf("Failed to create CNAME record: %s", cf.SanitizeErrorMessage(err)))
+			return
+		}
+
+		r.Recorder.Event(domain, corev1.EventTypeNormal, "DNSRecordCreated",
+			fmt.Sprintf("CNAME record created: %s → %s", domain.Spec.Domain, cnameTarget))
+	}
+}
+
+// resolveZoneID resolves the ZoneID for DNS auto-configuration.
+// Priority: spec.zoneID > status.zoneID > API lookup by domain name.
+// Returns empty string if zone cannot be resolved (not an error, just means auto-config is not possible).
+func (*PagesDomainReconciler) resolveZoneID(
+	ctx context.Context,
+	domain *networkingv1alpha2.PagesDomain,
+	apiResult *common.APIClientResult,
+) string {
+	logger := log.FromContext(ctx)
+
+	// Priority 1: Spec.ZoneID explicitly set
+	if domain.Spec.ZoneID != "" {
+		logger.V(1).Info("Using ZoneID from spec", "zoneID", domain.Spec.ZoneID)
+		return domain.Spec.ZoneID
+	}
+
+	// Priority 2: Status.ZoneID from Cloudflare response (zone_tag)
+	if domain.Status.ZoneID != "" {
+		logger.V(1).Info("Using ZoneID from status", "zoneID", domain.Status.ZoneID)
+		return domain.Status.ZoneID
+	}
+
+	// Priority 3: Query Cloudflare API by domain name
+	logger.V(1).Info("Querying ZoneID from Cloudflare API", "domain", domain.Spec.Domain)
+	zoneID, zoneName, err := apiResult.API.GetZoneIDForDomain(ctx, domain.Spec.Domain)
+	if err != nil {
+		// Zone not found is not a fatal error, just means auto-config is not possible
+		logger.V(1).Info("Zone not found for domain", "domain", domain.Spec.Domain, "error", err)
+		return ""
+	}
+
+	logger.Info("Resolved ZoneID from Cloudflare API",
+		"domain", domain.Spec.Domain,
+		"zoneID", zoneID,
+		"zoneName", zoneName)
+	return zoneID
 }
 
 // setErrorStatus updates the domain status with an error.

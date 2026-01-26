@@ -185,29 +185,44 @@ type AccessGroupDevicePostureRule struct {
 
 // AccessGroupGSuiteRule matches Google Workspace users.
 type AccessGroupGSuiteRule struct {
-	Email              string `json:"email"`
-	IdentityProviderID string `json:"identityProviderId"`
+	Email string `json:"email"`
+
+	// IdpRef references an AccessIdentityProvider with flexible reference modes.
+	// Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+	// +kubebuilder:validation:Optional
+	IdpRef *AccessIdentityProviderRefV2 `json:"idpRef,omitempty"`
 }
 
 // AccessGroupGitHubRule matches GitHub users.
 type AccessGroupGitHubRule struct {
-	Name               string   `json:"name"`
-	IdentityProviderID string   `json:"identityProviderId"`
-	Teams              []string `json:"teams,omitempty"`
+	Name  string   `json:"name"`
+	Teams []string `json:"teams,omitempty"`
+
+	// IdpRef references an AccessIdentityProvider with flexible reference modes.
+	// Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+	// +kubebuilder:validation:Optional
+	IdpRef *AccessIdentityProviderRefV2 `json:"idpRef,omitempty"`
 }
 
 // AccessGroupAzureRule matches Azure AD users.
 type AccessGroupAzureRule struct {
-	ID                 string `json:"id"`
-	IdentityProviderID string `json:"identityProviderId"`
+	ID string `json:"id"`
+
+	// IdpRef references an AccessIdentityProvider with flexible reference modes.
+	// Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+	// +kubebuilder:validation:Optional
+	IdpRef *AccessIdentityProviderRefV2 `json:"idpRef,omitempty"`
 }
 
 // AccessGroupOktaRule matches Okta groups.
 type AccessGroupOktaRule struct {
 	// Name is the Okta group name.
 	Name string `json:"name"`
-	// IdentityProviderID is the Cloudflare ID of the Okta identity provider.
-	IdentityProviderID string `json:"identityProviderId"`
+
+	// IdpRef references an AccessIdentityProvider with flexible reference modes.
+	// Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+	// +kubebuilder:validation:Optional
+	IdpRef *AccessIdentityProviderRefV2 `json:"idpRef,omitempty"`
 }
 
 // AccessGroupAuthMethodRule enforces MFA options.
@@ -222,28 +237,41 @@ type AccessGroupAuthContextRule struct {
 	ID string `json:"id"`
 	// AcID is the Azure AD Conditional Access Policy ID.
 	AcID string `json:"acId"`
-	// IdentityProviderID is the Cloudflare ID of the Azure identity provider.
-	IdentityProviderID string `json:"identityProviderId"`
+
+	// IdpRef references an AccessIdentityProvider with flexible reference modes.
+	// Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+	// +kubebuilder:validation:Optional
+	IdpRef *AccessIdentityProviderRefV2 `json:"idpRef,omitempty"`
 }
 
 // AccessGroupLoginMethodRule matches a specific identity provider.
 type AccessGroupLoginMethodRule struct {
-	// ID is the Cloudflare ID of the identity provider.
-	ID string `json:"id"`
+	// IdpRef references an AccessIdentityProvider with flexible reference modes.
+	// Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+	// +kubebuilder:validation:Optional
+	IdpRef *AccessIdentityProviderRefV2 `json:"idpRef,omitempty"`
 }
 
 // AccessGroupOIDCRule matches OIDC claims.
 type AccessGroupOIDCRule struct {
-	ClaimName          string `json:"claimName"`
-	ClaimValue         string `json:"claimValue"`
-	IdentityProviderID string `json:"identityProviderId"`
+	ClaimName  string `json:"claimName"`
+	ClaimValue string `json:"claimValue"`
+
+	// IdpRef references an AccessIdentityProvider with flexible reference modes.
+	// Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+	// +kubebuilder:validation:Optional
+	IdpRef *AccessIdentityProviderRefV2 `json:"idpRef,omitempty"`
 }
 
 // AccessGroupSAMLRule matches SAML attributes.
 type AccessGroupSAMLRule struct {
-	AttributeName      string `json:"attributeName"`
-	AttributeValue     string `json:"attributeValue"`
-	IdentityProviderID string `json:"identityProviderId"`
+	AttributeName  string `json:"attributeName"`
+	AttributeValue string `json:"attributeValue"`
+
+	// IdpRef references an AccessIdentityProvider with flexible reference modes.
+	// Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+	// +kubebuilder:validation:Optional
+	IdpRef *AccessIdentityProviderRefV2 `json:"idpRef,omitempty"`
 }
 
 // AccessGroupExternalEvaluationRule calls external endpoint.

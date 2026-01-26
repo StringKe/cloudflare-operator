@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -24,6 +25,7 @@ import (
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
 	"github.com/StringKe/cloudflare-operator/internal/controller/common"
+	"github.com/StringKe/cloudflare-operator/internal/controller/refs"
 )
 
 const (
@@ -147,8 +149,11 @@ func (r *Reconciler) syncPolicy(
 	// Determine policy name
 	policyName := policy.GetAccessPolicyName()
 
+	// Create resolver for IdP reference resolution
+	resolver := refs.NewResolver(r.Client, apiResult.API)
+
 	// Build params
-	params := r.buildParams(policy, policyName)
+	params := r.buildParams(ctx, policy, policyName, resolver)
 
 	// Check if policy already exists by ID
 	if policy.Status.PolicyID != "" {
@@ -223,14 +228,20 @@ func (r *Reconciler) syncPolicy(
 }
 
 // buildParams builds the ReusableAccessPolicyParams from the AccessPolicy spec.
-func (r *Reconciler) buildParams(policy *networkingv1alpha2.AccessPolicy, policyName string) cf.ReusableAccessPolicyParams {
+func (r *Reconciler) buildParams(
+	ctx context.Context,
+	policy *networkingv1alpha2.AccessPolicy,
+	policyName string,
+	resolver *refs.Resolver,
+) cf.ReusableAccessPolicyParams {
+	logger := log.FromContext(ctx)
 	params := cf.ReusableAccessPolicyParams{
 		Name:                         policyName,
 		Decision:                     policy.Spec.Decision,
 		Precedence:                   policy.Spec.Precedence,
-		Include:                      convertRulesToCF(policy.Spec.Include),
-		Exclude:                      convertRulesToCF(policy.Spec.Exclude),
-		Require:                      convertRulesToCF(policy.Spec.Require),
+		Include:                      r.convertRulesToCF(ctx, logger, resolver, policy.Spec.Include),
+		Exclude:                      r.convertRulesToCF(ctx, logger, resolver, policy.Spec.Exclude),
+		Require:                      r.convertRulesToCF(ctx, logger, resolver, policy.Spec.Require),
 		IsolationRequired:            policy.Spec.IsolationRequired,
 		PurposeJustificationRequired: policy.Spec.PurposeJustificationRequired,
 		PurposeJustificationPrompt:   policy.Spec.PurposeJustificationPrompt,
@@ -258,7 +269,14 @@ func (r *Reconciler) buildParams(policy *networkingv1alpha2.AccessPolicy, policy
 }
 
 // convertRulesToCF converts AccessGroupRule slice to cf.AccessGroupRuleParams slice.
-func convertRulesToCF(rules []networkingv1alpha2.AccessGroupRule) []cf.AccessGroupRuleParams {
+//
+//nolint:revive // cognitive complexity is acceptable for this linear conversion logic
+func (r *Reconciler) convertRulesToCF(
+	ctx context.Context,
+	logger logr.Logger,
+	resolver *refs.Resolver,
+	rules []networkingv1alpha2.AccessGroupRule,
+) []cf.AccessGroupRuleParams {
 	if len(rules) == 0 {
 		return nil
 	}
@@ -307,56 +325,64 @@ func convertRulesToCF(rules []networkingv1alpha2.AccessGroupRule) []cf.AccessGro
 			cfRule.DevicePosture = &cf.AccessGroupDevicePostureRuleParams{IntegrationUID: rule.DevicePosture.IntegrationUID}
 		}
 		if rule.GSuite != nil {
+			idpID := r.resolveIdpRef(ctx, logger, resolver, rule.GSuite.IdpRef)
 			cfRule.GSuite = &cf.AccessGroupGSuiteRuleParams{
 				Email:              rule.GSuite.Email,
-				IdentityProviderID: rule.GSuite.IdentityProviderID,
+				IdentityProviderID: idpID,
 			}
 		}
 		if rule.GitHub != nil {
+			idpID := r.resolveIdpRef(ctx, logger, resolver, rule.GitHub.IdpRef)
 			cfRule.GitHub = &cf.AccessGroupGitHubRuleParams{
 				Name:               rule.GitHub.Name,
 				Teams:              rule.GitHub.Teams,
-				IdentityProviderID: rule.GitHub.IdentityProviderID,
+				IdentityProviderID: idpID,
 			}
 		}
 		if rule.Azure != nil {
+			idpID := r.resolveIdpRef(ctx, logger, resolver, rule.Azure.IdpRef)
 			cfRule.Azure = &cf.AccessGroupAzureRuleParams{
 				ID:                 rule.Azure.ID,
-				IdentityProviderID: rule.Azure.IdentityProviderID,
+				IdentityProviderID: idpID,
 			}
 		}
 		if rule.Okta != nil {
+			idpID := r.resolveIdpRef(ctx, logger, resolver, rule.Okta.IdpRef)
 			cfRule.Okta = &cf.AccessGroupOktaRuleParams{
 				Name:               rule.Okta.Name,
-				IdentityProviderID: rule.Okta.IdentityProviderID,
+				IdentityProviderID: idpID,
 			}
 		}
 		if rule.OIDC != nil {
+			idpID := r.resolveIdpRef(ctx, logger, resolver, rule.OIDC.IdpRef)
 			cfRule.OIDC = &cf.AccessGroupOIDCRuleParams{
 				ClaimName:          rule.OIDC.ClaimName,
 				ClaimValue:         rule.OIDC.ClaimValue,
-				IdentityProviderID: rule.OIDC.IdentityProviderID,
+				IdentityProviderID: idpID,
 			}
 		}
 		if rule.SAML != nil {
+			idpID := r.resolveIdpRef(ctx, logger, resolver, rule.SAML.IdpRef)
 			cfRule.SAML = &cf.AccessGroupSAMLRuleParams{
 				AttributeName:      rule.SAML.AttributeName,
 				AttributeValue:     rule.SAML.AttributeValue,
-				IdentityProviderID: rule.SAML.IdentityProviderID,
+				IdentityProviderID: idpID,
 			}
 		}
 		if rule.AuthMethod != nil {
 			cfRule.AuthMethod = &cf.AccessGroupAuthMethodRuleParams{AuthMethod: rule.AuthMethod.AuthMethod}
 		}
 		if rule.AuthContext != nil {
+			idpID := r.resolveIdpRef(ctx, logger, resolver, rule.AuthContext.IdpRef)
 			cfRule.AuthContext = &cf.AccessGroupAuthContextRuleParams{
 				ID:                 rule.AuthContext.ID,
 				AcID:               rule.AuthContext.AcID,
-				IdentityProviderID: rule.AuthContext.IdentityProviderID,
+				IdentityProviderID: idpID,
 			}
 		}
 		if rule.LoginMethod != nil {
-			cfRule.LoginMethod = &cf.AccessGroupLoginMethodRuleParams{ID: rule.LoginMethod.ID}
+			idpID := r.resolveIdpRef(ctx, logger, resolver, rule.LoginMethod.IdpRef)
+			cfRule.LoginMethod = &cf.AccessGroupLoginMethodRuleParams{ID: idpID}
 		}
 		if rule.ExternalEvaluation != nil {
 			cfRule.ExternalEvaluation = &cf.AccessGroupExternalEvaluationRuleParams{
@@ -369,6 +395,24 @@ func convertRulesToCF(rules []networkingv1alpha2.AccessGroupRule) []cf.AccessGro
 	}
 
 	return result
+}
+
+// resolveIdpRef resolves an IdpRef to a Cloudflare IdP ID.
+func (*Reconciler) resolveIdpRef(
+	ctx context.Context,
+	logger logr.Logger,
+	resolver *refs.Resolver,
+	idpRef *networkingv1alpha2.AccessIdentityProviderRefV2,
+) string {
+	if idpRef == nil {
+		return ""
+	}
+	id, err := resolver.ResolveIdentityProvider(ctx, idpRef)
+	if err != nil {
+		logger.Error(err, "Failed to resolve IdP reference", "ref", idpRef)
+		return ""
+	}
+	return id
 }
 
 func (r *Reconciler) updateStatusError(

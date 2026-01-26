@@ -291,9 +291,9 @@ func TestAccessGroupTypes(t *testing.T) {
 	t.Run("AccessGroupRule GitHub", func(t *testing.T) {
 		rule := AccessGroupRule{
 			GitHub: &AccessGroupGitHubRule{
-				Name:               "my-org",
-				Teams:              []string{"team-a", "team-b"},
-				IdentityProviderID: "idp-github",
+				Name:   "my-org",
+				Teams:  []string{"team-a", "team-b"},
+				IdpRef: &AccessIdentityProviderRefV2{CloudflareID: "idp-github"},
 			},
 		}
 		require.NotNil(t, rule.GitHub)
@@ -304,8 +304,8 @@ func TestAccessGroupTypes(t *testing.T) {
 	t.Run("AccessGroupRule Azure AD", func(t *testing.T) {
 		rule := AccessGroupRule{
 			Azure: &AccessGroupAzureRule{
-				ID:                 "azure-group-id",
-				IdentityProviderID: "idp-azure",
+				ID:     "azure-group-id",
+				IdpRef: &AccessIdentityProviderRefV2{CloudflareID: "idp-azure"},
 			},
 		}
 		require.NotNil(t, rule.Azure)
@@ -315,9 +315,9 @@ func TestAccessGroupTypes(t *testing.T) {
 	t.Run("AccessGroupRule SAML", func(t *testing.T) {
 		rule := AccessGroupRule{
 			SAML: &AccessGroupSAMLRule{
-				AttributeName:      "department",
-				AttributeValue:     "engineering",
-				IdentityProviderID: "idp-saml",
+				AttributeName:  "department",
+				AttributeValue: "engineering",
+				IdpRef:         &AccessIdentityProviderRefV2{CloudflareID: "idp-saml"},
 			},
 		}
 		require.NotNil(t, rule.SAML)

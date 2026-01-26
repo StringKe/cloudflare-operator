@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-01-27
+
+### Breaking Changes
+- **AccessApplication**: Remove `allowedIdpRefs` field, use `identityProviderRefs` instead
+- **AccessApplication**: Remove `destinations[].vnetId` field, use `destinations[].vnetRef` instead
+- **AccessGroup**: Remove `identityProviderId` from all rule types (GSuite, GitHub, Azure, Okta, OIDC, SAML, AuthContext, LoginMethod), use `idpRef` instead
+- **AccessServiceToken**: Remove `secretRef.namespace` field, Secret is automatically created in the resource namespace
+
+### Added
+- **PagesDomain**: Implement `autoConfigureDNS` feature for automatic CNAME record creation
+- **PagesDomain**: Extract and expose `validationMethod` and `validationStatus` in Status
+
+### Fixed
+- **PagesDomain**: Fix API type conversion to properly extract validation data from Cloudflare response
+
 ## [0.27.6] - 2026-01-20
 
 ### Changed

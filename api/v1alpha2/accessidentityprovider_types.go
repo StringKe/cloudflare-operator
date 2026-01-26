@@ -89,12 +89,6 @@ type IdentityProviderConfig struct {
 	// +kubebuilder:validation:Optional
 	IdPPublicCert string `json:"idpPublicCert,omitempty"`
 
-	// IdPPublicCerts are the IdP's public certificates for SAML (multiple certs).
-	//
-	// Deprecated: Use IdPPublicCert instead.
-	// +kubebuilder:validation:Optional
-	IdPPublicCerts []string `json:"idpPublicCerts,omitempty"`
-
 	// IssuerURL is the OIDC issuer URL.
 	// +kubebuilder:validation:Optional
 	IssuerURL string `json:"issuerUrl,omitempty"`

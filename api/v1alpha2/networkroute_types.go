@@ -51,13 +51,6 @@ type TunnelRef struct {
 	Namespace string `json:"namespace,omitempty"`
 }
 
-// VirtualNetworkRef references a VirtualNetwork resource.
-type VirtualNetworkRef struct {
-	// Name is the name of the VirtualNetwork resource.
-	// +kubebuilder:validation:Required
-	Name string `json:"name"`
-}
-
 // NetworkRouteStatus defines the observed state of NetworkRoute
 type NetworkRouteStatus struct {
 	// Network is the CIDR from the route in Cloudflare.

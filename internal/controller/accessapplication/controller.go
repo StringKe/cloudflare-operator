@@ -31,6 +31,7 @@ import (
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
 	"github.com/StringKe/cloudflare-operator/internal/controller/common"
+	"github.com/StringKe/cloudflare-operator/internal/controller/refs"
 )
 
 const (
@@ -78,10 +79,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	// Get API client
+	// Get API client - use resource namespace for credentials resolution
 	apiResult, err := r.APIFactory.GetClient(ctx, common.APIClientOptions{
 		CloudflareDetails: &app.Spec.Cloudflare,
-		Namespace:         controller.OperatorNamespace, // AccessApplication is cluster-scoped
+		Namespace:         app.Namespace, // AccessApplication is now namespaced
 		StatusAccountID:   app.Status.AccountID,
 	})
 	if err != nil {
@@ -103,10 +104,10 @@ func (r *Reconciler) handleDeletion(
 		return common.NoRequeue(), nil
 	}
 
-	// Get API client for deletion
+	// Get API client for deletion - use resource namespace for credentials resolution
 	apiResult, err := r.APIFactory.GetClient(ctx, common.APIClientOptions{
 		CloudflareDetails: &app.Spec.Cloudflare,
-		Namespace:         controller.OperatorNamespace,
+		Namespace:         app.Namespace, // AccessApplication is now namespaced
 		StatusAccountID:   app.Status.AccountID,
 	})
 	if err != nil {
@@ -153,7 +154,7 @@ func (r *Reconciler) reconcileApplication(
 	appName := app.GetAccessApplicationName()
 
 	// Resolve IdP references
-	allowedIdps := r.resolveAllowedIdps(ctx, logger, app)
+	allowedIdps := r.resolveAllowedIdps(ctx, logger, app, apiResult.API)
 
 	// Resolve reusable policies
 	policyIDs, err := r.resolvePolicies(ctx, logger, app, apiResult.API)
@@ -165,7 +166,7 @@ func (r *Reconciler) reconcileApplication(
 	}
 
 	// Build API parameters
-	params := r.buildAPIParams(app, appName, allowedIdps, policyIDs)
+	params := r.buildAPIParams(ctx, app, appName, allowedIdps, policyIDs, apiResult.API)
 
 	// Check if application exists
 	var result *cf.AccessApplicationResult
@@ -303,36 +304,43 @@ func (r *Reconciler) resolvePolicyRef(
 	return "", errors.New("invalid ReusablePolicyRef: must specify name, cloudflareId, or cloudflareName")
 }
 
-// resolveAllowedIdps resolves the allowed IdP IDs from both direct IDs and references.
+// resolveAllowedIdps resolves the allowed IdP IDs from direct IDs and refs.
+// Uses the unified Resolver for consistent resolution across all reference types.
 func (r *Reconciler) resolveAllowedIdps(
 	ctx context.Context,
 	logger logr.Logger,
 	app *networkingv1alpha2.AccessApplication,
+	api *cf.API,
 ) []string {
-	allowedIdps := make([]string, 0, len(app.Spec.AllowedIdps)+len(app.Spec.AllowedIdpRefs))
-	allowedIdps = append(allowedIdps, app.Spec.AllowedIdps...)
+	resolver := refs.NewResolver(r.Client, api)
 
-	for _, ref := range app.Spec.AllowedIdpRefs {
-		idp := &networkingv1alpha2.AccessIdentityProvider{}
-		if err := r.Get(ctx, apitypes.NamespacedName{Name: ref.Name}, idp); err != nil {
-			logger.Error(err, "Failed to get AccessIdentityProvider", "name", ref.Name)
-			continue
-		}
-		if idp.Status.ProviderID != "" {
-			allowedIdps = append(allowedIdps, idp.Status.ProviderID)
-		}
+	// Use the unified resolution method
+	result, errs := resolver.ResolveAllIdentityProviders(
+		ctx,
+		app.Spec.AllowedIdps,
+		app.Spec.IdentityProviderRefs,
+	)
+
+	// Log any resolution errors
+	for _, err := range errs {
+		logger.Error(err, "Failed to resolve IdP reference")
 	}
 
-	return allowedIdps
+	return result
 }
 
 // buildAPIParams builds the Cloudflare API parameters from the spec.
+// It resolves VnetRef references in destinations using the provided API client.
 func (r *Reconciler) buildAPIParams(
+	ctx context.Context,
 	app *networkingv1alpha2.AccessApplication,
 	appName string,
 	allowedIdps []string,
 	policyIDs []string,
+	api *cf.API,
 ) cf.AccessApplicationParams {
+	logger := ctrllog.FromContext(ctx)
+	resolver := refs.NewResolver(r.Client, api)
 	params := cf.AccessApplicationParams{
 		Name:                     appName,
 		Domain:                   app.Spec.Domain,
@@ -362,10 +370,22 @@ func (r *Reconciler) buildAPIParams(
 		Policies:                 policyIDs,
 	}
 
-	// Convert destinations
+	// Convert destinations with VnetRef resolution
 	if len(app.Spec.Destinations) > 0 {
 		params.Destinations = make([]cf.AccessDestinationParams, len(app.Spec.Destinations))
 		for i, dest := range app.Spec.Destinations {
+			var vnetID string
+
+			// Resolve VnetRef if specified
+			if dest.VnetRef != nil {
+				resolvedVnetID, err := resolver.ResolveVirtualNetwork(ctx, dest.VnetRef)
+				if err != nil {
+					logger.Error(err, "Failed to resolve VnetRef for destination", "index", i)
+				} else {
+					vnetID = resolvedVnetID
+				}
+			}
+
 			params.Destinations[i] = cf.AccessDestinationParams{
 				Type:       dest.Type,
 				URI:        dest.URI,
@@ -373,7 +393,7 @@ func (r *Reconciler) buildAPIParams(
 				CIDR:       dest.CIDR,
 				PortRange:  dest.PortRange,
 				L4Protocol: dest.L4Protocol,
-				VnetID:     dest.VnetID,
+				VnetID:     vnetID,
 			}
 		}
 	}
@@ -644,7 +664,8 @@ func (r *Reconciler) setErrorStatus(
 
 // appReferencesIDP checks if an AccessApplication references the given AccessIdentityProvider.
 func appReferencesIDP(app *networkingv1alpha2.AccessApplication, idpName string) bool {
-	for _, ref := range app.Spec.AllowedIdpRefs {
+	// Check IdentityProviderRefs
+	for _, ref := range app.Spec.IdentityProviderRefs {
 		if ref.Name == idpName {
 			return true
 		}
@@ -692,7 +713,10 @@ func (r *Reconciler) findAccessApplicationsForIdentityProvider(ctx context.Conte
 		app := &appList.Items[i]
 		if appReferencesIDP(app, idp.Name) {
 			requests = append(requests, reconcile.Request{
-				NamespacedName: apitypes.NamespacedName{Name: app.Name},
+				NamespacedName: apitypes.NamespacedName{
+					Name:      app.Name,
+					Namespace: app.Namespace,
+				},
 			})
 		}
 	}
@@ -720,7 +744,7 @@ func (r *Reconciler) findAccessApplicationsForAccessGroup(ctx context.Context, o
 		app := &appList.Items[i]
 		if appReferencesAccessGroup(app, accessGroup.Name) {
 			requests = append(requests, reconcile.Request{
-				NamespacedName: apitypes.NamespacedName{Name: app.Name},
+				NamespacedName: apitypes.NamespacedName{Name: app.Name, Namespace: app.Namespace},
 			})
 		}
 	}
@@ -748,7 +772,7 @@ func (r *Reconciler) findAccessApplicationsForAccessPolicy(ctx context.Context, 
 		app := &appList.Items[i]
 		if appReferencesAccessPolicy(app, policy.Name) {
 			requests = append(requests, reconcile.Request{
-				NamespacedName: apitypes.NamespacedName{Name: app.Name},
+				NamespacedName: apitypes.NamespacedName{Name: app.Name, Namespace: app.Namespace},
 			})
 		}
 	}
@@ -791,7 +815,7 @@ func (r *Reconciler) findAccessApplicationsForIngress(ctx context.Context, obj c
 		if domainMatchesHosts(app.Spec.Domain, hosts) ||
 			anyDomainMatchesHosts(app.Spec.SelfHostedDomains, hosts) {
 			requests = append(requests, reconcile.Request{
-				NamespacedName: apitypes.NamespacedName{Name: app.Name},
+				NamespacedName: apitypes.NamespacedName{Name: app.Name, Namespace: app.Namespace},
 			})
 		}
 	}
@@ -814,7 +838,7 @@ func (r *Reconciler) findAccessApplicationsForTunnel(ctx context.Context, obj cl
 		app := &appList.Items[i]
 		if app.Status.State != StateActive {
 			requests = append(requests, reconcile.Request{
-				NamespacedName: apitypes.NamespacedName{Name: app.Name},
+				NamespacedName: apitypes.NamespacedName{Name: app.Name, Namespace: app.Namespace},
 			})
 		}
 	}

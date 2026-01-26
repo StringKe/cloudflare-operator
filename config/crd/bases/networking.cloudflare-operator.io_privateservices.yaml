@@ -191,12 +191,30 @@ spec:
                   VirtualNetworkRef references the VirtualNetwork for this private service.
                   If not specified, the default Virtual Network will be used.
                 properties:
-                  name:
-                    description: Name is the name of the VirtualNetwork resource.
+                  cloudflareId:
+                    description: |-
+                      CloudflareID is the Cloudflare VNet UUID.
+                      Use this to directly reference a Cloudflare-managed VNet
+                      without creating a corresponding K8s VirtualNetwork resource.
                     type: string
-                required:
-                - name
+                  cloudflareName:
+                    description: |-
+                      CloudflareName is the display name of the VNet in Cloudflare.
+                      The controller will resolve this name to an ID via the Cloudflare API.
+                    maxLength: 255
+                    type: string
+                  name:
+                    description: |-
+                      Name is the K8s VirtualNetwork resource name.
+                      The controller will look up the CRD and use its status.virtualNetworkId.
+                    maxLength: 253
+                    type: string
                 type: object
+                x-kubernetes-validations:
+                - message: exactly one of name, cloudflareId, or cloudflareName must
+                    be set
+                  rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId) ? 1 :
+                    0) + (has(self.cloudflareName) ? 1 : 0) == 1'
             required:
             - cloudflare
             - serviceRef

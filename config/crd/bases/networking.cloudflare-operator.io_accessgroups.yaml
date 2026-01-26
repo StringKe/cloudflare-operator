@@ -140,14 +140,41 @@ spec:
                         id:
                           description: ID is the Azure Authentication Context ID.
                           type: string
-                        identityProviderId:
-                          description: IdentityProviderID is the Cloudflare ID of
-                            the Azure identity provider.
-                          type: string
+                        idpRef:
+                          description: |-
+                            IdpRef references an AccessIdentityProvider with flexible reference modes.
+                            Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+                          properties:
+                            cloudflareId:
+                              description: |-
+                                CloudflareID is the Cloudflare IdP UUID.
+                                Use this to directly reference a Cloudflare-managed IdP
+                                without creating a corresponding K8s AccessIdentityProvider resource.
+                              pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                              type: string
+                            cloudflareName:
+                              description: |-
+                                CloudflareName is the display name of the IdP in Cloudflare.
+                                The controller will resolve this name to an ID via the Cloudflare API.
+                                Use this when you want to reference an IdP by name
+                                (e.g., IdPs created via Terraform or the Cloudflare dashboard).
+                              maxLength: 255
+                              type: string
+                            name:
+                              description: |-
+                                Name is the K8s AccessIdentityProvider resource name.
+                                The controller will look up the CRD and use its status.providerID.
+                              maxLength: 253
+                              type: string
+                          type: object
+                          x-kubernetes-validations:
+                          - message: exactly one of name, cloudflareId, or cloudflareName
+                              must be set
+                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
+                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - acId
                       - id
-                      - identityProviderId
                       type: object
                     authMethod:
                       description: AuthMethod enforces different MFA options.
@@ -164,11 +191,40 @@ spec:
                       properties:
                         id:
                           type: string
-                        identityProviderId:
-                          type: string
+                        idpRef:
+                          description: |-
+                            IdpRef references an AccessIdentityProvider with flexible reference modes.
+                            Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+                          properties:
+                            cloudflareId:
+                              description: |-
+                                CloudflareID is the Cloudflare IdP UUID.
+                                Use this to directly reference a Cloudflare-managed IdP
+                                without creating a corresponding K8s AccessIdentityProvider resource.
+                              pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                              type: string
+                            cloudflareName:
+                              description: |-
+                                CloudflareName is the display name of the IdP in Cloudflare.
+                                The controller will resolve this name to an ID via the Cloudflare API.
+                                Use this when you want to reference an IdP by name
+                                (e.g., IdPs created via Terraform or the Cloudflare dashboard).
+                              maxLength: 255
+                              type: string
+                            name:
+                              description: |-
+                                Name is the K8s AccessIdentityProvider resource name.
+                                The controller will look up the CRD and use its status.providerID.
+                              maxLength: 253
+                              type: string
+                          type: object
+                          x-kubernetes-validations:
+                          - message: exactly one of name, cloudflareId, or cloudflareName
+                              must be set
+                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
+                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - id
-                      - identityProviderId
                       type: object
                     certificate:
                       description: Certificate matches requests with a valid mTLS
@@ -245,8 +301,38 @@ spec:
                     github:
                       description: GitHub matches users from GitHub organizations.
                       properties:
-                        identityProviderId:
-                          type: string
+                        idpRef:
+                          description: |-
+                            IdpRef references an AccessIdentityProvider with flexible reference modes.
+                            Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+                          properties:
+                            cloudflareId:
+                              description: |-
+                                CloudflareID is the Cloudflare IdP UUID.
+                                Use this to directly reference a Cloudflare-managed IdP
+                                without creating a corresponding K8s AccessIdentityProvider resource.
+                              pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                              type: string
+                            cloudflareName:
+                              description: |-
+                                CloudflareName is the display name of the IdP in Cloudflare.
+                                The controller will resolve this name to an ID via the Cloudflare API.
+                                Use this when you want to reference an IdP by name
+                                (e.g., IdPs created via Terraform or the Cloudflare dashboard).
+                              maxLength: 255
+                              type: string
+                            name:
+                              description: |-
+                                Name is the K8s AccessIdentityProvider resource name.
+                                The controller will look up the CRD and use its status.providerID.
+                              maxLength: 253
+                              type: string
+                          type: object
+                          x-kubernetes-validations:
+                          - message: exactly one of name, cloudflareId, or cloudflareName
+                              must be set
+                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
+                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                         name:
                           type: string
                         teams:
@@ -254,7 +340,6 @@ spec:
                             type: string
                           type: array
                       required:
-                      - identityProviderId
                       - name
                       type: object
                     group:
@@ -270,11 +355,40 @@ spec:
                       properties:
                         email:
                           type: string
-                        identityProviderId:
-                          type: string
+                        idpRef:
+                          description: |-
+                            IdpRef references an AccessIdentityProvider with flexible reference modes.
+                            Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+                          properties:
+                            cloudflareId:
+                              description: |-
+                                CloudflareID is the Cloudflare IdP UUID.
+                                Use this to directly reference a Cloudflare-managed IdP
+                                without creating a corresponding K8s AccessIdentityProvider resource.
+                              pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                              type: string
+                            cloudflareName:
+                              description: |-
+                                CloudflareName is the display name of the IdP in Cloudflare.
+                                The controller will resolve this name to an ID via the Cloudflare API.
+                                Use this when you want to reference an IdP by name
+                                (e.g., IdPs created via Terraform or the Cloudflare dashboard).
+                              maxLength: 255
+                              type: string
+                            name:
+                              description: |-
+                                Name is the K8s AccessIdentityProvider resource name.
+                                The controller will look up the CRD and use its status.providerID.
+                              maxLength: 253
+                              type: string
+                          type: object
+                          x-kubernetes-validations:
+                          - message: exactly one of name, cloudflareId, or cloudflareName
+                              must be set
+                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
+                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - email
-                      - identityProviderId
                       type: object
                     ipList:
                       description: IPList matches users from a predefined IP list.
@@ -298,11 +412,38 @@ spec:
                     loginMethod:
                       description: LoginMethod matches a specific identity provider.
                       properties:
-                        id:
-                          description: ID is the Cloudflare ID of the identity provider.
-                          type: string
-                      required:
-                      - id
+                        idpRef:
+                          description: |-
+                            IdpRef references an AccessIdentityProvider with flexible reference modes.
+                            Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+                          properties:
+                            cloudflareId:
+                              description: |-
+                                CloudflareID is the Cloudflare IdP UUID.
+                                Use this to directly reference a Cloudflare-managed IdP
+                                without creating a corresponding K8s AccessIdentityProvider resource.
+                              pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                              type: string
+                            cloudflareName:
+                              description: |-
+                                CloudflareName is the display name of the IdP in Cloudflare.
+                                The controller will resolve this name to an ID via the Cloudflare API.
+                                Use this when you want to reference an IdP by name
+                                (e.g., IdPs created via Terraform or the Cloudflare dashboard).
+                              maxLength: 255
+                              type: string
+                            name:
+                              description: |-
+                                Name is the K8s AccessIdentityProvider resource name.
+                                The controller will look up the CRD and use its status.providerID.
+                              maxLength: 253
+                              type: string
+                          type: object
+                          x-kubernetes-validations:
+                          - message: exactly one of name, cloudflareId, or cloudflareName
+                              must be set
+                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
+                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       type: object
                     oidc:
                       description: OIDC matches users based on OIDC claims.
@@ -311,25 +452,81 @@ spec:
                           type: string
                         claimValue:
                           type: string
-                        identityProviderId:
-                          type: string
+                        idpRef:
+                          description: |-
+                            IdpRef references an AccessIdentityProvider with flexible reference modes.
+                            Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+                          properties:
+                            cloudflareId:
+                              description: |-
+                                CloudflareID is the Cloudflare IdP UUID.
+                                Use this to directly reference a Cloudflare-managed IdP
+                                without creating a corresponding K8s AccessIdentityProvider resource.
+                              pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                              type: string
+                            cloudflareName:
+                              description: |-
+                                CloudflareName is the display name of the IdP in Cloudflare.
+                                The controller will resolve this name to an ID via the Cloudflare API.
+                                Use this when you want to reference an IdP by name
+                                (e.g., IdPs created via Terraform or the Cloudflare dashboard).
+                              maxLength: 255
+                              type: string
+                            name:
+                              description: |-
+                                Name is the K8s AccessIdentityProvider resource name.
+                                The controller will look up the CRD and use its status.providerID.
+                              maxLength: 253
+                              type: string
+                          type: object
+                          x-kubernetes-validations:
+                          - message: exactly one of name, cloudflareId, or cloudflareName
+                              must be set
+                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
+                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - claimName
                       - claimValue
-                      - identityProviderId
                       type: object
                     okta:
                       description: Okta matches users from Okta groups.
                       properties:
-                        identityProviderId:
-                          description: IdentityProviderID is the Cloudflare ID of
-                            the Okta identity provider.
-                          type: string
+                        idpRef:
+                          description: |-
+                            IdpRef references an AccessIdentityProvider with flexible reference modes.
+                            Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+                          properties:
+                            cloudflareId:
+                              description: |-
+                                CloudflareID is the Cloudflare IdP UUID.
+                                Use this to directly reference a Cloudflare-managed IdP
+                                without creating a corresponding K8s AccessIdentityProvider resource.
+                              pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                              type: string
+                            cloudflareName:
+                              description: |-
+                                CloudflareName is the display name of the IdP in Cloudflare.
+                                The controller will resolve this name to an ID via the Cloudflare API.
+                                Use this when you want to reference an IdP by name
+                                (e.g., IdPs created via Terraform or the Cloudflare dashboard).
+                              maxLength: 255
+                              type: string
+                            name:
+                              description: |-
+                                Name is the K8s AccessIdentityProvider resource name.
+                                The controller will look up the CRD and use its status.providerID.
+                              maxLength: 253
+                              type: string
+                          type: object
+                          x-kubernetes-validations:
+                          - message: exactly one of name, cloudflareId, or cloudflareName
+                              must be set
+                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
+                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                         name:
                           description: Name is the Okta group name.
                           type: string
                       required:
-                      - identityProviderId
                       - name
                       type: object
                     saml:
@@ -339,12 +536,41 @@ spec:
                           type: string
                         attributeValue:
                           type: string
-                        identityProviderId:
-                          type: string
+                        idpRef:
+                          description: |-
+                            IdpRef references an AccessIdentityProvider with flexible reference modes.
+                            Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+                          properties:
+                            cloudflareId:
+                              description: |-
+                                CloudflareID is the Cloudflare IdP UUID.
+                                Use this to directly reference a Cloudflare-managed IdP
+                                without creating a corresponding K8s AccessIdentityProvider resource.
+                              pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                              type: string
+                            cloudflareName:
+                              description: |-
+                                CloudflareName is the display name of the IdP in Cloudflare.
+                                The controller will resolve this name to an ID via the Cloudflare API.
+                                Use this when you want to reference an IdP by name
+                                (e.g., IdPs created via Terraform or the Cloudflare dashboard).
+                              maxLength: 255
+                              type: string
+                            name:
+                              description: |-
+                                Name is the K8s AccessIdentityProvider resource name.
+                                The controller will look up the CRD and use its status.providerID.
+                              maxLength: 253
+                              type: string
+                          type: object
+                          x-kubernetes-validations:
+                          - message: exactly one of name, cloudflareId, or cloudflareName
+                              must be set
+                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
+                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - attributeName
                       - attributeValue
-                      - identityProviderId
                       type: object
                     serviceToken:
                       description: ServiceToken matches requests with a specific service
@@ -378,14 +604,41 @@ spec:
                         id:
                           description: ID is the Azure Authentication Context ID.
                           type: string
-                        identityProviderId:
-                          description: IdentityProviderID is the Cloudflare ID of
-                            the Azure identity provider.
-                          type: string
+                        idpRef:
+                          description: |-
+                            IdpRef references an AccessIdentityProvider with flexible reference modes.
+                            Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+                          properties:
+                            cloudflareId:
+                              description: |-
+                                CloudflareID is the Cloudflare IdP UUID.
+                                Use this to directly reference a Cloudflare-managed IdP
+                                without creating a corresponding K8s AccessIdentityProvider resource.
+                              pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                              type: string
+                            cloudflareName:
+                              description: |-
+                                CloudflareName is the display name of the IdP in Cloudflare.
+                                The controller will resolve this name to an ID via the Cloudflare API.
+                                Use this when you want to reference an IdP by name
+                                (e.g., IdPs created via Terraform or the Cloudflare dashboard).
+                              maxLength: 255
+                              type: string
+                            name:
+                              description: |-
+                                Name is the K8s AccessIdentityProvider resource name.
+                                The controller will look up the CRD and use its status.providerID.
+                              maxLength: 253
+                              type: string
+                          type: object
+                          x-kubernetes-validations:
+                          - message: exactly one of name, cloudflareId, or cloudflareName
+                              must be set
+                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
+                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - acId
                       - id
-                      - identityProviderId
                       type: object
                     authMethod:
                       description: AuthMethod enforces different MFA options.
@@ -402,11 +655,40 @@ spec:
                       properties:
                         id:
                           type: string
-                        identityProviderId:
-                          type: string
+                        idpRef:
+                          description: |-
+                            IdpRef references an AccessIdentityProvider with flexible reference modes.
+                            Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+                          properties:
+                            cloudflareId:
+                              description: |-
+                                CloudflareID is the Cloudflare IdP UUID.
+                                Use this to directly reference a Cloudflare-managed IdP
+                                without creating a corresponding K8s AccessIdentityProvider resource.
+                              pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                              type: string
+                            cloudflareName:
+                              description: |-
+                                CloudflareName is the display name of the IdP in Cloudflare.
+                                The controller will resolve this name to an ID via the Cloudflare API.
+                                Use this when you want to reference an IdP by name
+                                (e.g., IdPs created via Terraform or the Cloudflare dashboard).
+                              maxLength: 255
+                              type: string
+                            name:
+                              description: |-
+                                Name is the K8s AccessIdentityProvider resource name.
+                                The controller will look up the CRD and use its status.providerID.
+                              maxLength: 253
+                              type: string
+                          type: object
+                          x-kubernetes-validations:
+                          - message: exactly one of name, cloudflareId, or cloudflareName
+                              must be set
+                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
+                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - id
-                      - identityProviderId
                       type: object
                     certificate:
                       description: Certificate matches requests with a valid mTLS
@@ -483,8 +765,38 @@ spec:
                     github:
                       description: GitHub matches users from GitHub organizations.
                       properties:
-                        identityProviderId:
-                          type: string
+                        idpRef:
+                          description: |-
+                            IdpRef references an AccessIdentityProvider with flexible reference modes.
+                            Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+                          properties:
+                            cloudflareId:
+                              description: |-
+                                CloudflareID is the Cloudflare IdP UUID.
+                                Use this to directly reference a Cloudflare-managed IdP
+                                without creating a corresponding K8s AccessIdentityProvider resource.
+                              pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                              type: string
+                            cloudflareName:
+                              description: |-
+                                CloudflareName is the display name of the IdP in Cloudflare.
+                                The controller will resolve this name to an ID via the Cloudflare API.
+                                Use this when you want to reference an IdP by name
+                                (e.g., IdPs created via Terraform or the Cloudflare dashboard).
+                              maxLength: 255
+                              type: string
+                            name:
+                              description: |-
+                                Name is the K8s AccessIdentityProvider resource name.
+                                The controller will look up the CRD and use its status.providerID.
+                              maxLength: 253
+                              type: string
+                          type: object
+                          x-kubernetes-validations:
+                          - message: exactly one of name, cloudflareId, or cloudflareName
+                              must be set
+                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
+                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                         name:
                           type: string
                         teams:
@@ -492,7 +804,6 @@ spec:
                             type: string
                           type: array
                       required:
-                      - identityProviderId
                       - name
                       type: object
                     group:
@@ -508,11 +819,40 @@ spec:
                       properties:
                         email:
                           type: string
-                        identityProviderId:
-                          type: string
+                        idpRef:
+                          description: |-
+                            IdpRef references an AccessIdentityProvider with flexible reference modes.
+                            Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+                          properties:
+                            cloudflareId:
+                              description: |-
+                                CloudflareID is the Cloudflare IdP UUID.
+                                Use this to directly reference a Cloudflare-managed IdP
+                                without creating a corresponding K8s AccessIdentityProvider resource.
+                              pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                              type: string
+                            cloudflareName:
+                              description: |-
+                                CloudflareName is the display name of the IdP in Cloudflare.
+                                The controller will resolve this name to an ID via the Cloudflare API.
+                                Use this when you want to reference an IdP by name
+                                (e.g., IdPs created via Terraform or the Cloudflare dashboard).
+                              maxLength: 255
+                              type: string
+                            name:
+                              description: |-
+                                Name is the K8s AccessIdentityProvider resource name.
+                                The controller will look up the CRD and use its status.providerID.
+                              maxLength: 253
+                              type: string
+                          type: object
+                          x-kubernetes-validations:
+                          - message: exactly one of name, cloudflareId, or cloudflareName
+                              must be set
+                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
+                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - email
-                      - identityProviderId
                       type: object
                     ipList:
                       description: IPList matches users from a predefined IP list.
@@ -536,11 +876,38 @@ spec:
                     loginMethod:
                       description: LoginMethod matches a specific identity provider.
                       properties:
-                        id:
-                          description: ID is the Cloudflare ID of the identity provider.
-                          type: string
-                      required:
-                      - id
+                        idpRef:
+                          description: |-
+                            IdpRef references an AccessIdentityProvider with flexible reference modes.
+                            Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+                          properties:
+                            cloudflareId:
+                              description: |-
+                                CloudflareID is the Cloudflare IdP UUID.
+                                Use this to directly reference a Cloudflare-managed IdP
+                                without creating a corresponding K8s AccessIdentityProvider resource.
+                              pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                              type: string
+                            cloudflareName:
+                              description: |-
+                                CloudflareName is the display name of the IdP in Cloudflare.
+                                The controller will resolve this name to an ID via the Cloudflare API.
+                                Use this when you want to reference an IdP by name
+                                (e.g., IdPs created via Terraform or the Cloudflare dashboard).
+                              maxLength: 255
+                              type: string
+                            name:
+                              description: |-
+                                Name is the K8s AccessIdentityProvider resource name.
+                                The controller will look up the CRD and use its status.providerID.
+                              maxLength: 253
+                              type: string
+                          type: object
+                          x-kubernetes-validations:
+                          - message: exactly one of name, cloudflareId, or cloudflareName
+                              must be set
+                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
+                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       type: object
                     oidc:
                       description: OIDC matches users based on OIDC claims.
@@ -549,25 +916,81 @@ spec:
                           type: string
                         claimValue:
                           type: string
-                        identityProviderId:
-                          type: string
+                        idpRef:
+                          description: |-
+                            IdpRef references an AccessIdentityProvider with flexible reference modes.
+                            Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+                          properties:
+                            cloudflareId:
+                              description: |-
+                                CloudflareID is the Cloudflare IdP UUID.
+                                Use this to directly reference a Cloudflare-managed IdP
+                                without creating a corresponding K8s AccessIdentityProvider resource.
+                              pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                              type: string
+                            cloudflareName:
+                              description: |-
+                                CloudflareName is the display name of the IdP in Cloudflare.
+                                The controller will resolve this name to an ID via the Cloudflare API.
+                                Use this when you want to reference an IdP by name
+                                (e.g., IdPs created via Terraform or the Cloudflare dashboard).
+                              maxLength: 255
+                              type: string
+                            name:
+                              description: |-
+                                Name is the K8s AccessIdentityProvider resource name.
+                                The controller will look up the CRD and use its status.providerID.
+                              maxLength: 253
+                              type: string
+                          type: object
+                          x-kubernetes-validations:
+                          - message: exactly one of name, cloudflareId, or cloudflareName
+                              must be set
+                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
+                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - claimName
                       - claimValue
-                      - identityProviderId
                       type: object
                     okta:
                       description: Okta matches users from Okta groups.
                       properties:
-                        identityProviderId:
-                          description: IdentityProviderID is the Cloudflare ID of
-                            the Okta identity provider.
-                          type: string
+                        idpRef:
+                          description: |-
+                            IdpRef references an AccessIdentityProvider with flexible reference modes.
+                            Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+                          properties:
+                            cloudflareId:
+                              description: |-
+                                CloudflareID is the Cloudflare IdP UUID.
+                                Use this to directly reference a Cloudflare-managed IdP
+                                without creating a corresponding K8s AccessIdentityProvider resource.
+                              pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                              type: string
+                            cloudflareName:
+                              description: |-
+                                CloudflareName is the display name of the IdP in Cloudflare.
+                                The controller will resolve this name to an ID via the Cloudflare API.
+                                Use this when you want to reference an IdP by name
+                                (e.g., IdPs created via Terraform or the Cloudflare dashboard).
+                              maxLength: 255
+                              type: string
+                            name:
+                              description: |-
+                                Name is the K8s AccessIdentityProvider resource name.
+                                The controller will look up the CRD and use its status.providerID.
+                              maxLength: 253
+                              type: string
+                          type: object
+                          x-kubernetes-validations:
+                          - message: exactly one of name, cloudflareId, or cloudflareName
+                              must be set
+                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
+                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                         name:
                           description: Name is the Okta group name.
                           type: string
                       required:
-                      - identityProviderId
                       - name
                       type: object
                     saml:
@@ -577,12 +1000,41 @@ spec:
                           type: string
                         attributeValue:
                           type: string
-                        identityProviderId:
-                          type: string
+                        idpRef:
+                          description: |-
+                            IdpRef references an AccessIdentityProvider with flexible reference modes.
+                            Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+                          properties:
+                            cloudflareId:
+                              description: |-
+                                CloudflareID is the Cloudflare IdP UUID.
+                                Use this to directly reference a Cloudflare-managed IdP
+                                without creating a corresponding K8s AccessIdentityProvider resource.
+                              pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                              type: string
+                            cloudflareName:
+                              description: |-
+                                CloudflareName is the display name of the IdP in Cloudflare.
+                                The controller will resolve this name to an ID via the Cloudflare API.
+                                Use this when you want to reference an IdP by name
+                                (e.g., IdPs created via Terraform or the Cloudflare dashboard).
+                              maxLength: 255
+                              type: string
+                            name:
+                              description: |-
+                                Name is the K8s AccessIdentityProvider resource name.
+                                The controller will look up the CRD and use its status.providerID.
+                              maxLength: 253
+                              type: string
+                          type: object
+                          x-kubernetes-validations:
+                          - message: exactly one of name, cloudflareId, or cloudflareName
+                              must be set
+                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
+                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - attributeName
                       - attributeValue
-                      - identityProviderId
                       type: object
                     serviceToken:
                       description: ServiceToken matches requests with a specific service
@@ -624,14 +1076,41 @@ spec:
                         id:
                           description: ID is the Azure Authentication Context ID.
                           type: string
-                        identityProviderId:
-                          description: IdentityProviderID is the Cloudflare ID of
-                            the Azure identity provider.
-                          type: string
+                        idpRef:
+                          description: |-
+                            IdpRef references an AccessIdentityProvider with flexible reference modes.
+                            Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+                          properties:
+                            cloudflareId:
+                              description: |-
+                                CloudflareID is the Cloudflare IdP UUID.
+                                Use this to directly reference a Cloudflare-managed IdP
+                                without creating a corresponding K8s AccessIdentityProvider resource.
+                              pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                              type: string
+                            cloudflareName:
+                              description: |-
+                                CloudflareName is the display name of the IdP in Cloudflare.
+                                The controller will resolve this name to an ID via the Cloudflare API.
+                                Use this when you want to reference an IdP by name
+                                (e.g., IdPs created via Terraform or the Cloudflare dashboard).
+                              maxLength: 255
+                              type: string
+                            name:
+                              description: |-
+                                Name is the K8s AccessIdentityProvider resource name.
+                                The controller will look up the CRD and use its status.providerID.
+                              maxLength: 253
+                              type: string
+                          type: object
+                          x-kubernetes-validations:
+                          - message: exactly one of name, cloudflareId, or cloudflareName
+                              must be set
+                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
+                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - acId
                       - id
-                      - identityProviderId
                       type: object
                     authMethod:
                       description: AuthMethod enforces different MFA options.
@@ -648,11 +1127,40 @@ spec:
                       properties:
                         id:
                           type: string
-                        identityProviderId:
-                          type: string
+                        idpRef:
+                          description: |-
+                            IdpRef references an AccessIdentityProvider with flexible reference modes.
+                            Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+                          properties:
+                            cloudflareId:
+                              description: |-
+                                CloudflareID is the Cloudflare IdP UUID.
+                                Use this to directly reference a Cloudflare-managed IdP
+                                without creating a corresponding K8s AccessIdentityProvider resource.
+                              pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                              type: string
+                            cloudflareName:
+                              description: |-
+                                CloudflareName is the display name of the IdP in Cloudflare.
+                                The controller will resolve this name to an ID via the Cloudflare API.
+                                Use this when you want to reference an IdP by name
+                                (e.g., IdPs created via Terraform or the Cloudflare dashboard).
+                              maxLength: 255
+                              type: string
+                            name:
+                              description: |-
+                                Name is the K8s AccessIdentityProvider resource name.
+                                The controller will look up the CRD and use its status.providerID.
+                              maxLength: 253
+                              type: string
+                          type: object
+                          x-kubernetes-validations:
+                          - message: exactly one of name, cloudflareId, or cloudflareName
+                              must be set
+                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
+                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - id
-                      - identityProviderId
                       type: object
                     certificate:
                       description: Certificate matches requests with a valid mTLS
@@ -729,8 +1237,38 @@ spec:
                     github:
                       description: GitHub matches users from GitHub organizations.
                       properties:
-                        identityProviderId:
-                          type: string
+                        idpRef:
+                          description: |-
+                            IdpRef references an AccessIdentityProvider with flexible reference modes.
+                            Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+                          properties:
+                            cloudflareId:
+                              description: |-
+                                CloudflareID is the Cloudflare IdP UUID.
+                                Use this to directly reference a Cloudflare-managed IdP
+                                without creating a corresponding K8s AccessIdentityProvider resource.
+                              pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                              type: string
+                            cloudflareName:
+                              description: |-
+                                CloudflareName is the display name of the IdP in Cloudflare.
+                                The controller will resolve this name to an ID via the Cloudflare API.
+                                Use this when you want to reference an IdP by name
+                                (e.g., IdPs created via Terraform or the Cloudflare dashboard).
+                              maxLength: 255
+                              type: string
+                            name:
+                              description: |-
+                                Name is the K8s AccessIdentityProvider resource name.
+                                The controller will look up the CRD and use its status.providerID.
+                              maxLength: 253
+                              type: string
+                          type: object
+                          x-kubernetes-validations:
+                          - message: exactly one of name, cloudflareId, or cloudflareName
+                              must be set
+                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
+                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                         name:
                           type: string
                         teams:
@@ -738,7 +1276,6 @@ spec:
                             type: string
                           type: array
                       required:
-                      - identityProviderId
                       - name
                       type: object
                     group:
@@ -754,11 +1291,40 @@ spec:
                       properties:
                         email:
                           type: string
-                        identityProviderId:
-                          type: string
+                        idpRef:
+                          description: |-
+                            IdpRef references an AccessIdentityProvider with flexible reference modes.
+                            Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+                          properties:
+                            cloudflareId:
+                              description: |-
+                                CloudflareID is the Cloudflare IdP UUID.
+                                Use this to directly reference a Cloudflare-managed IdP
+                                without creating a corresponding K8s AccessIdentityProvider resource.
+                              pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                              type: string
+                            cloudflareName:
+                              description: |-
+                                CloudflareName is the display name of the IdP in Cloudflare.
+                                The controller will resolve this name to an ID via the Cloudflare API.
+                                Use this when you want to reference an IdP by name
+                                (e.g., IdPs created via Terraform or the Cloudflare dashboard).
+                              maxLength: 255
+                              type: string
+                            name:
+                              description: |-
+                                Name is the K8s AccessIdentityProvider resource name.
+                                The controller will look up the CRD and use its status.providerID.
+                              maxLength: 253
+                              type: string
+                          type: object
+                          x-kubernetes-validations:
+                          - message: exactly one of name, cloudflareId, or cloudflareName
+                              must be set
+                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
+                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - email
-                      - identityProviderId
                       type: object
                     ipList:
                       description: IPList matches users from a predefined IP list.
@@ -782,11 +1348,38 @@ spec:
                     loginMethod:
                       description: LoginMethod matches a specific identity provider.
                       properties:
-                        id:
-                          description: ID is the Cloudflare ID of the identity provider.
-                          type: string
-                      required:
-                      - id
+                        idpRef:
+                          description: |-
+                            IdpRef references an AccessIdentityProvider with flexible reference modes.
+                            Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+                          properties:
+                            cloudflareId:
+                              description: |-
+                                CloudflareID is the Cloudflare IdP UUID.
+                                Use this to directly reference a Cloudflare-managed IdP
+                                without creating a corresponding K8s AccessIdentityProvider resource.
+                              pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                              type: string
+                            cloudflareName:
+                              description: |-
+                                CloudflareName is the display name of the IdP in Cloudflare.
+                                The controller will resolve this name to an ID via the Cloudflare API.
+                                Use this when you want to reference an IdP by name
+                                (e.g., IdPs created via Terraform or the Cloudflare dashboard).
+                              maxLength: 255
+                              type: string
+                            name:
+                              description: |-
+                                Name is the K8s AccessIdentityProvider resource name.
+                                The controller will look up the CRD and use its status.providerID.
+                              maxLength: 253
+                              type: string
+                          type: object
+                          x-kubernetes-validations:
+                          - message: exactly one of name, cloudflareId, or cloudflareName
+                              must be set
+                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
+                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       type: object
                     oidc:
                       description: OIDC matches users based on OIDC claims.
@@ -795,25 +1388,81 @@ spec:
                           type: string
                         claimValue:
                           type: string
-                        identityProviderId:
-                          type: string
+                        idpRef:
+                          description: |-
+                            IdpRef references an AccessIdentityProvider with flexible reference modes.
+                            Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+                          properties:
+                            cloudflareId:
+                              description: |-
+                                CloudflareID is the Cloudflare IdP UUID.
+                                Use this to directly reference a Cloudflare-managed IdP
+                                without creating a corresponding K8s AccessIdentityProvider resource.
+                              pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                              type: string
+                            cloudflareName:
+                              description: |-
+                                CloudflareName is the display name of the IdP in Cloudflare.
+                                The controller will resolve this name to an ID via the Cloudflare API.
+                                Use this when you want to reference an IdP by name
+                                (e.g., IdPs created via Terraform or the Cloudflare dashboard).
+                              maxLength: 255
+                              type: string
+                            name:
+                              description: |-
+                                Name is the K8s AccessIdentityProvider resource name.
+                                The controller will look up the CRD and use its status.providerID.
+                              maxLength: 253
+                              type: string
+                          type: object
+                          x-kubernetes-validations:
+                          - message: exactly one of name, cloudflareId, or cloudflareName
+                              must be set
+                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
+                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - claimName
                       - claimValue
-                      - identityProviderId
                       type: object
                     okta:
                       description: Okta matches users from Okta groups.
                       properties:
-                        identityProviderId:
-                          description: IdentityProviderID is the Cloudflare ID of
-                            the Okta identity provider.
-                          type: string
+                        idpRef:
+                          description: |-
+                            IdpRef references an AccessIdentityProvider with flexible reference modes.
+                            Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+                          properties:
+                            cloudflareId:
+                              description: |-
+                                CloudflareID is the Cloudflare IdP UUID.
+                                Use this to directly reference a Cloudflare-managed IdP
+                                without creating a corresponding K8s AccessIdentityProvider resource.
+                              pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                              type: string
+                            cloudflareName:
+                              description: |-
+                                CloudflareName is the display name of the IdP in Cloudflare.
+                                The controller will resolve this name to an ID via the Cloudflare API.
+                                Use this when you want to reference an IdP by name
+                                (e.g., IdPs created via Terraform or the Cloudflare dashboard).
+                              maxLength: 255
+                              type: string
+                            name:
+                              description: |-
+                                Name is the K8s AccessIdentityProvider resource name.
+                                The controller will look up the CRD and use its status.providerID.
+                              maxLength: 253
+                              type: string
+                          type: object
+                          x-kubernetes-validations:
+                          - message: exactly one of name, cloudflareId, or cloudflareName
+                              must be set
+                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
+                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                         name:
                           description: Name is the Okta group name.
                           type: string
                       required:
-                      - identityProviderId
                       - name
                       type: object
                     saml:
@@ -823,12 +1472,41 @@ spec:
                           type: string
                         attributeValue:
                           type: string
-                        identityProviderId:
-                          type: string
+                        idpRef:
+                          description: |-
+                            IdpRef references an AccessIdentityProvider with flexible reference modes.
+                            Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
+                          properties:
+                            cloudflareId:
+                              description: |-
+                                CloudflareID is the Cloudflare IdP UUID.
+                                Use this to directly reference a Cloudflare-managed IdP
+                                without creating a corresponding K8s AccessIdentityProvider resource.
+                              pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                              type: string
+                            cloudflareName:
+                              description: |-
+                                CloudflareName is the display name of the IdP in Cloudflare.
+                                The controller will resolve this name to an ID via the Cloudflare API.
+                                Use this when you want to reference an IdP by name
+                                (e.g., IdPs created via Terraform or the Cloudflare dashboard).
+                              maxLength: 255
+                              type: string
+                            name:
+                              description: |-
+                                Name is the K8s AccessIdentityProvider resource name.
+                                The controller will look up the CRD and use its status.providerID.
+                              maxLength: 253
+                              type: string
+                          type: object
+                          x-kubernetes-validations:
+                          - message: exactly one of name, cloudflareId, or cloudflareName
+                              must be set
+                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
+                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - attributeName
                       - attributeValue
-                      - identityProviderId
                       type: object
                     serviceToken:
                       description: ServiceToken matches requests with a specific service

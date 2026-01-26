@@ -56,9 +56,13 @@ type AccessApplicationSpec struct {
 	// +kubebuilder:validation:Optional
 	AllowedIdps []string `json:"allowedIdps,omitempty"`
 
-	// AllowedIdpRefs references AccessIdentityProvider resources by name.
+	// IdentityProviderRefs references AccessIdentityProvider resources with flexible reference modes.
+	// Each reference can be:
+	// - K8s AccessIdentityProvider name (via name field)
+	// - Cloudflare IdP UUID (via cloudflareId field)
+	// - Cloudflare IdP display name (via cloudflareName field)
 	// +kubebuilder:validation:Optional
-	AllowedIdpRefs []AccessIdentityProviderRef `json:"allowedIdpRefs,omitempty"`
+	IdentityProviderRefs []AccessIdentityProviderRefV2 `json:"identityProviderRefs,omitempty"`
 
 	// AutoRedirectToIdentity enables automatic redirect to the identity provider.
 	// +kubebuilder:validation:Optional
@@ -171,6 +175,15 @@ type AccessApplicationSpec struct {
 	// +kubebuilder:validation:Optional
 	ReusablePolicyRefs []ReusablePolicyRef `json:"reusablePolicyRefs,omitempty"`
 
+	// ReusableGroupRefs references AccessGroup resources for SCIM group inclusion rules.
+	// These groups can be used in Include rules for access control.
+	// Each reference can be:
+	// - K8s AccessGroup name (via name field)
+	// - Cloudflare Group UUID (via cloudflareId field)
+	// - Cloudflare Group display name (via cloudflareName field)
+	// +kubebuilder:validation:Optional
+	ReusableGroupRefs []ReusableGroupRef `json:"reusableGroupRefs,omitempty"`
+
 	// Cloudflare contains the Cloudflare API credentials and account information.
 	// +kubebuilder:validation:Required
 	Cloudflare CloudflareDetails `json:"cloudflare"`
@@ -239,9 +252,10 @@ type AccessDestination struct {
 	// +kubebuilder:validation:Enum=tcp;udp
 	L4Protocol string `json:"l4Protocol,omitempty"`
 
-	// VnetID is the Virtual Network ID for private destinations.
+	// VnetRef references a VirtualNetwork with flexible reference modes.
+	// Can reference by K8s name, Cloudflare UUID, or Cloudflare display name.
 	// +kubebuilder:validation:Optional
-	VnetID string `json:"vnetId,omitempty"`
+	VnetRef *VirtualNetworkRef `json:"vnetRef,omitempty"`
 }
 
 // AccessApplicationCorsHeaders represents CORS settings for an Access Application.
@@ -645,13 +659,6 @@ type AccessInfrastructureTargetContext struct {
 	Protocol string `json:"protocol"`
 }
 
-// AccessIdentityProviderRef references an AccessIdentityProvider resource.
-type AccessIdentityProviderRef struct {
-	// Name is the name of the AccessIdentityProvider resource.
-	// +kubebuilder:validation:Required
-	Name string `json:"name"`
-}
-
 // AccessPolicyRef references an access policy or defines an inline policy.
 // You can either:
 // 1. Reference an AccessGroup using name, groupId, or cloudflareGroupName (simple mode)
@@ -843,7 +850,7 @@ type AccessApplicationStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Cluster,shortName=accessapp
+// +kubebuilder:resource:scope=Namespaced,shortName=accessapp
 // +kubebuilder:printcolumn:name="Domain",type=string,JSONPath=`.spec.domain`
 // +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
 // +kubebuilder:printcolumn:name="AppID",type=string,JSONPath=`.status.applicationId`

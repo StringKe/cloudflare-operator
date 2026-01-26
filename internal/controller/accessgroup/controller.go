@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -24,6 +25,7 @@ import (
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
 	"github.com/StringKe/cloudflare-operator/internal/controller/common"
+	"github.com/StringKe/cloudflare-operator/internal/controller/refs"
 )
 
 const (
@@ -144,15 +146,18 @@ func (r *Reconciler) syncAccessGroup(
 ) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
+	// Create resolver for IdP references
+	resolver := refs.NewResolver(r.Client, apiResult.API)
+
 	// Determine group name
 	groupName := accessGroup.GetAccessGroupName()
 
-	// Build params
+	// Build params with resolved IdP references
 	params := cf.AccessGroupParams{
 		Name:      groupName,
-		Include:   convertRulesToCF(accessGroup.Spec.Include),
-		Exclude:   convertRulesToCF(accessGroup.Spec.Exclude),
-		Require:   convertRulesToCF(accessGroup.Spec.Require),
+		Include:   r.convertRulesToCF(ctx, accessGroup.Spec.Include, resolver),
+		Exclude:   r.convertRulesToCF(ctx, accessGroup.Spec.Exclude, resolver),
+		Require:   r.convertRulesToCF(ctx, accessGroup.Spec.Require, resolver),
 		IsDefault: accessGroup.Spec.IsDefault,
 	}
 
@@ -230,12 +235,21 @@ func (r *Reconciler) syncAccessGroup(
 }
 
 // convertRulesToCF converts AccessGroupRule slice to cf.AccessGroupRuleParams slice.
-func convertRulesToCF(rules []networkingv1alpha2.AccessGroupRule) []cf.AccessGroupRuleParams {
+// It resolves IdpRef references using the provided resolver.
+//
+//nolint:revive // cognitive complexity is acceptable for this conversion function
+func (r *Reconciler) convertRulesToCF(
+	ctx context.Context,
+	rules []networkingv1alpha2.AccessGroupRule,
+	resolver *refs.Resolver,
+) []cf.AccessGroupRuleParams {
 	if len(rules) == 0 {
 		return nil
 	}
 
+	logger := log.FromContext(ctx)
 	result := make([]cf.AccessGroupRuleParams, 0, len(rules))
+
 	for _, rule := range rules {
 		cfRule := cf.AccessGroupRuleParams{}
 
@@ -279,56 +293,64 @@ func convertRulesToCF(rules []networkingv1alpha2.AccessGroupRule) []cf.AccessGro
 			cfRule.DevicePosture = &cf.AccessGroupDevicePostureRuleParams{IntegrationUID: rule.DevicePosture.IntegrationUID}
 		}
 		if rule.GSuite != nil {
+			idpID := r.resolveIdpRef(ctx, logger, resolver, rule.GSuite.IdpRef)
 			cfRule.GSuite = &cf.AccessGroupGSuiteRuleParams{
 				Email:              rule.GSuite.Email,
-				IdentityProviderID: rule.GSuite.IdentityProviderID,
+				IdentityProviderID: idpID,
 			}
 		}
 		if rule.GitHub != nil {
+			idpID := r.resolveIdpRef(ctx, logger, resolver, rule.GitHub.IdpRef)
 			cfRule.GitHub = &cf.AccessGroupGitHubRuleParams{
 				Name:               rule.GitHub.Name,
 				Teams:              rule.GitHub.Teams,
-				IdentityProviderID: rule.GitHub.IdentityProviderID,
+				IdentityProviderID: idpID,
 			}
 		}
 		if rule.Azure != nil {
+			idpID := r.resolveIdpRef(ctx, logger, resolver, rule.Azure.IdpRef)
 			cfRule.Azure = &cf.AccessGroupAzureRuleParams{
 				ID:                 rule.Azure.ID,
-				IdentityProviderID: rule.Azure.IdentityProviderID,
+				IdentityProviderID: idpID,
 			}
 		}
 		if rule.Okta != nil {
+			idpID := r.resolveIdpRef(ctx, logger, resolver, rule.Okta.IdpRef)
 			cfRule.Okta = &cf.AccessGroupOktaRuleParams{
 				Name:               rule.Okta.Name,
-				IdentityProviderID: rule.Okta.IdentityProviderID,
+				IdentityProviderID: idpID,
 			}
 		}
 		if rule.OIDC != nil {
+			idpID := r.resolveIdpRef(ctx, logger, resolver, rule.OIDC.IdpRef)
 			cfRule.OIDC = &cf.AccessGroupOIDCRuleParams{
 				ClaimName:          rule.OIDC.ClaimName,
 				ClaimValue:         rule.OIDC.ClaimValue,
-				IdentityProviderID: rule.OIDC.IdentityProviderID,
+				IdentityProviderID: idpID,
 			}
 		}
 		if rule.SAML != nil {
+			idpID := r.resolveIdpRef(ctx, logger, resolver, rule.SAML.IdpRef)
 			cfRule.SAML = &cf.AccessGroupSAMLRuleParams{
 				AttributeName:      rule.SAML.AttributeName,
 				AttributeValue:     rule.SAML.AttributeValue,
-				IdentityProviderID: rule.SAML.IdentityProviderID,
+				IdentityProviderID: idpID,
 			}
 		}
 		if rule.AuthMethod != nil {
 			cfRule.AuthMethod = &cf.AccessGroupAuthMethodRuleParams{AuthMethod: rule.AuthMethod.AuthMethod}
 		}
 		if rule.AuthContext != nil {
+			idpID := r.resolveIdpRef(ctx, logger, resolver, rule.AuthContext.IdpRef)
 			cfRule.AuthContext = &cf.AccessGroupAuthContextRuleParams{
 				ID:                 rule.AuthContext.ID,
 				AcID:               rule.AuthContext.AcID,
-				IdentityProviderID: rule.AuthContext.IdentityProviderID,
+				IdentityProviderID: idpID,
 			}
 		}
 		if rule.LoginMethod != nil {
-			cfRule.LoginMethod = &cf.AccessGroupLoginMethodRuleParams{ID: rule.LoginMethod.ID}
+			idpID := r.resolveIdpRef(ctx, logger, resolver, rule.LoginMethod.IdpRef)
+			cfRule.LoginMethod = &cf.AccessGroupLoginMethodRuleParams{ID: idpID}
 		}
 		if rule.ExternalEvaluation != nil {
 			cfRule.ExternalEvaluation = &cf.AccessGroupExternalEvaluationRuleParams{
@@ -341,6 +363,24 @@ func convertRulesToCF(rules []networkingv1alpha2.AccessGroupRule) []cf.AccessGro
 	}
 
 	return result
+}
+
+// resolveIdpRef resolves an IdpRef to a Cloudflare IdP ID.
+func (*Reconciler) resolveIdpRef(
+	ctx context.Context,
+	logger logr.Logger,
+	resolver *refs.Resolver,
+	idpRef *networkingv1alpha2.AccessIdentityProviderRefV2,
+) string {
+	if idpRef == nil {
+		return ""
+	}
+	idpID, err := resolver.ResolveIdentityProvider(ctx, idpRef)
+	if err != nil {
+		logger.Error(err, "Failed to resolve IdpRef")
+		return ""
+	}
+	return idpID
 }
 
 func (r *Reconciler) updateStatusError(

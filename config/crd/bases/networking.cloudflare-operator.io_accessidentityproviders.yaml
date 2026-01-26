@@ -200,14 +200,6 @@ spec:
                     description: IdPPublicCert is the IdP's public certificate for
                       SAML (single cert).
                     type: string
-                  idpPublicCerts:
-                    description: |-
-                      IdPPublicCerts are the IdP's public certificates for SAML (multiple certs).
-
-                      Deprecated: Use IdPPublicCert instead.
-                    items:
-                      type: string
-                    type: array
                   issuerUrl:
                     description: IssuerURL is the OIDC issuer URL.
                     type: string

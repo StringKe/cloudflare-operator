@@ -14,7 +14,7 @@ spec:
     shortNames:
     - accesstoken
     singular: accessservicetoken
-  scope: Cluster
+  scope: Namespaced
   versions:
   - additionalPrinterColumns:
     - jsonPath: .status.tokenId
@@ -147,14 +147,12 @@ spec:
                     description: ClientSecretKey is the key for the Client Secret.
                     type: string
                   name:
-                    description: Name is the name of the Secret to create/update.
-                    type: string
-                  namespace:
-                    description: Namespace is the namespace for the Secret.
+                    description: |-
+                      Name is the name of the Secret to create/update.
+                      The Secret will be created in the same namespace as the AccessServiceToken resource.
                     type: string
                 required:
                 - name
-                - namespace
                 type: object
             required:
             - cloudflare

@@ -70,11 +70,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	// Get API client
-	// AccessServiceToken is cluster-scoped, use operator namespace for legacy inline secrets
+	// Get API client - use resource namespace for credentials resolution
+	// AccessServiceToken is now namespaced
 	apiResult, err := r.APIFactory.GetClient(ctx, common.APIClientOptions{
 		CloudflareDetails: &token.Spec.Cloudflare,
-		Namespace:         common.OperatorNamespace,
+		Namespace:         token.Namespace, // Use resource namespace
 		StatusAccountID:   token.Status.AccountID,
 	})
 	if err != nil {
@@ -102,10 +102,10 @@ func (r *Reconciler) handleDeletion(
 		logger.Error(err, "Failed to remove secret finalizer, continuing with deletion")
 	}
 
-	// Get API client
+	// Get API client - use resource namespace for credentials resolution
 	apiResult, err := r.APIFactory.GetClient(ctx, common.APIClientOptions{
 		CloudflareDetails: &token.Spec.Cloudflare,
-		Namespace:         common.OperatorNamespace,
+		Namespace:         token.Namespace, // Use resource namespace
 		StatusAccountID:   token.Status.AccountID,
 	})
 	if err != nil {
@@ -240,16 +240,15 @@ func (r *Reconciler) syncToken(
 }
 
 // createOrUpdateSecret creates or updates the K8s secret with token credentials.
+// Secret is created in the same namespace as the AccessServiceToken resource.
 func (r *Reconciler) createOrUpdateSecret(
 	ctx context.Context,
 	token *networkingv1alpha2.AccessServiceToken,
 	result *cf.AccessServiceTokenResult,
 ) error {
 	secretName := token.Spec.SecretRef.Name
-	secretNamespace := token.Spec.SecretRef.Namespace
-	if secretNamespace == "" {
-		secretNamespace = common.OperatorNamespace
-	}
+	// Secret is created in the same namespace as the AccessServiceToken resource
+	secretNamespace := token.Namespace
 
 	clientIDKey := token.Spec.SecretRef.ClientIDKey
 	if clientIDKey == "" {
@@ -303,10 +302,8 @@ func getSecretFinalizerName(tokenName string) string {
 // ensureSecretFinalizer adds a finalizer to the secret to prevent accidental deletion.
 func (r *Reconciler) ensureSecretFinalizer(ctx context.Context, token *networkingv1alpha2.AccessServiceToken) error {
 	secretName := token.Spec.SecretRef.Name
-	secretNamespace := token.Spec.SecretRef.Namespace
-	if secretNamespace == "" {
-		secretNamespace = common.OperatorNamespace
-	}
+	// Secret is in the same namespace as the AccessServiceToken
+	secretNamespace := token.Namespace
 
 	secret := &corev1.Secret{}
 	if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: secretNamespace}, secret); err != nil {
@@ -331,10 +328,8 @@ func (r *Reconciler) removeSecretFinalizer(ctx context.Context, token *networkin
 	}
 
 	secretName := token.Spec.SecretRef.Name
-	secretNamespace := token.Spec.SecretRef.Namespace
-	if secretNamespace == "" {
-		secretNamespace = common.OperatorNamespace
-	}
+	// Secret is in the same namespace as the AccessServiceToken
+	secretNamespace := token.Namespace
 
 	secret := &corev1.Secret{}
 	if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: secretNamespace}, secret); err != nil {
@@ -393,7 +388,7 @@ func (r *Reconciler) updateStatusReady(
 		token.Status.UpdatedAt = result.UpdatedAt
 		token.Status.LastSeenAt = result.LastSeenAt
 		token.Status.ClientSecretVersion = result.ClientSecretVersion
-		token.Status.SecretName = fmt.Sprintf("%s/%s", token.Spec.SecretRef.Namespace, token.Spec.SecretRef.Name)
+		token.Status.SecretName = fmt.Sprintf("%s/%s", token.Namespace, token.Spec.SecretRef.Name)
 		token.Status.State = "Ready"
 		meta.SetStatusCondition(&token.Status.Conditions, metav1.Condition{
 			Type:               "Ready",

@@ -901,10 +901,12 @@ func convertFromPagesProject(project cloudflare.PagesProject) *PagesProjectResul
 
 func convertFromPagesDomain(domain cloudflare.PagesDomain) *PagesDomainResult {
 	result := &PagesDomainResult{
-		ID:      domain.ID,
-		Name:    domain.Name,
-		Status:  domain.Status,
-		ZoneTag: domain.ZoneTag,
+		ID:               domain.ID,
+		Name:             domain.Name,
+		Status:           domain.Status,
+		ZoneTag:          domain.ZoneTag,
+		ValidationMethod: domain.ValidationData.Method,
+		ValidationStatus: domain.ValidationData.Status,
 	}
 
 	if domain.CreatedOn != nil {

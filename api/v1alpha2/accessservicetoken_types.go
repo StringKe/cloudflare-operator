@@ -31,12 +31,9 @@ type AccessServiceTokenSpec struct {
 // ServiceTokenSecretRef defines where to store token credentials.
 type ServiceTokenSecretRef struct {
 	// Name is the name of the Secret to create/update.
+	// The Secret will be created in the same namespace as the AccessServiceToken resource.
 	// +kubebuilder:validation:Required
 	Name string `json:"name"`
-
-	// Namespace is the namespace for the Secret.
-	// +kubebuilder:validation:Required
-	Namespace string `json:"namespace"`
 
 	// ClientIDKey is the key for the Client ID.
 	// +kubebuilder:validation:Optional
@@ -104,7 +101,7 @@ type AccessServiceTokenStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Cluster,shortName=accesstoken
+// +kubebuilder:resource:scope=Namespaced,shortName=accesstoken
 // +kubebuilder:printcolumn:name="TokenID",type=string,JSONPath=`.status.tokenId`
 // +kubebuilder:printcolumn:name="ClientID",type=string,JSONPath=`.status.clientId`
 // +kubebuilder:printcolumn:name="ExpiresAt",type=string,JSONPath=`.status.expiresAt`
