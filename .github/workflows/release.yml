@@ -187,7 +187,7 @@ jobs:
 
       - name: Generate release notes with git-cliff
         id: changelog
-        uses: orhun/git-cliff-action@4a4a951bc43fafe41cd2348d181853f52356bee7 # v4.4.2
+        uses: orhun/git-cliff-action@e16f179f0be49ecdfe63753837f20b9531642772 # v4.7.0
         with:
           config: .github/cliff.toml
           args: --latest --strip header
