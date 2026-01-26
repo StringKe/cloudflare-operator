@@ -167,11 +167,6 @@ spec:
                               maxLength: 253
                               type: string
                           type: object
-                          x-kubernetes-validations:
-                          - message: exactly one of name, cloudflareId, or cloudflareName
-                              must be set
-                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
-                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - acId
                       - id
@@ -218,11 +213,6 @@ spec:
                               maxLength: 253
                               type: string
                           type: object
-                          x-kubernetes-validations:
-                          - message: exactly one of name, cloudflareId, or cloudflareName
-                              must be set
-                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
-                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - id
                       type: object
@@ -328,11 +318,6 @@ spec:
                               maxLength: 253
                               type: string
                           type: object
-                          x-kubernetes-validations:
-                          - message: exactly one of name, cloudflareId, or cloudflareName
-                              must be set
-                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
-                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                         name:
                           type: string
                         teams:
@@ -382,11 +367,6 @@ spec:
                               maxLength: 253
                               type: string
                           type: object
-                          x-kubernetes-validations:
-                          - message: exactly one of name, cloudflareId, or cloudflareName
-                              must be set
-                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
-                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - email
                       type: object
@@ -439,11 +419,6 @@ spec:
                               maxLength: 253
                               type: string
                           type: object
-                          x-kubernetes-validations:
-                          - message: exactly one of name, cloudflareId, or cloudflareName
-                              must be set
-                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
-                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       type: object
                     oidc:
                       description: OIDC matches users based on OIDC claims.
@@ -479,11 +454,6 @@ spec:
                               maxLength: 253
                               type: string
                           type: object
-                          x-kubernetes-validations:
-                          - message: exactly one of name, cloudflareId, or cloudflareName
-                              must be set
-                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
-                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - claimName
                       - claimValue
@@ -518,11 +488,6 @@ spec:
                               maxLength: 253
                               type: string
                           type: object
-                          x-kubernetes-validations:
-                          - message: exactly one of name, cloudflareId, or cloudflareName
-                              must be set
-                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
-                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                         name:
                           description: Name is the Okta group name.
                           type: string
@@ -563,11 +528,6 @@ spec:
                               maxLength: 253
                               type: string
                           type: object
-                          x-kubernetes-validations:
-                          - message: exactly one of name, cloudflareId, or cloudflareName
-                              must be set
-                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
-                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - attributeName
                       - attributeValue
@@ -631,11 +591,6 @@ spec:
                               maxLength: 253
                               type: string
                           type: object
-                          x-kubernetes-validations:
-                          - message: exactly one of name, cloudflareId, or cloudflareName
-                              must be set
-                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
-                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - acId
                       - id
@@ -682,11 +637,6 @@ spec:
                               maxLength: 253
                               type: string
                           type: object
-                          x-kubernetes-validations:
-                          - message: exactly one of name, cloudflareId, or cloudflareName
-                              must be set
-                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
-                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - id
                       type: object
@@ -792,11 +742,6 @@ spec:
                               maxLength: 253
                               type: string
                           type: object
-                          x-kubernetes-validations:
-                          - message: exactly one of name, cloudflareId, or cloudflareName
-                              must be set
-                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
-                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                         name:
                           type: string
                         teams:
@@ -846,11 +791,6 @@ spec:
                               maxLength: 253
                               type: string
                           type: object
-                          x-kubernetes-validations:
-                          - message: exactly one of name, cloudflareId, or cloudflareName
-                              must be set
-                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
-                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - email
                       type: object
@@ -903,11 +843,6 @@ spec:
                               maxLength: 253
                               type: string
                           type: object
-                          x-kubernetes-validations:
-                          - message: exactly one of name, cloudflareId, or cloudflareName
-                              must be set
-                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
-                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       type: object
                     oidc:
                       description: OIDC matches users based on OIDC claims.
@@ -943,11 +878,6 @@ spec:
                               maxLength: 253
                               type: string
                           type: object
-                          x-kubernetes-validations:
-                          - message: exactly one of name, cloudflareId, or cloudflareName
-                              must be set
-                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
-                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - claimName
                       - claimValue
@@ -982,11 +912,6 @@ spec:
                               maxLength: 253
                               type: string
                           type: object
-                          x-kubernetes-validations:
-                          - message: exactly one of name, cloudflareId, or cloudflareName
-                              must be set
-                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
-                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                         name:
                           description: Name is the Okta group name.
                           type: string
@@ -1027,11 +952,6 @@ spec:
                               maxLength: 253
                               type: string
                           type: object
-                          x-kubernetes-validations:
-                          - message: exactly one of name, cloudflareId, or cloudflareName
-                              must be set
-                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
-                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - attributeName
                       - attributeValue
@@ -1103,11 +1023,6 @@ spec:
                               maxLength: 253
                               type: string
                           type: object
-                          x-kubernetes-validations:
-                          - message: exactly one of name, cloudflareId, or cloudflareName
-                              must be set
-                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
-                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - acId
                       - id
@@ -1154,11 +1069,6 @@ spec:
                               maxLength: 253
                               type: string
                           type: object
-                          x-kubernetes-validations:
-                          - message: exactly one of name, cloudflareId, or cloudflareName
-                              must be set
-                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
-                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - id
                       type: object
@@ -1264,11 +1174,6 @@ spec:
                               maxLength: 253
                               type: string
                           type: object
-                          x-kubernetes-validations:
-                          - message: exactly one of name, cloudflareId, or cloudflareName
-                              must be set
-                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
-                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                         name:
                           type: string
                         teams:
@@ -1318,11 +1223,6 @@ spec:
                               maxLength: 253
                               type: string
                           type: object
-                          x-kubernetes-validations:
-                          - message: exactly one of name, cloudflareId, or cloudflareName
-                              must be set
-                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
-                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - email
                       type: object
@@ -1375,11 +1275,6 @@ spec:
                               maxLength: 253
                               type: string
                           type: object
-                          x-kubernetes-validations:
-                          - message: exactly one of name, cloudflareId, or cloudflareName
-                              must be set
-                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
-                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       type: object
                     oidc:
                       description: OIDC matches users based on OIDC claims.
@@ -1415,11 +1310,6 @@ spec:
                               maxLength: 253
                               type: string
                           type: object
-                          x-kubernetes-validations:
-                          - message: exactly one of name, cloudflareId, or cloudflareName
-                              must be set
-                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
-                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - claimName
                       - claimValue
@@ -1454,11 +1344,6 @@ spec:
                               maxLength: 253
                               type: string
                           type: object
-                          x-kubernetes-validations:
-                          - message: exactly one of name, cloudflareId, or cloudflareName
-                              must be set
-                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
-                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                         name:
                           description: Name is the Okta group name.
                           type: string
@@ -1499,11 +1384,6 @@ spec:
                               maxLength: 253
                               type: string
                           type: object
-                          x-kubernetes-validations:
-                          - message: exactly one of name, cloudflareId, or cloudflareName
-                              must be set
-                            rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId)
-                              ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1'
                       required:
                       - attributeName
                       - attributeValue

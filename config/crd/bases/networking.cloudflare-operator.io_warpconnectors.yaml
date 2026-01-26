@@ -233,11 +233,6 @@ spec:
                     maxLength: 253
                     type: string
                 type: object
-                x-kubernetes-validations:
-                - message: exactly one of name, cloudflareId, or cloudflareName must
-                    be set
-                  rule: '(has(self.name) ? 1 : 0) + (has(self.cloudflareId) ? 1 :
-                    0) + (has(self.cloudflareName) ? 1 : 0) == 1'
             required:
             - cloudflare
             type: object

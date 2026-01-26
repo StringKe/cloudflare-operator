@@ -12,12 +12,11 @@ package v1alpha2
 // 2. cloudflareId - Direct UUID reference to an existing Cloudflare resource
 // 3. cloudflareName - Display name lookup via Cloudflare API
 //
-// CEL validation ensures exactly one of the three fields is set.
+// Exactly one of the three fields must be set (validated by controller).
 
 // AccessIdentityProviderRefV2 references an AccessIdentityProvider.
 // Supports K8s name, Cloudflare UUID, or Cloudflare display name.
-//
-// +kubebuilder:validation:XValidation:rule="(has(self.name) ? 1 : 0) + (has(self.cloudflareId) ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1",message="exactly one of name, cloudflareId, or cloudflareName must be set"
+// Exactly one of name, cloudflareId, or cloudflareName must be set.
 type AccessIdentityProviderRefV2 struct {
 	// Name is the K8s AccessIdentityProvider resource name.
 	// The controller will look up the CRD and use its status.providerID.
@@ -43,8 +42,7 @@ type AccessIdentityProviderRefV2 struct {
 
 // ReusableGroupRef references an AccessGroup.
 // Supports K8s name, Cloudflare UUID, or Cloudflare display name.
-//
-// +kubebuilder:validation:XValidation:rule="(has(self.name) ? 1 : 0) + (has(self.cloudflareId) ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1",message="exactly one of name, cloudflareId, or cloudflareName must be set"
+// Exactly one of name, cloudflareId, or cloudflareName must be set.
 type ReusableGroupRef struct {
 	// Name is the K8s AccessGroup resource name.
 	// The controller will look up the CRD and use its status.groupId.
@@ -68,8 +66,7 @@ type ReusableGroupRef struct {
 
 // VirtualNetworkRef references a VirtualNetwork.
 // Supports K8s name, Cloudflare UUID, or Cloudflare display name.
-//
-// +kubebuilder:validation:XValidation:rule="(has(self.name) ? 1 : 0) + (has(self.cloudflareId) ? 1 : 0) + (has(self.cloudflareName) ? 1 : 0) == 1",message="exactly one of name, cloudflareId, or cloudflareName must be set"
+// Exactly one of name, cloudflareId, or cloudflareName must be set.
 type VirtualNetworkRef struct {
 	// Name is the K8s VirtualNetwork resource name.
 	// The controller will look up the CRD and use its status.virtualNetworkId.
