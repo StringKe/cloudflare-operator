@@ -152,14 +152,20 @@ type AccessApplicationSpec struct {
 	// +kubebuilder:validation:Optional
 	TargetContexts []AccessInfrastructureTargetContext `json:"targetContexts,omitempty"`
 
-	// Policies defines the inline access policies for this application.
-	// These policies are defined directly within the AccessApplication.
+	// Policies defines the inline access policies for this application (DEPRECATED).
+	// Use ReusablePolicyRefs to reference AccessPolicy CRDs instead.
+	// This field will be removed in a future version.
 	// +kubebuilder:validation:Optional
+	// Deprecated: Use reusablePolicyRefs instead.
 	Policies []AccessPolicyRef `json:"policies,omitempty"`
 
-	// ReusablePolicyRefs references reusable AccessPolicy resources.
-	// These policies are managed independently and can be shared across multiple applications.
-	// Reusable policies are applied in addition to inline policies.
+	// ReusablePolicyRefs references existing Access Policies to attach to this application.
+	// These can be:
+	// - Kubernetes AccessPolicy resources (via name field)
+	// - Cloudflare policy IDs (via cloudflareId field)
+	// - Cloudflare policy names (via cloudflareName field)
+	// Policies are applied in the order specified, with precedence determining evaluation order.
+	// The first policy in the array has the highest priority.
 	// +kubebuilder:validation:Optional
 	ReusablePolicyRefs []ReusablePolicyRef `json:"reusablePolicyRefs,omitempty"`
 
@@ -816,6 +822,11 @@ type AccessApplicationStatus struct {
 	// These are policies referenced via reusablePolicyRefs.
 	// +kubebuilder:validation:Optional
 	ResolvedReusablePolicies []ResolvedReusablePolicyStatus `json:"resolvedReusablePolicies,omitempty"`
+
+	// ResolvedPolicyIDs contains the Cloudflare policy IDs attached to this application.
+	// These are the final resolved policy IDs in the order they were applied.
+	// +kubebuilder:validation:Optional
+	ResolvedPolicyIDs []string `json:"resolvedPolicyIds,omitempty"`
 
 	// Conditions represent the latest available observations.
 	// +kubebuilder:validation:Optional

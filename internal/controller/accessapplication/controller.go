@@ -7,6 +7,7 @@ package accessapplication
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -154,8 +155,17 @@ func (r *Reconciler) reconcileApplication(
 	// Resolve IdP references
 	allowedIdps := r.resolveAllowedIdps(ctx, logger, app)
 
+	// Resolve reusable policies
+	policyIDs, err := r.resolvePolicies(ctx, logger, app, apiResult.API)
+	if err != nil {
+		logger.Error(err, "Failed to resolve policies")
+		r.Recorder.Event(app, corev1.EventTypeWarning, "PolicyResolutionFailed",
+			fmt.Sprintf("Failed to resolve policies: %s", cf.SanitizeErrorMessage(err)))
+		return r.setErrorStatus(ctx, app, err)
+	}
+
 	// Build API parameters
-	params := r.buildAPIParams(app, appName, allowedIdps)
+	params := r.buildAPIParams(app, appName, allowedIdps, policyIDs)
 
 	// Check if application exists
 	var result *cf.AccessApplicationResult
@@ -214,7 +224,83 @@ func (r *Reconciler) reconcileApplication(
 	}
 
 	// Update status with success
-	return r.setSuccessStatus(ctx, app, apiResult.AccountID, result)
+	return r.setSuccessStatus(ctx, app, apiResult.AccountID, result, policyIDs)
+}
+
+// resolvePolicies resolves ReusablePolicyRefs to Cloudflare policy IDs.
+func (r *Reconciler) resolvePolicies(
+	ctx context.Context,
+	logger logr.Logger,
+	app *networkingv1alpha2.AccessApplication,
+	api *cf.API,
+) ([]string, error) {
+	if len(app.Spec.ReusablePolicyRefs) == 0 {
+		return nil, nil
+	}
+
+	policyIDs := make([]string, 0, len(app.Spec.ReusablePolicyRefs))
+
+	for i, ref := range app.Spec.ReusablePolicyRefs {
+		policyID, err := r.resolvePolicyRef(ctx, logger, ref, api)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve policy ref at index %d: %w", i, err)
+		}
+		if policyID != "" {
+			policyIDs = append(policyIDs, policyID)
+		}
+	}
+
+	return policyIDs, nil
+}
+
+// resolvePolicyRef resolves a single ReusablePolicyRef to a Cloudflare policy ID.
+//
+//nolint:revive // cognitive complexity is acceptable for this resolution function
+func (r *Reconciler) resolvePolicyRef(
+	ctx context.Context,
+	logger logr.Logger,
+	ref networkingv1alpha2.ReusablePolicyRef,
+	api *cf.API,
+) (string, error) {
+	// Priority 1: Direct Cloudflare ID
+	if ref.CloudflareID != "" {
+		logger.V(1).Info("Using direct Cloudflare policy ID", "policyId", ref.CloudflareID)
+		return ref.CloudflareID, nil
+	}
+
+	// Priority 2: K8s AccessPolicy CR reference
+	if ref.Name != "" {
+		policy := &networkingv1alpha2.AccessPolicy{}
+		if err := r.Get(ctx, apitypes.NamespacedName{Name: ref.Name}, policy); err != nil {
+			if apierrors.IsNotFound(err) {
+				return "", fmt.Errorf("AccessPolicy %q not found", ref.Name)
+			}
+			logger.Error(err, "Failed to get AccessPolicy", "name", ref.Name)
+			return "", fmt.Errorf("failed to get AccessPolicy %q: %w", ref.Name, err)
+		}
+		if policy.Status.PolicyID == "" {
+			return "", fmt.Errorf("AccessPolicy %q is not ready (no PolicyID in status)", ref.Name)
+		}
+		logger.V(1).Info("Resolved K8s AccessPolicy to Cloudflare policy ID",
+			"accessPolicyName", ref.Name, "policyId", policy.Status.PolicyID)
+		return policy.Status.PolicyID, nil
+	}
+
+	// Priority 3: Cloudflare name lookup
+	if ref.CloudflareName != "" {
+		cfPolicy, err := api.GetReusableAccessPolicyByName(ctx, ref.CloudflareName)
+		if err != nil {
+			return "", fmt.Errorf("failed to find policy by name %q: %w", ref.CloudflareName, err)
+		}
+		if cfPolicy == nil {
+			return "", fmt.Errorf("policy %q not found in Cloudflare", ref.CloudflareName)
+		}
+		logger.V(1).Info("Resolved Cloudflare policy name to ID",
+			"policyName", ref.CloudflareName, "policyId", cfPolicy.ID)
+		return cfPolicy.ID, nil
+	}
+
+	return "", errors.New("invalid ReusablePolicyRef: must specify name, cloudflareId, or cloudflareName")
 }
 
 // resolveAllowedIdps resolves the allowed IdP IDs from both direct IDs and references.
@@ -245,6 +331,7 @@ func (r *Reconciler) buildAPIParams(
 	app *networkingv1alpha2.AccessApplication,
 	appName string,
 	allowedIdps []string,
+	policyIDs []string,
 ) cf.AccessApplicationParams {
 	params := cf.AccessApplicationParams{
 		Name:                     appName,
@@ -272,6 +359,7 @@ func (r *Reconciler) buildAPIParams(
 		Tags:                     app.Spec.Tags,
 		CustomPages:              app.Spec.CustomPages,
 		GatewayRules:             app.Spec.GatewayRules,
+		Policies:                 policyIDs,
 	}
 
 	// Convert destinations
@@ -494,6 +582,7 @@ func (r *Reconciler) setSuccessStatus(
 	app *networkingv1alpha2.AccessApplication,
 	accountID string,
 	result *cf.AccessApplicationResult,
+	policyIDs []string,
 ) (ctrl.Result, error) {
 	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, app, func() {
 		app.Status.AccountID = accountID
@@ -504,6 +593,7 @@ func (r *Reconciler) setSuccessStatus(
 		app.Status.State = StateActive
 		app.Status.SaasAppClientID = result.SaasAppClientID
 		app.Status.ObservedGeneration = app.Generation
+		app.Status.ResolvedPolicyIDs = policyIDs
 
 		meta.SetStatusCondition(&app.Status.Conditions, metav1.Condition{
 			Type:               "Ready",

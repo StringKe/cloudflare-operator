@@ -319,6 +319,11 @@ func (in *AccessApplicationStatus) DeepCopyInto(out *AccessApplicationStatus) {
 		*out = make([]ResolvedReusablePolicyStatus, len(*in))
 		copy(*out, *in)
 	}
+	if in.ResolvedPolicyIDs != nil {
+		in, out := &in.ResolvedPolicyIDs, &out.ResolvedPolicyIDs
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]v1.Condition, len(*in))

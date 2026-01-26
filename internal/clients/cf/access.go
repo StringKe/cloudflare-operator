@@ -43,6 +43,10 @@ type AccessApplicationParams struct {
 	SCIMConfig               *AccessApplicationSCIMConfigParams
 	AppLauncherCustomization *AccessAppLauncherCustomizationParams
 	TargetContexts           []AccessInfrastructureTargetContextParams
+
+	// Policies is a list of reusable policy IDs to attach to this application.
+	// The order determines precedence (first = highest priority).
+	Policies []string
 }
 
 // AccessDestinationParams represents a destination configuration.
@@ -1980,6 +1984,11 @@ func applyCreateAccessAppOptionalParams(
 	createParams.AllowAuthenticateViaWarp = params.AllowAuthenticateViaWarp
 	createParams.Tags = params.Tags
 	createParams.CustomPages = params.CustomPages
+
+	// Set reusable policies to attach to this application
+	if len(params.Policies) > 0 {
+		createParams.Policies = params.Policies
+	}
 }
 
 // applyUpdateAccessAppOptionalParams applies optional parameters to update params.
@@ -2009,6 +2018,12 @@ func applyUpdateAccessAppOptionalParams(
 	updateParams.AllowAuthenticateViaWarp = params.AllowAuthenticateViaWarp
 	updateParams.Tags = params.Tags
 	updateParams.CustomPages = params.CustomPages
+
+	// Set reusable policies to attach to this application
+	// Note: UpdateAccessApplicationParams uses *[]string for Policies
+	if len(params.Policies) > 0 {
+		updateParams.Policies = &params.Policies
+	}
 }
 
 // buildAccessAppDestinations builds the full destinations list including Domain and SelfHostedDomains.

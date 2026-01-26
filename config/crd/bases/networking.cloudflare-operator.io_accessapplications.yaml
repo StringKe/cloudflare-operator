@@ -369,8 +369,10 @@ spec:
                 type: boolean
               policies:
                 description: |-
-                  Policies defines the inline access policies for this application.
-                  These policies are defined directly within the AccessApplication.
+                  Policies defines the inline access policies for this application (DEPRECATED).
+                  Use ReusablePolicyRefs to reference AccessPolicy CRDs instead.
+                  This field will be removed in a future version.
+                  Deprecated: Use reusablePolicyRefs instead.
                 items:
                   description: |-
                     AccessPolicyRef references an access policy or defines an inline policy.
@@ -1172,9 +1174,13 @@ spec:
                 type: string
               reusablePolicyRefs:
                 description: |-
-                  ReusablePolicyRefs references reusable AccessPolicy resources.
-                  These policies are managed independently and can be shared across multiple applications.
-                  Reusable policies are applied in addition to inline policies.
+                  ReusablePolicyRefs references existing Access Policies to attach to this application.
+                  These can be:
+                  - Kubernetes AccessPolicy resources (via name field)
+                  - Cloudflare policy IDs (via cloudflareId field)
+                  - Cloudflare policy names (via cloudflareName field)
+                  Policies are applied in the order specified, with precedence determining evaluation order.
+                  The first policy in the array has the highest priority.
                 items:
                   description: |-
                     ReusablePolicyRef references a reusable AccessPolicy resource.
@@ -1689,6 +1695,13 @@ spec:
                 x-kubernetes-list-map-keys:
                 - precedence
                 x-kubernetes-list-type: map
+              resolvedPolicyIds:
+                description: |-
+                  ResolvedPolicyIDs contains the Cloudflare policy IDs attached to this application.
+                  These are the final resolved policy IDs in the order they were applied.
+                items:
+                  type: string
+                type: array
               resolvedReusablePolicies:
                 description: |-
                   ResolvedReusablePolicies contains the resolved reusable policy information.
