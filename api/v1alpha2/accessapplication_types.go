@@ -155,8 +155,10 @@ type AccessApplicationSpec struct {
 	// Policies defines the inline access policies for this application (DEPRECATED).
 	// Use ReusablePolicyRefs to reference AccessPolicy CRDs instead.
 	// This field will be removed in a future version.
-	// +kubebuilder:validation:Optional
+	//
 	// Deprecated: Use reusablePolicyRefs instead.
+	//
+	// +kubebuilder:validation:Optional
 	Policies []AccessPolicyRef `json:"policies,omitempty"`
 
 	// ReusablePolicyRefs references existing Access Policies to attach to this application.
