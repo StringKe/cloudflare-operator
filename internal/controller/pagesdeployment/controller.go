@@ -235,22 +235,10 @@ func (r *PagesDeploymentReconciler) createDeployment(
 				return r.setErrorStatus(ctx, deployment, fmt.Errorf("failed to load files: %w", loadErr))
 			}
 
-			// Determine branch based on environment and user config:
-			// - production: empty string (uses project's production branch, updates main URL)
-			// - preview: use specified branch or default to "preview"
-			// The branch controls whether the deployment goes to production URL or creates a preview
-			uploadBranch := ""
-			if deployment.Spec.Environment == networkingv1alpha2.PagesDeploymentEnvironmentPreview {
-				// Check if user specified a custom branch name
-				if deployment.Spec.Source.DirectUpload != nil && deployment.Spec.Source.DirectUpload.Branch != "" {
-					uploadBranch = deployment.Spec.Source.DirectUpload.Branch
-				} else {
-					// Default to "preview" for preview deployments
-					uploadBranch = "preview"
-				}
-			}
+			// Build deployment metadata
+			metadata := r.buildDeploymentMetadata(deployment)
 
-			directResult, uploadErr := api.CreatePagesDirectUploadDeployment(ctx, projectName, files, uploadBranch)
+			directResult, uploadErr := api.CreatePagesDirectUploadDeployment(ctx, projectName, files, metadata)
 			if uploadErr != nil {
 				return r.setErrorStatus(ctx, deployment, fmt.Errorf("failed to create direct upload deployment: %w", uploadErr))
 			}
@@ -921,4 +909,57 @@ func extractVersionName(deployment *networkingv1alpha2.PagesDeployment) string {
 	// Fallback: use deployment name as version identifier
 	// This allows CI pipelines to use meaningful deployment names like "sha-abc123"
 	return deployment.Name
+}
+
+// buildDeploymentMetadata constructs deployment metadata from the deployment spec.
+// This handles both direct upload and git source configurations.
+//
+//nolint:revive // cognitive complexity acceptable for metadata building
+func (r *PagesDeploymentReconciler) buildDeploymentMetadata(
+	deployment *networkingv1alpha2.PagesDeployment,
+) *cf.PagesDeploymentMetadata {
+	metadata := &cf.PagesDeploymentMetadata{}
+
+	if deployment.Spec.Source == nil {
+		return metadata
+	}
+
+	switch deployment.Spec.Source.Type {
+	case networkingv1alpha2.PagesDeploymentSourceTypeGit:
+		if git := deployment.Spec.Source.Git; git != nil {
+			metadata.Branch = git.Branch
+			metadata.CommitHash = git.CommitSha
+			metadata.CommitMessage = git.CommitMessage
+		}
+
+	case networkingv1alpha2.PagesDeploymentSourceTypeDirectUpload:
+		if du := deployment.Spec.Source.DirectUpload; du != nil {
+			// Determine branch based on environment and user config:
+			// - production: empty string (uses project's production branch, updates main URL)
+			// - preview: use specified branch or default to "preview"
+			if deployment.Spec.Environment == networkingv1alpha2.PagesDeploymentEnvironmentPreview {
+				if du.Branch != "" {
+					metadata.Branch = du.Branch
+				} else {
+					metadata.Branch = "preview"
+				}
+			}
+
+			// Override with DeploymentMetadata if specified
+			if dm := du.DeploymentMetadata; dm != nil {
+				if dm.Branch != "" {
+					metadata.Branch = dm.Branch
+				}
+				if dm.CommitHash != "" {
+					metadata.CommitHash = dm.CommitHash
+				}
+				if dm.CommitMessage != "" {
+					metadata.CommitMessage = dm.CommitMessage
+				}
+				metadata.CommitDirty = dm.CommitDirty
+			}
+		}
+	}
+
+	return metadata
 }

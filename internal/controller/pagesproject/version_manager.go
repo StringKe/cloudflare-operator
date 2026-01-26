@@ -436,6 +436,9 @@ func (vm *VersionManager) createDeployment(
 	project *networkingv1alpha2.PagesProject,
 	version networkingv1alpha2.ProjectVersion,
 ) error {
+	// Build direct upload source with deployment metadata
+	directUploadSource := vm.buildDirectUploadSource(version)
+
 	deployment := &networkingv1alpha2.PagesDeployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-%s", project.Name, version.Name),
@@ -457,7 +460,7 @@ func (vm *VersionManager) createDeployment(
 			Environment: networkingv1alpha2.PagesDeploymentEnvironmentPreview, // Default to preview
 			Source: &networkingv1alpha2.PagesDeploymentSourceSpec{
 				Type:         networkingv1alpha2.PagesDeploymentSourceTypeDirectUpload,
-				DirectUpload: version.Source,
+				DirectUpload: directUploadSource,
 			},
 			Cloudflare: project.Spec.Cloudflare,
 		},
@@ -474,6 +477,77 @@ func (vm *VersionManager) createDeployment(
 
 	vm.log.Info("Created managed deployment", "version", version.Name, "deployment", deployment.Name)
 	return nil
+}
+
+// buildDirectUploadSource builds a direct upload source from a ProjectVersion,
+// extracting deployment metadata from the version's Metadata map.
+//
+//nolint:revive // cognitive complexity acceptable for metadata extraction with multiple optional fields
+func (*VersionManager) buildDirectUploadSource(version networkingv1alpha2.ProjectVersion) *networkingv1alpha2.PagesDirectUploadSourceSpec {
+	if version.Source == nil {
+		return nil
+	}
+
+	// Start with the existing source configuration
+	result := &networkingv1alpha2.PagesDirectUploadSourceSpec{
+		Source:   version.Source.Source,
+		Checksum: version.Source.Checksum,
+		Archive:  version.Source.Archive,
+		Branch:   version.Source.Branch,
+	}
+
+	// Extract deployment metadata from version.Metadata map
+	if len(version.Metadata) > 0 {
+		metadata := &networkingv1alpha2.DeploymentTriggerMetadata{}
+		hasMetadata := false
+
+		if commitHash, ok := version.Metadata["commitHash"]; ok && commitHash != "" {
+			metadata.CommitHash = commitHash
+			hasMetadata = true
+		}
+		if commitMessage, ok := version.Metadata["commitMessage"]; ok && commitMessage != "" {
+			metadata.CommitMessage = commitMessage
+			hasMetadata = true
+		}
+		if commitDirty, ok := version.Metadata["commitDirty"]; ok {
+			dirty := commitDirty == "true"
+			metadata.CommitDirty = &dirty
+			hasMetadata = true
+		}
+		// Also allow branch to be specified in metadata
+		if branch, ok := version.Metadata["branch"]; ok && branch != "" {
+			metadata.Branch = branch
+			hasMetadata = true
+		}
+
+		if hasMetadata {
+			result.DeploymentMetadata = metadata
+		}
+	}
+
+	// Merge with existing DeploymentMetadata if present in source
+	if version.Source.DeploymentMetadata != nil {
+		if result.DeploymentMetadata == nil {
+			result.DeploymentMetadata = version.Source.DeploymentMetadata
+		} else {
+			// Source.DeploymentMetadata takes precedence
+			dm := version.Source.DeploymentMetadata
+			if dm.Branch != "" {
+				result.DeploymentMetadata.Branch = dm.Branch
+			}
+			if dm.CommitHash != "" {
+				result.DeploymentMetadata.CommitHash = dm.CommitHash
+			}
+			if dm.CommitMessage != "" {
+				result.DeploymentMetadata.CommitMessage = dm.CommitMessage
+			}
+			if dm.CommitDirty != nil {
+				result.DeploymentMetadata.CommitDirty = dm.CommitDirty
+			}
+		}
+	}
+
+	return result
 }
 
 // needsUpdate checks if a deployment needs to be recreated due to source changes.

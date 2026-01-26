@@ -103,6 +103,36 @@ type PagesGitSourceSpec struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Pattern=`^[a-f0-9]{7,40}$`
 	CommitSha string `json:"commitSha,omitempty"`
+
+	// CommitMessage is a description for this deployment.
+	// This is passed to Cloudflare as deployment metadata.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=1000
+	CommitMessage string `json:"commitMessage,omitempty"`
+}
+
+// DeploymentTriggerMetadata defines metadata for ad-hoc deployments.
+// These fields are passed to Cloudflare API when creating deployments.
+type DeploymentTriggerMetadata struct {
+	// Branch is the branch name for this deployment.
+	// Controls preview vs production: matches production_branch → production, otherwise → preview.
+	// +kubebuilder:validation:Optional
+	Branch string `json:"branch,omitempty"`
+
+	// CommitHash is the commit identifier (e.g., "a1b2c3d4e5f6" or full SHA).
+	// For Direct Upload, this is metadata only (not used for actual git checkout).
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Pattern=`^[a-f0-9]{7,40}$`
+	CommitHash string `json:"commitHash,omitempty"`
+
+	// CommitMessage is a description of this deployment.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=1000
+	CommitMessage string `json:"commitMessage,omitempty"`
+
+	// CommitDirty indicates if the repository has uncommitted changes.
+	// +kubebuilder:validation:Optional
+	CommitDirty *bool `json:"commitDirty,omitempty"`
 }
 
 // PagesDirectUploadSourceSpec defines direct upload deployment source.
@@ -131,6 +161,11 @@ type PagesDirectUploadSourceSpec struct {
 	// Common values: "staging", "feature-x", "pr-123"
 	// +kubebuilder:validation:Optional
 	Branch string `json:"branch,omitempty"`
+
+	// DeploymentMetadata contains commit information for this deployment.
+	// These values are passed to Cloudflare API as deployment trigger metadata.
+	// +kubebuilder:validation:Optional
+	DeploymentMetadata *DeploymentTriggerMetadata `json:"deploymentMetadata,omitempty"`
 }
 
 // PagesDirectUpload configures direct upload deployment.
@@ -516,6 +551,33 @@ type PagesDeploymentStatus struct {
 	// FinishedAt is when the deployment finished.
 	// +kubebuilder:validation:Optional
 	FinishedAt *metav1.Time `json:"finishedAt,omitempty"`
+
+	// DeploymentTrigger contains the deployment trigger information from Cloudflare.
+	// +kubebuilder:validation:Optional
+	DeploymentTrigger *DeploymentTriggerInfo `json:"deploymentTrigger,omitempty"`
+}
+
+// DeploymentTriggerInfo contains deployment trigger metadata from Cloudflare response.
+type DeploymentTriggerInfo struct {
+	// Type is the deployment trigger type (e.g., "ad_hoc" or "push").
+	// +kubebuilder:validation:Optional
+	Type string `json:"type,omitempty"`
+
+	// Branch is the branch name for this deployment.
+	// +kubebuilder:validation:Optional
+	Branch string `json:"branch,omitempty"`
+
+	// CommitHash is the commit identifier.
+	// +kubebuilder:validation:Optional
+	CommitHash string `json:"commitHash,omitempty"`
+
+	// CommitMessage is the commit or deployment message.
+	// +kubebuilder:validation:Optional
+	CommitMessage string `json:"commitMessage,omitempty"`
+
+	// CommitDirty indicates if the repository had uncommitted changes.
+	// +kubebuilder:validation:Optional
+	CommitDirty bool `json:"commitDirty,omitempty"`
 }
 
 // PagesStageHistory represents a stage in the deployment history.

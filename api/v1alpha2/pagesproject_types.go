@@ -710,8 +710,15 @@ type ProjectVersion struct {
 	// +kubebuilder:validation:Optional
 	Source *PagesDirectUploadSourceSpec `json:"source,omitempty"`
 
-	// Metadata contains optional metadata for this version.
-	// Examples: gitCommit, buildTime, author, releaseNotes.
+	// Metadata contains optional key-value pairs for this version.
+	// Reserved keys for deployment trigger metadata:
+	//   - "commitHash": Git commit SHA (e.g., "abc123def456")
+	//   - "commitMessage": Commit or deployment description
+	//   - "commitDirty": "true" or "false" - indicates uncommitted changes
+	// Additional keys for reference:
+	//   - "author": Commit author
+	//   - "buildId": CI/CD build identifier
+	//   - "releaseNotes": Version release notes
 	// +kubebuilder:validation:Optional
 	Metadata map[string]string `json:"metadata,omitempty"`
 }

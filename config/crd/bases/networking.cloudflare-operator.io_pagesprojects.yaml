@@ -1056,8 +1056,15 @@ spec:
                               additionalProperties:
                                 type: string
                               description: |-
-                                Metadata contains optional metadata for this version.
-                                Examples: gitCommit, buildTime, author, releaseNotes.
+                                Metadata contains optional key-value pairs for this version.
+                                Reserved keys for deployment trigger metadata:
+                                  - "commitHash": Git commit SHA (e.g., "abc123def456")
+                                  - "commitMessage": Commit or deployment description
+                                  - "commitDirty": "true" or "false" - indicates uncommitted changes
+                                Additional keys for reference:
+                                  - "author": Commit author
+                                  - "buildId": CI/CD build identifier
+                                  - "releaseNotes": Version release notes
                               type: object
                             name:
                               description: |-
@@ -1137,6 +1144,32 @@ spec:
                                       type: string
                                   required:
                                   - value
+                                  type: object
+                                deploymentMetadata:
+                                  description: |-
+                                    DeploymentMetadata contains commit information for this deployment.
+                                    These values are passed to Cloudflare API as deployment trigger metadata.
+                                  properties:
+                                    branch:
+                                      description: |-
+                                        Branch is the branch name for this deployment.
+                                        Controls preview vs production: matches production_branch → production, otherwise → preview.
+                                      type: string
+                                    commitDirty:
+                                      description: CommitDirty indicates if the repository
+                                        has uncommitted changes.
+                                      type: boolean
+                                    commitHash:
+                                      description: |-
+                                        CommitHash is the commit identifier (e.g., "a1b2c3d4e5f6" or full SHA).
+                                        For Direct Upload, this is metadata only (not used for actual git checkout).
+                                      pattern: ^[a-f0-9]{7,40}$
+                                      type: string
+                                    commitMessage:
+                                      description: CommitMessage is a description
+                                        of this deployment.
+                                      maxLength: 1000
+                                      type: string
                                   type: object
                                 source:
                                   description: |-

@@ -126,6 +126,35 @@ type PagesProjectResult struct {
 	LatestDeployment *PagesDeploymentResult
 }
 
+// PagesDeploymentMetadata contains metadata for creating deployments.
+// These fields are passed to Cloudflare API as deployment trigger metadata.
+type PagesDeploymentMetadata struct {
+	// Branch is the branch name for this deployment.
+	Branch string
+	// CommitHash is the commit identifier (e.g., "a1b2c3d4e5f6").
+	CommitHash string
+	// CommitMessage is a description of this deployment.
+	CommitMessage string
+	// CommitDirty indicates if the repository has uncommitted changes.
+	CommitDirty *bool
+}
+
+// PagesDeploymentTrigger contains deployment trigger information from Cloudflare.
+type PagesDeploymentTrigger struct {
+	// Type is the trigger type (e.g., "ad_hoc", "push").
+	Type string
+	// Metadata contains the trigger metadata.
+	Metadata *PagesDeploymentTriggerMetadata
+}
+
+// PagesDeploymentTriggerMetadata contains the metadata within a deployment trigger.
+type PagesDeploymentTriggerMetadata struct {
+	Branch        string
+	CommitHash    string
+	CommitMessage string
+	CommitDirty   bool
+}
+
 // PagesDeploymentResult contains the result of a Pages deployment operation
 type PagesDeploymentResult struct {
 	ID               string
@@ -142,6 +171,8 @@ type PagesDeploymentResult struct {
 	Stages           []PagesDeploymentStage
 	// Aliases contains all URLs for this deployment (hash URL, branch URL, etc.)
 	Aliases []string
+	// DeploymentTrigger contains trigger information from Cloudflare
+	DeploymentTrigger *PagesDeploymentTrigger
 }
 
 // PagesDeploymentStage represents a deployment stage
@@ -979,19 +1010,31 @@ type pagesUploadMetadata struct {
 	ContentType string `json:"contentType"`
 }
 
-// pagesSpecialFiles are config files that should NOT be included in manifest.
-// These files are handled specially by Cloudflare Pages.
-var pagesSpecialFiles = map[string]bool{
-	"_headers":     true,
-	"_redirects":   true,
-	"_worker.js":   true,
-	"_routes.json": true,
-}
-
 // isPagesSpecialFile checks if a file is a special Pages config file.
+// These files are handled specially by Cloudflare Pages as separate form fields.
 func isPagesSpecialFile(path string) bool {
 	base := filepath.Base(path)
-	return pagesSpecialFiles[base]
+	switch base {
+	case "_headers", "_redirects", "_worker.js", "_worker.bundle", "_routes.json":
+		return true
+	default:
+		return false
+	}
+}
+
+// PagesSpecialFiles contains special Pages configuration files.
+// These are uploaded as separate form fields instead of being included in the manifest.
+type PagesSpecialFiles struct {
+	// Headers is the _headers file content
+	Headers []byte
+	// Redirects is the _redirects file content
+	Redirects []byte
+	// RoutesJSON is the _routes.json file content
+	RoutesJSON []byte
+	// WorkerJS is the _worker.js file content (mutually exclusive with WorkerBundle)
+	WorkerJS []byte
+	// WorkerBundle is the _worker.bundle file content (mutually exclusive with WorkerJS)
+	WorkerBundle []byte
 }
 
 // CreatePagesDirectUploadDeployment creates a deployment via direct upload.
@@ -1001,20 +1044,23 @@ func isPagesSpecialFile(path string) bool {
 // 3. Upload missing files
 // 4. Upsert hashes and create deployment
 //
-// The branch parameter controls whether this is a production or preview deployment:
+// The metadata.Branch parameter controls whether this is a production or preview deployment:
 // - If branch matches the project's production branch (e.g., "main"), it creates a production deployment
 // - If branch is different (e.g., "preview", "staging"), it creates a preview deployment
 // - If branch is empty, it defaults to production deployment behavior
 //
+// Additional metadata fields (CommitHash, CommitMessage, CommitDirty) are passed to
+// Cloudflare API as deployment trigger metadata.
+//
 // Important: Uses MD5 hashes (not SHA256) as required by Cloudflare Pages API.
-// Special files (_headers, _redirects, etc.) are excluded from manifest.
+// Special files (_headers, _redirects, etc.) are handled as separate form fields.
 //
 //nolint:revive // cognitive complexity is acceptable for multi-step upload process
 func (api *API) CreatePagesDirectUploadDeployment(
 	ctx context.Context,
 	projectName string,
 	files map[string][]byte,
-	branch string,
+	metadata *PagesDeploymentMetadata,
 ) (*PagesDirectUploadResult, error) {
 	if api.CloudflareClient == nil {
 		return nil, errClientNotInitialized
@@ -1029,10 +1075,11 @@ func (api *API) CreatePagesDirectUploadDeployment(
 		"project", projectName,
 		"fileCount", len(files))
 
-	// Build manifest with MD5 hashes, excluding special files
+	// Build manifest with MD5 hashes, separating special files
 	manifest := make(map[string]string)
 	hashToPath := make(map[string]string)
 	hashToContent := make(map[string][]byte)
+	specialFiles := &PagesSpecialFiles{}
 	specialCount := 0
 
 	for path, content := range files {
@@ -1042,10 +1089,33 @@ func (api *API) CreatePagesDirectUploadDeployment(
 			key = "/" + key
 		}
 
-		// Skip special Pages config files
-		if isPagesSpecialFile(path) {
+		// Collect special Pages config files for separate upload
+		baseName := filepath.Base(path)
+		switch baseName {
+		case "_headers":
+			specialFiles.Headers = content
 			specialCount++
-			api.Log.V(1).Info("Skipping special file", "path", key)
+			api.Log.V(1).Info("Collected special file", "path", key, "type", "_headers")
+			continue
+		case "_redirects":
+			specialFiles.Redirects = content
+			specialCount++
+			api.Log.V(1).Info("Collected special file", "path", key, "type", "_redirects")
+			continue
+		case "_routes.json":
+			specialFiles.RoutesJSON = content
+			specialCount++
+			api.Log.V(1).Info("Collected special file", "path", key, "type", "_routes.json")
+			continue
+		case "_worker.js":
+			specialFiles.WorkerJS = content
+			specialCount++
+			api.Log.V(1).Info("Collected special file", "path", key, "type", "_worker.js")
+			continue
+		case "_worker.bundle":
+			specialFiles.WorkerBundle = content
+			specialCount++
+			api.Log.V(1).Info("Collected special file", "path", key, "type", "_worker.bundle")
 			continue
 		}
 
@@ -1060,7 +1130,7 @@ func (api *API) CreatePagesDirectUploadDeployment(
 
 	api.Log.Info("Built manifest",
 		"files", len(manifest),
-		"skippedSpecial", specialCount)
+		"specialFiles", specialCount)
 
 	// Step 1: Get upload token
 	jwt, err := api.pagesGetUploadToken(ctx, accountID, projectName)
@@ -1123,8 +1193,8 @@ func (api *API) CreatePagesDirectUploadDeployment(
 		return nil, fmt.Errorf("upsert hashes: %w", err)
 	}
 
-	// Step 5: Create deployment with manifest
-	result, err := api.pagesCreateDeployment(ctx, accountID, projectName, manifest, branch)
+	// Step 5: Create deployment with manifest and special files
+	result, err := api.pagesCreateDeployment(ctx, accountID, projectName, manifest, metadata, specialFiles)
 	if err != nil {
 		return nil, fmt.Errorf("create deployment: %w", err)
 	}
@@ -1257,15 +1327,26 @@ func (api *API) pagesUpsertHashes(ctx context.Context, jwt string, hashes []stri
 }
 
 // pagesCreateDeployment creates a Pages deployment with the given manifest.
-// The branch parameter controls the deployment environment:
+// The metadata.Branch parameter controls the deployment environment:
 // - If branch matches project's production branch → production deployment
 // - If branch is different → preview deployment with branch alias URL
 // - If branch is empty → defaults to production behavior
-func (api *API) pagesCreateDeployment(ctx context.Context, accountID, projectName string, manifest map[string]string, branch string) (*PagesDirectUploadResult, error) {
+//
+// Additional metadata fields (CommitHash, CommitMessage, CommitDirty) are passed as form fields.
+// Special files (_headers, _redirects, _worker.js, etc.) are uploaded as separate form file fields.
+//
+//nolint:revive,gocyclo // cognitive complexity acceptable for multipart form building with multiple optional fields
+func (api *API) pagesCreateDeployment(
+	ctx context.Context,
+	accountID, projectName string,
+	manifest map[string]string,
+	metadata *PagesDeploymentMetadata,
+	specialFiles *PagesSpecialFiles,
+) (*PagesDirectUploadResult, error) {
 	endpoint := fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/pages/projects/%s/deployments",
 		accountID, projectName)
 
-	// Use multipart/form-data with manifest and optional branch fields
+	// Use multipart/form-data with manifest and optional metadata fields
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
@@ -1276,12 +1357,84 @@ func (api *API) pagesCreateDeployment(ctx context.Context, accountID, projectNam
 	if err := writer.WriteField("manifest", string(manifestJSON)); err != nil {
 		return nil, err
 	}
-	// Add branch field if specified - this controls preview vs production
-	if branch != "" {
-		if err := writer.WriteField("branch", branch); err != nil {
-			return nil, err
+
+	// Add metadata fields if specified
+	if metadata != nil {
+		if metadata.Branch != "" {
+			if err := writer.WriteField("branch", metadata.Branch); err != nil {
+				return nil, err
+			}
+		}
+		if metadata.CommitHash != "" {
+			if err := writer.WriteField("commit_hash", metadata.CommitHash); err != nil {
+				return nil, err
+			}
+		}
+		if metadata.CommitMessage != "" {
+			if err := writer.WriteField("commit_message", metadata.CommitMessage); err != nil {
+				return nil, err
+			}
+		}
+		if metadata.CommitDirty != nil {
+			dirtyStr := "false"
+			if *metadata.CommitDirty {
+				dirtyStr = "true"
+			}
+			if err := writer.WriteField("commit_dirty", dirtyStr); err != nil {
+				return nil, err
+			}
 		}
 	}
+
+	// Add special files as form file fields
+	if specialFiles != nil {
+		if len(specialFiles.Headers) > 0 {
+			part, err := writer.CreateFormFile("_headers", "_headers")
+			if err != nil {
+				return nil, fmt.Errorf("create _headers form field: %w", err)
+			}
+			if _, err := part.Write(specialFiles.Headers); err != nil {
+				return nil, fmt.Errorf("write _headers content: %w", err)
+			}
+		}
+		if len(specialFiles.Redirects) > 0 {
+			part, err := writer.CreateFormFile("_redirects", "_redirects")
+			if err != nil {
+				return nil, fmt.Errorf("create _redirects form field: %w", err)
+			}
+			if _, err := part.Write(specialFiles.Redirects); err != nil {
+				return nil, fmt.Errorf("write _redirects content: %w", err)
+			}
+		}
+		if len(specialFiles.RoutesJSON) > 0 {
+			part, err := writer.CreateFormFile("_routes.json", "_routes.json")
+			if err != nil {
+				return nil, fmt.Errorf("create _routes.json form field: %w", err)
+			}
+			if _, err := part.Write(specialFiles.RoutesJSON); err != nil {
+				return nil, fmt.Errorf("write _routes.json content: %w", err)
+			}
+		}
+		// _worker.js and _worker.bundle are mutually exclusive
+		if len(specialFiles.WorkerJS) > 0 {
+			part, err := writer.CreateFormFile("_worker.js", "_worker.js")
+			if err != nil {
+				return nil, fmt.Errorf("create _worker.js form field: %w", err)
+			}
+			if _, err := part.Write(specialFiles.WorkerJS); err != nil {
+				return nil, fmt.Errorf("write _worker.js content: %w", err)
+			}
+		} else if len(specialFiles.WorkerBundle) > 0 {
+			part, err := writer.CreateFormFile("_worker.bundle", "_worker.bundle")
+			if err != nil {
+				return nil, fmt.Errorf("create _worker.bundle form field: %w", err)
+			}
+			if _, err := part.Write(specialFiles.WorkerBundle); err != nil {
+				return nil, fmt.Errorf("write _worker.bundle content: %w", err)
+			}
+		}
+	}
+
 	if err := writer.Close(); err != nil {
 		return nil, err
 	}
