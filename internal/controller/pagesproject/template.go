@@ -19,6 +19,22 @@ type TemplateData struct {
 	Version string
 }
 
+// mergeMetadata merges base metadata with override metadata.
+// Override values take precedence over base values.
+func mergeMetadata(base, override map[string]string) map[string]string {
+	if len(base) == 0 && len(override) == 0 {
+		return nil
+	}
+	result := make(map[string]string)
+	for k, v := range base {
+		result[k] = v
+	}
+	for k, v := range override {
+		result[k] = v
+	}
+	return result
+}
+
 // executeTemplate executes a template string with the given data.
 func executeTemplate(tmplStr string, data TemplateData) (string, error) {
 	tmpl, err := template.New("source").Parse(tmplStr)
@@ -145,27 +161,43 @@ func resolveFromOCITemplate(versionName string, ociTmpl *networkingv1alpha2.OCIS
 }
 
 // resolveFromTemplate creates a ProjectVersion from a source template.
-func resolveFromTemplate(versionName string, tmpl *networkingv1alpha2.SourceTemplate) (networkingv1alpha2.ProjectVersion, error) {
+// The metadata parameter is merged with tmpl.Metadata, with metadata taking precedence.
+//
+//nolint:revive // cognitive complexity acceptable for template type dispatch
+func resolveFromTemplate(versionName string, tmpl *networkingv1alpha2.SourceTemplate, metadata map[string]string) (networkingv1alpha2.ProjectVersion, error) {
+	var version networkingv1alpha2.ProjectVersion
+	var err error
+
 	switch tmpl.Type {
 	case networkingv1alpha2.S3SourceTemplateType:
 		if tmpl.S3 == nil {
 			return networkingv1alpha2.ProjectVersion{}, errors.New("s3 template is nil")
 		}
-		return resolveFromS3Template(versionName, tmpl.S3)
+		version, err = resolveFromS3Template(versionName, tmpl.S3)
 
 	case networkingv1alpha2.HTTPSourceTemplateType:
 		if tmpl.HTTP == nil {
 			return networkingv1alpha2.ProjectVersion{}, errors.New("http template is nil")
 		}
-		return resolveFromHTTPTemplate(versionName, tmpl.HTTP)
+		version, err = resolveFromHTTPTemplate(versionName, tmpl.HTTP)
 
 	case networkingv1alpha2.OCISourceTemplateType:
 		if tmpl.OCI == nil {
 			return networkingv1alpha2.ProjectVersion{}, errors.New("oci template is nil")
 		}
-		return resolveFromOCITemplate(versionName, tmpl.OCI)
+		version, err = resolveFromOCITemplate(versionName, tmpl.OCI)
 
 	default:
 		return networkingv1alpha2.ProjectVersion{}, fmt.Errorf("unknown source template type: %s", tmpl.Type)
 	}
+
+	if err != nil {
+		return networkingv1alpha2.ProjectVersion{}, err
+	}
+
+	// Merge template metadata with mode-specific metadata
+	// Priority: metadata (mode-specific) > tmpl.Metadata (template default)
+	version.Metadata = mergeMetadata(tmpl.Metadata, metadata)
+
+	return version, nil
 }

@@ -66,6 +66,13 @@ func (vm *VersionManager) ResolveVersions(project *networkingv1alpha2.PagesProje
 
 	policy := getEffectivePolicy(mgmt)
 
+	// Get production branch for setting correct branch in metadata
+	// This is critical for Cloudflare Rollback API compatibility
+	productionBranch := project.Spec.ProductionBranch
+	if productionBranch == "" {
+		productionBranch = "main" // Default fallback
+	}
+
 	switch policy {
 	case networkingv1alpha2.VersionPolicyNone, "":
 		return &ResolvedVersions{
@@ -73,7 +80,7 @@ func (vm *VersionManager) ResolveVersions(project *networkingv1alpha2.PagesProje
 		}, nil
 
 	case networkingv1alpha2.VersionPolicyTargetVersion:
-		result, err := vm.resolveTargetVersion(mgmt.TargetVersion)
+		result, err := vm.resolveTargetVersion(mgmt.TargetVersion, productionBranch)
 		if err != nil {
 			return nil, err
 		}
@@ -81,7 +88,7 @@ func (vm *VersionManager) ResolveVersions(project *networkingv1alpha2.PagesProje
 		return result, nil
 
 	case networkingv1alpha2.VersionPolicyDeclarativeVersions:
-		result, err := vm.resolveDeclarativeVersions(mgmt.DeclarativeVersions)
+		result, err := vm.resolveDeclarativeVersions(mgmt.DeclarativeVersions, productionBranch)
 		if err != nil {
 			return nil, err
 		}
@@ -89,7 +96,7 @@ func (vm *VersionManager) ResolveVersions(project *networkingv1alpha2.PagesProje
 		return result, nil
 
 	case networkingv1alpha2.VersionPolicyFullVersions:
-		result, err := vm.resolveFullVersions(mgmt.FullVersions)
+		result, err := vm.resolveFullVersions(mgmt.FullVersions, productionBranch)
 		if err != nil {
 			return nil, err
 		}
@@ -97,7 +104,7 @@ func (vm *VersionManager) ResolveVersions(project *networkingv1alpha2.PagesProje
 		return result, nil
 
 	case networkingv1alpha2.VersionPolicyGitOps:
-		return vm.resolveGitOps(mgmt.GitOps)
+		return vm.resolveGitOps(mgmt.GitOps, productionBranch)
 
 	case networkingv1alpha2.VersionPolicyLatestPreview:
 		return vm.resolveLatestPreview(mgmt.LatestPreview)
@@ -106,7 +113,7 @@ func (vm *VersionManager) ResolveVersions(project *networkingv1alpha2.PagesProje
 		return vm.resolveAutoPromote(mgmt.AutoPromote)
 
 	case networkingv1alpha2.VersionPolicyExternal:
-		return vm.resolveExternal(mgmt.External)
+		return vm.resolveExternal(mgmt.External, productionBranch)
 
 	default:
 		return nil, fmt.Errorf("unknown version management policy: %s", policy)
@@ -114,12 +121,21 @@ func (vm *VersionManager) ResolveVersions(project *networkingv1alpha2.PagesProje
 }
 
 // resolveTargetVersion resolves a single target version using the source template.
-func (*VersionManager) resolveTargetVersion(spec *networkingv1alpha2.TargetVersionSpec) (*ResolvedVersions, error) {
+func (*VersionManager) resolveTargetVersion(spec *networkingv1alpha2.TargetVersionSpec, productionBranch string) (*ResolvedVersions, error) {
 	if spec == nil {
 		return nil, errors.New("targetVersion spec is nil")
 	}
 
-	version, err := resolveFromTemplate(spec.Version, &spec.SourceTemplate)
+	// Ensure branch is set in metadata for production promotion compatibility
+	metadata := spec.Metadata
+	if metadata == nil {
+		metadata = make(map[string]string)
+	}
+	if metadata["branch"] == "" && productionBranch != "" {
+		metadata["branch"] = productionBranch
+	}
+
+	version, err := resolveFromTemplate(spec.Version, &spec.SourceTemplate, metadata)
 	if err != nil {
 		return nil, fmt.Errorf("resolve version %s: %w", spec.Version, err)
 	}
@@ -131,14 +147,26 @@ func (*VersionManager) resolveTargetVersion(spec *networkingv1alpha2.TargetVersi
 }
 
 // resolveDeclarativeVersions resolves versions from a version name list and template.
-func (*VersionManager) resolveDeclarativeVersions(spec *networkingv1alpha2.DeclarativeVersionsSpec) (*ResolvedVersions, error) {
+func (*VersionManager) resolveDeclarativeVersions(
+	spec *networkingv1alpha2.DeclarativeVersionsSpec,
+	productionBranch string,
+) (*ResolvedVersions, error) {
 	if spec == nil {
 		return nil, errors.New("declarativeVersions spec is nil")
 	}
 
+	// Ensure branch is set in metadata for production promotion compatibility
+	metadata := spec.Metadata
+	if metadata == nil {
+		metadata = make(map[string]string)
+	}
+	if metadata["branch"] == "" && productionBranch != "" {
+		metadata["branch"] = productionBranch
+	}
+
 	versions := make([]networkingv1alpha2.ProjectVersion, 0, len(spec.Versions))
 	for _, vName := range spec.Versions {
-		version, err := resolveFromTemplate(vName, &spec.SourceTemplate)
+		version, err := resolveFromTemplate(vName, &spec.SourceTemplate, metadata)
 		if err != nil {
 			return nil, fmt.Errorf("resolve version %s: %w", vName, err)
 		}
@@ -152,13 +180,30 @@ func (*VersionManager) resolveDeclarativeVersions(spec *networkingv1alpha2.Decla
 }
 
 // resolveFullVersions returns full versions directly (already complete).
-func (*VersionManager) resolveFullVersions(spec *networkingv1alpha2.FullVersionsSpec) (*ResolvedVersions, error) {
+// Ensures branch is set in metadata for production promotion compatibility.
+func (*VersionManager) resolveFullVersions(spec *networkingv1alpha2.FullVersionsSpec, productionBranch string) (*ResolvedVersions, error) {
 	if spec == nil {
 		return nil, errors.New("fullVersions spec is nil")
 	}
 
+	// Deep copy versions and ensure branch is set
+	versions := make([]networkingv1alpha2.ProjectVersion, 0, len(spec.Versions))
+	for _, v := range spec.Versions {
+		version := *v.DeepCopy()
+
+		// Ensure branch is set in metadata for production promotion compatibility
+		if version.Metadata == nil {
+			version.Metadata = make(map[string]string)
+		}
+		if version.Metadata["branch"] == "" && productionBranch != "" {
+			version.Metadata["branch"] = productionBranch
+		}
+
+		versions = append(versions, version)
+	}
+
 	return &ResolvedVersions{
-		Versions:         spec.Versions,
+		Versions:         versions,
 		ProductionTarget: spec.ProductionTarget,
 	}, nil
 }
@@ -166,7 +211,7 @@ func (*VersionManager) resolveFullVersions(spec *networkingv1alpha2.FullVersions
 // resolveGitOps resolves versions for GitOps workflow (preview + production two-stage).
 //
 //nolint:revive // cognitive complexity acceptable for GitOps resolution
-func (vm *VersionManager) resolveGitOps(spec *networkingv1alpha2.GitOpsVersionConfig) (*ResolvedVersions, error) {
+func (vm *VersionManager) resolveGitOps(spec *networkingv1alpha2.GitOpsVersionConfig, productionBranch string) (*ResolvedVersions, error) {
 	if spec == nil {
 		return &ResolvedVersions{
 			Policy: networkingv1alpha2.VersionPolicyGitOps,
@@ -183,7 +228,12 @@ func (vm *VersionManager) resolveGitOps(spec *networkingv1alpha2.GitOpsVersionCo
 	versions := make([]networkingv1alpha2.ProjectVersion, 0, 2)
 
 	if spec.PreviewVersion != "" {
-		version, err := vm.buildVersionFromGitOps(spec.PreviewVersion, spec.SourceTemplate)
+		version, err := vm.buildVersionFromGitOps(
+			spec.PreviewVersion,
+			spec.SourceTemplate,
+			spec.PreviewMetadata,
+			productionBranch,
+		)
 		if err != nil {
 			return nil, fmt.Errorf("resolve preview version %s: %w", spec.PreviewVersion, err)
 		}
@@ -192,7 +242,12 @@ func (vm *VersionManager) resolveGitOps(spec *networkingv1alpha2.GitOpsVersionCo
 
 	// Only add production version if different from preview
 	if spec.ProductionVersion != "" && spec.ProductionVersion != spec.PreviewVersion {
-		version, err := vm.buildVersionFromGitOps(spec.ProductionVersion, spec.SourceTemplate)
+		version, err := vm.buildVersionFromGitOps(
+			spec.ProductionVersion,
+			spec.SourceTemplate,
+			spec.ProductionMetadata,
+			productionBranch,
+		)
 		if err != nil {
 			return nil, fmt.Errorf("resolve production version %s: %w", spec.ProductionVersion, err)
 		}
@@ -205,15 +260,27 @@ func (vm *VersionManager) resolveGitOps(spec *networkingv1alpha2.GitOpsVersionCo
 
 // buildVersionFromGitOps builds a ProjectVersion from GitOps config.
 func (*VersionManager) buildVersionFromGitOps(
-	versionName string, template *networkingv1alpha2.SourceTemplate,
+	versionName string,
+	template *networkingv1alpha2.SourceTemplate,
+	metadata map[string]string,
+	productionBranch string,
 ) (networkingv1alpha2.ProjectVersion, error) {
+	// Ensure branch is set in metadata for production promotion compatibility
+	if metadata == nil {
+		metadata = make(map[string]string)
+	}
+	if metadata["branch"] == "" && productionBranch != "" {
+		metadata["branch"] = productionBranch
+	}
+
 	if template == nil {
 		return networkingv1alpha2.ProjectVersion{
-			Name: versionName,
+			Name:     versionName,
+			Metadata: metadata,
 		}, nil
 	}
 
-	return resolveFromTemplate(versionName, template)
+	return resolveFromTemplate(versionName, template, metadata)
 }
 
 // resolveLatestPreview resolves versions for latestPreview mode.
@@ -235,7 +302,12 @@ func (*VersionManager) resolveAutoPromote(_ *networkingv1alpha2.AutoPromoteConfi
 }
 
 // resolveExternal resolves versions for external mode.
-func (*VersionManager) resolveExternal(spec *networkingv1alpha2.ExternalVersionConfig) (*ResolvedVersions, error) {
+//
+//nolint:revive // cognitive complexity acceptable for external version resolution with SourceTemplate support
+func (*VersionManager) resolveExternal(
+	spec *networkingv1alpha2.ExternalVersionConfig,
+	productionBranch string,
+) (*ResolvedVersions, error) {
 	if spec == nil {
 		return &ResolvedVersions{
 			Policy: networkingv1alpha2.VersionPolicyExternal,
@@ -248,9 +320,33 @@ func (*VersionManager) resolveExternal(spec *networkingv1alpha2.ExternalVersionC
 
 	// Build versions from external config
 	if spec.CurrentVersion != "" {
-		result.Versions = append(result.Versions, networkingv1alpha2.ProjectVersion{
-			Name: spec.CurrentVersion,
-		})
+		// Ensure branch is set in metadata for production promotion compatibility
+		metadata := spec.Metadata
+		if metadata == nil {
+			metadata = make(map[string]string)
+		}
+		if metadata["branch"] == "" && productionBranch != "" {
+			metadata["branch"] = productionBranch
+		}
+
+		var version networkingv1alpha2.ProjectVersion
+
+		// If SourceTemplate is provided, use it to build complete Source
+		if spec.SourceTemplate != nil {
+			var err error
+			version, err = resolveFromTemplate(spec.CurrentVersion, spec.SourceTemplate, metadata)
+			if err != nil {
+				return nil, fmt.Errorf("resolve current version: %w", err)
+			}
+		} else {
+			// No template, create minimal version with metadata
+			version = networkingv1alpha2.ProjectVersion{
+				Name:     spec.CurrentVersion,
+				Metadata: metadata,
+			}
+		}
+
+		result.Versions = append(result.Versions, version)
 	}
 
 	if spec.ProductionVersion != "" {

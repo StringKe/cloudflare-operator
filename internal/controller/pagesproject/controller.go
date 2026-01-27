@@ -39,6 +39,7 @@ type PagesProjectReconciler struct {
 	latestPreviewReconciler *LatestPreviewReconciler
 	autoPromoteReconciler   *AutoPromoteReconciler
 	externalReconciler      *ExternalReconciler
+	webAnalyticsReconciler  *WebAnalyticsReconciler
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=pagesprojects,verbs=get;list;watch;create;update;patch;delete
@@ -86,6 +87,12 @@ func (r *PagesProjectReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	result, err := r.syncProject(ctx, project, apiResult)
 	if err != nil {
 		return result, err
+	}
+
+	// Reconcile Web Analytics (RUM) after project sync
+	if err := r.webAnalyticsReconciler.Reconcile(ctx, project, apiResult.API); err != nil {
+		logger.Error(err, "Failed to reconcile Web Analytics")
+		// Non-fatal, continue with version management
 	}
 
 	// Handle version management based on policy
@@ -228,6 +235,12 @@ func (r *PagesProjectReconciler) handleDeletion(
 			logger.Error(err, "Failed to get API client for deletion")
 			// Continue with finalizer removal
 		} else {
+			// Clean up Web Analytics first
+			if err := r.webAnalyticsReconciler.Cleanup(ctx, project, apiResult.API); err != nil {
+				logger.Error(err, "Failed to clean up Web Analytics, continuing with deletion")
+				// Non-fatal, continue with project deletion
+			}
+
 			// Delete project from Cloudflare
 			projectName := r.getProjectName(project)
 			logger.Info("Deleting Pages project from Cloudflare",
@@ -616,6 +629,13 @@ func (r *PagesProjectReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.externalReconciler = NewExternalReconciler(
 		mgr.GetClient(),
 		mgr.GetScheme(),
+		r.Recorder,
+		logger,
+	)
+
+	// Initialize WebAnalyticsReconciler
+	r.webAnalyticsReconciler = NewWebAnalyticsReconciler(
+		mgr.GetClient(),
 		r.Recorder,
 		logger,
 	)

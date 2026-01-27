@@ -72,6 +72,16 @@ type GitOpsVersionConfig struct {
 	// The version must have all these labels to be considered validated.
 	// +kubebuilder:validation:Optional
 	ValidationLabels map[string]string `json:"validationLabels,omitempty"`
+
+	// PreviewMetadata contains metadata for preview version deployments.
+	// Overrides SourceTemplate.Metadata for preview deployments.
+	// +kubebuilder:validation:Optional
+	PreviewMetadata map[string]string `json:"previewMetadata,omitempty"`
+
+	// ProductionMetadata contains metadata for production version deployments.
+	// Overrides SourceTemplate.Metadata for production deployments.
+	// +kubebuilder:validation:Optional
+	ProductionMetadata map[string]string `json:"productionMetadata,omitempty"`
 }
 
 // LatestPreviewConfig defines configuration for automatically tracking the latest preview deployment.
@@ -136,6 +146,16 @@ type ExternalVersionConfig struct {
 	// ProductionVersion is the externally-controlled production version.
 	// +kubebuilder:validation:Optional
 	ProductionVersion string `json:"productionVersion,omitempty"`
+
+	// SourceTemplate defines how to construct the source URL from version.
+	// When specified, allows building complete Source specs for external versions.
+	// +kubebuilder:validation:Optional
+	SourceTemplate *SourceTemplate `json:"sourceTemplate,omitempty"`
+
+	// Metadata contains key-value pairs for external version deployments.
+	// Overrides SourceTemplate.Metadata.
+	// +kubebuilder:validation:Optional
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 // VersionManagement defines version management configuration.
@@ -188,6 +208,10 @@ type TargetVersionSpec struct {
 	// SourceTemplate defines how to construct the source URL from version.
 	// +kubebuilder:validation:Required
 	SourceTemplate SourceTemplate `json:"sourceTemplate"`
+
+	// Metadata contains version-specific key-value pairs that override SourceTemplate.Metadata.
+	// +kubebuilder:validation:Optional
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 // DeclarativeVersionsSpec defines declarative mode configuration - version list + template.
@@ -209,6 +233,11 @@ type DeclarativeVersionsSpec struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default="latest"
 	ProductionTarget string `json:"productionTarget,omitempty"`
+
+	// Metadata contains key-value pairs applied to all versions in this spec.
+	// Overrides SourceTemplate.Metadata.
+	// +kubebuilder:validation:Optional
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 // FullVersionsSpec defines full mode configuration - complete version objects (backward compatible).
@@ -243,6 +272,16 @@ type SourceTemplate struct {
 	// OCI configuration (used when type=oci).
 	// +kubebuilder:validation:Optional
 	OCI *OCISourceTemplate `json:"oci,omitempty"`
+
+	// Metadata contains default key-value pairs applied to all versions generated from this template.
+	// These can be overridden by mode-specific Metadata fields.
+	// Reserved keys for deployment trigger metadata:
+	//   - "commitHash": Git commit SHA
+	//   - "commitMessage": Commit or deployment description
+	//   - "commitDirty": "true" or "false"
+	//   - "branch": Git branch name (critical for production promotion)
+	// +kubebuilder:validation:Optional
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 // S3SourceTemplate defines S3 source template configuration.

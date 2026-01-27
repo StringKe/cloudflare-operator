@@ -91,9 +91,9 @@ func (r *GitOpsReconciler) reconcilePreviewVersion(
 		return nil
 	}
 
-	// Create new preview deployment
+	// Create new preview deployment with preview metadata
 	log.Info("Creating preview deployment for version")
-	return r.createPreviewDeployment(ctx, project, versionName, gitops.SourceTemplate)
+	return r.createPreviewDeployment(ctx, project, versionName, gitops.SourceTemplate, gitops.PreviewMetadata)
 }
 
 // reconcileProductionVersion validates and promotes the production version.
@@ -251,13 +251,14 @@ func (r *GitOpsReconciler) createPreviewDeployment(
 	project *networkingv1alpha2.PagesProject,
 	versionName string,
 	sourceTemplate *networkingv1alpha2.SourceTemplate,
+	metadata map[string]string,
 ) error {
 	deploymentName := fmt.Sprintf("%s-%s", project.Name, versionName)
 
-	// Build source spec from template
+	// Build source spec from template with metadata
 	var source *networkingv1alpha2.PagesDeploymentSourceSpec
 	if sourceTemplate != nil {
-		directUpload, err := buildDirectUploadFromTemplate(versionName, sourceTemplate)
+		directUpload, err := buildDirectUploadFromTemplate(versionName, sourceTemplate, metadata, project.Spec.ProductionBranch)
 		if err != nil {
 			return fmt.Errorf("failed to build source from template: %w", err)
 		}
@@ -313,14 +314,62 @@ func (r *GitOpsReconciler) createPreviewDeployment(
 }
 
 // buildDirectUploadFromTemplate builds a PagesDirectUploadSourceSpec from a SourceTemplate.
+// It merges metadata and ensures the branch is set correctly for production promotion.
+//
+//nolint:revive // cognitive complexity acceptable for metadata extraction with multiple optional fields
 func buildDirectUploadFromTemplate(
-	versionName string, template *networkingv1alpha2.SourceTemplate,
+	versionName string,
+	template *networkingv1alpha2.SourceTemplate,
+	metadata map[string]string,
+	productionBranch string,
 ) (*networkingv1alpha2.PagesDirectUploadSourceSpec, error) {
-	version, err := resolveFromTemplate(versionName, template)
+	// Ensure branch is set in metadata for production promotion compatibility
+	if metadata == nil {
+		metadata = make(map[string]string)
+	}
+	if metadata["branch"] == "" && productionBranch != "" {
+		metadata["branch"] = productionBranch
+	}
+
+	version, err := resolveFromTemplate(versionName, template, metadata)
 	if err != nil {
 		return nil, err
 	}
-	return version.Source, nil
+
+	result := version.Source
+	if result == nil {
+		return nil, nil
+	}
+
+	// Extract metadata to DeploymentMetadata for Cloudflare API
+	if len(version.Metadata) > 0 {
+		dm := &networkingv1alpha2.DeploymentTriggerMetadata{}
+		hasMetadata := false
+
+		if v, ok := version.Metadata["commitHash"]; ok && v != "" {
+			dm.CommitHash = v
+			hasMetadata = true
+		}
+		if v, ok := version.Metadata["commitMessage"]; ok && v != "" {
+			dm.CommitMessage = v
+			hasMetadata = true
+		}
+		if v, ok := version.Metadata["commitDirty"]; ok {
+			dirty := v == "true"
+			dm.CommitDirty = &dirty
+			hasMetadata = true
+		}
+		if v, ok := version.Metadata["branch"]; ok && v != "" {
+			dm.Branch = v
+			hasMetadata = true
+		}
+
+		if hasMetadata {
+			result.DeploymentMetadata = dm
+		}
+	}
+
+	return result, nil
 }
 
 // recordValidation records a version validation in the project status.
