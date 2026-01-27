@@ -26,6 +26,10 @@ spec:
     - jsonPath: .spec.content
       name: Content
       type: string
+    - jsonPath: .status.resolvedContent
+      name: Resolved
+      priority: 1
+      type: string
     - jsonPath: .spec.proxied
       name: Proxied
       type: boolean
@@ -60,6 +64,17 @@ spec:
           spec:
             description: DNSRecordSpec defines the desired state of DNSRecord
             properties:
+              addressSelection:
+                default: First
+                description: |-
+                  AddressSelection specifies how to select addresses when multiple are available.
+                  Only applies when using sourceRef.
+                enum:
+                - First
+                - All
+                - PreferIPv4
+                - PreferIPv6
+                type: string
               cloudflare:
                 description: Cloudflare contains the Cloudflare API credentials.
                 properties:
@@ -133,7 +148,9 @@ spec:
                 maxLength: 100
                 type: string
               content:
-                description: Content is the record content/value.
+                description: |-
+                  Content is the static record content/value.
+                  Mutually exclusive with sourceRef.
                 type: string
               data:
                 description: Data contains additional record-specific data (for SRV,
@@ -212,6 +229,106 @@ spec:
                 default: false
                 description: Proxied enables Cloudflare proxy for this record.
                 type: boolean
+              sourceDeletionPolicy:
+                default: Delete
+                description: |-
+                  SourceDeletionPolicy specifies behavior when the source resource is deleted.
+                  Only applies when using sourceRef.
+                enum:
+                - Delete
+                - Orphan
+                type: string
+              sourceRef:
+                description: |-
+                  SourceRef dynamically obtains the record content from a Kubernetes resource.
+                  Mutually exclusive with content.
+                properties:
+                  gateway:
+                    description: Gateway extracts address from a Gateway API Gateway.
+                    properties:
+                      name:
+                        description: Name is the name of the Gateway.
+                        type: string
+                      namespace:
+                        description: |-
+                          Namespace is the namespace of the Gateway.
+                          Defaults to the namespace of the DNSRecord.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  httpRoute:
+                    description: HTTPRoute extracts address from a Gateway API HTTPRoute.
+                    properties:
+                      name:
+                        description: Name is the name of the HTTPRoute.
+                        type: string
+                      namespace:
+                        description: |-
+                          Namespace is the namespace of the HTTPRoute.
+                          Defaults to the namespace of the DNSRecord.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  ingress:
+                    description: Ingress extracts address from a Kubernetes Ingress.
+                    properties:
+                      name:
+                        description: Name is the name of the Ingress.
+                        type: string
+                      namespace:
+                        description: |-
+                          Namespace is the namespace of the Ingress.
+                          Defaults to the namespace of the DNSRecord.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  node:
+                    description: Node extracts address from a Kubernetes Node.
+                    properties:
+                      addressType:
+                        default: ExternalIP
+                        description: AddressType specifies which address to extract
+                          from the Node.
+                        enum:
+                        - InternalIP
+                        - ExternalIP
+                        - Hostname
+                        type: string
+                      name:
+                        description: Name is the name of the Node.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  service:
+                    description: Service extracts address from a Kubernetes Service.
+                    properties:
+                      addressType:
+                        default: LoadBalancerIP
+                        description: AddressType specifies which address to extract
+                          from the Service.
+                        enum:
+                        - LoadBalancerIP
+                        - LoadBalancerHostname
+                        - ExternalIP
+                        - ExternalName
+                        - ClusterIP
+                        type: string
+                      name:
+                        description: Name is the name of the Service.
+                        type: string
+                      namespace:
+                        description: |-
+                          Namespace is the namespace of the Service.
+                          Defaults to the namespace of the DNSRecord.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                type: object
               tags:
                 description: Tags for the record.
                 items:
@@ -223,7 +340,9 @@ spec:
                 minimum: 1
                 type: integer
               type:
-                description: Type is the DNS record type.
+                description: |-
+                  Type is the DNS record type.
+                  Optional when using sourceRef - will be auto-detected based on address type.
                 enum:
                 - A
                 - AAAA
@@ -247,9 +366,7 @@ spec:
                 type: string
             required:
             - cloudflare
-            - content
             - name
-            - type
             type: object
           status:
             description: DNSRecordStatus defines the observed state
@@ -317,12 +434,39 @@ spec:
               fqdn:
                 description: FQDN is the fully qualified domain name.
                 type: string
+              managedRecordIds:
+                description: |-
+                  ManagedRecordIDs contains all DNS record IDs managed by this resource.
+                  Multiple IDs when using AddressSelection=All.
+                items:
+                  type: string
+                type: array
               observedGeneration:
                 description: ObservedGeneration is the most recent generation observed.
                 format: int64
                 type: integer
               recordId:
                 description: RecordID is the Cloudflare DNS Record ID.
+                type: string
+              resolvedAddresses:
+                description: |-
+                  ResolvedAddresses contains all addresses resolved from the source resource.
+                  Populated when using AddressSelection=All.
+                items:
+                  type: string
+                type: array
+              resolvedContent:
+                description: ResolvedContent is the content resolved from the source
+                  resource.
+                type: string
+              resolvedType:
+                description: ResolvedType is the auto-detected record type when using
+                  sourceRef.
+                type: string
+              sourceResourceVersion:
+                description: |-
+                  SourceResourceVersion is the resourceVersion of the source resource.
+                  Used to detect changes in the source.
                 type: string
               state:
                 description: State indicates the current state.

@@ -8,12 +8,14 @@ package dnsrecord
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -25,12 +27,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 	"github.com/StringKe/cloudflare-operator/internal/clients/cf"
 	"github.com/StringKe/cloudflare-operator/internal/controller"
 	"github.com/StringKe/cloudflare-operator/internal/controller/common"
 	"github.com/StringKe/cloudflare-operator/internal/resolver"
+	"github.com/StringKe/cloudflare-operator/internal/resolver/address"
 )
 
 const (
@@ -42,15 +46,21 @@ const (
 // following the simplified 3-layer architecture.
 type DNSRecordReconciler struct {
 	client.Client
-	Scheme         *runtime.Scheme
-	Recorder       record.EventRecorder
-	APIFactory     *common.APIClientFactory
-	domainResolver *resolver.DomainResolver
+	Scheme          *runtime.Scheme
+	Recorder        record.EventRecorder
+	APIFactory      *common.APIClientFactory
+	domainResolver  *resolver.DomainResolver
+	addressResolver *address.Resolver
 }
 
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=dnsrecords,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=dnsrecords/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=networking.cloudflare-operator.io,resources=dnsrecords/finalizers,verbs=update
+// +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch
+// +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
 
 //nolint:revive // cognitive complexity is acceptable for this reconcile loop
 func (r *DNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -96,8 +106,20 @@ func (r *DNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 	}
 
+	// Resolve content from source if using dynamic mode
+	resolvedInfo, err := r.resolveContent(ctx, dnsRecord)
+	if err != nil {
+		logger.Error(err, "Failed to resolve content from source")
+		return r.setErrorStatus(ctx, dnsRecord, err)
+	}
+
+	// Handle source deletion based on policy
+	if resolvedInfo != nil && !resolvedInfo.SourceExists {
+		return r.handleSourceDeleted(ctx, dnsRecord)
+	}
+
 	// Sync DNS record to Cloudflare
-	return r.syncDNSRecord(ctx, dnsRecord, zoneInfo, apiResult)
+	return r.syncDNSRecord(ctx, dnsRecord, zoneInfo, apiResult, resolvedInfo)
 }
 
 // zoneResolutionInfo contains the resolved zone information.
@@ -213,6 +235,124 @@ func (r *DNSRecordReconciler) getAPIClient(
 	return r.APIFactory.GetClient(ctx, opts)
 }
 
+// resolvedContentInfo contains the resolved content information.
+type resolvedContentInfo struct {
+	// Content is the resolved content string (IP or hostname).
+	Content string
+	// Type is the resolved record type (A, AAAA, CNAME).
+	Type string
+	// Addresses contains all resolved addresses.
+	Addresses []address.ResolvedAddress
+	// SourceResourceVersion is the source resource's version.
+	SourceResourceVersion string
+	// SourceExists indicates if the source resource exists.
+	SourceExists bool
+}
+
+// resolveContent resolves content from sourceRef if specified.
+func (r *DNSRecordReconciler) resolveContent(
+	ctx context.Context,
+	dnsRecord *networkingv1alpha2.DNSRecord,
+) (*resolvedContentInfo, error) {
+	if dnsRecord.Spec.SourceRef == nil {
+		// Static mode - no resolution needed
+		return nil, nil
+	}
+
+	result, err := r.addressResolver.Resolve(ctx, dnsRecord.Spec.SourceRef, dnsRecord.Namespace)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve source: %w", err)
+	}
+
+	if !result.SourceExists {
+		return &resolvedContentInfo{SourceExists: false}, nil
+	}
+
+	if len(result.Addresses) == 0 {
+		return nil, errors.New("source resource has no addresses")
+	}
+
+	// Apply address selection policy
+	selected := address.SelectAddresses(result.Addresses, dnsRecord.Spec.AddressSelection)
+	if len(selected) == 0 {
+		return nil, fmt.Errorf("no addresses selected after applying policy %s", dnsRecord.Spec.AddressSelection)
+	}
+
+	// Determine record type
+	recordType := address.DetermineRecordType(selected[0])
+	if dnsRecord.Spec.Type != "" {
+		recordType = dnsRecord.Spec.Type // Allow override
+	}
+
+	return &resolvedContentInfo{
+		Content:               selected[0].Value,
+		Type:                  recordType,
+		Addresses:             selected,
+		SourceResourceVersion: result.ResourceVersion,
+		SourceExists:          true,
+	}, nil
+}
+
+// handleSourceDeleted handles the case when the source resource is deleted.
+func (r *DNSRecordReconciler) handleSourceDeleted(
+	ctx context.Context,
+	dnsRecord *networkingv1alpha2.DNSRecord,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	policy := dnsRecord.Spec.SourceDeletionPolicy
+	if policy == "" {
+		policy = networkingv1alpha2.SourceDeletionDelete
+	}
+
+	if policy == networkingv1alpha2.SourceDeletionOrphan {
+		logger.Info("Source resource deleted, orphaning DNS record per policy",
+			"name", dnsRecord.Spec.Name,
+			"policy", policy)
+		// Update status to reflect orphaned state
+		return r.setOrphanedStatus(ctx, dnsRecord)
+	}
+
+	// Default: Delete the DNS record
+	logger.Info("Source resource deleted, deleting DNS record per policy",
+		"name", dnsRecord.Spec.Name,
+		"policy", policy)
+
+	// Delete the DNSRecord CR (which will trigger handleDeletion via finalizer)
+	if err := r.Delete(ctx, dnsRecord); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, fmt.Errorf("failed to delete DNSRecord: %w", err)
+		}
+	}
+
+	return ctrl.Result{}, nil
+}
+
+// setOrphanedStatus updates status when source is deleted but record is orphaned.
+func (r *DNSRecordReconciler) setOrphanedStatus(
+	ctx context.Context,
+	dnsRecord *networkingv1alpha2.DNSRecord,
+) (ctrl.Result, error) {
+	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, dnsRecord, func() {
+		dnsRecord.Status.State = "Orphaned"
+		meta.SetStatusCondition(&dnsRecord.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: dnsRecord.Generation,
+			Reason:             "SourceDeleted",
+			Message:            "Source resource deleted, DNS record orphaned per policy",
+			LastTransitionTime: metav1.Now(),
+		})
+		dnsRecord.Status.ObservedGeneration = dnsRecord.Generation
+	})
+
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
+	}
+
+	return ctrl.Result{}, nil
+}
+
 // syncDNSRecord syncs the DNS record to Cloudflare.
 //
 //nolint:revive // cognitive complexity acceptable for sync logic
@@ -221,15 +361,32 @@ func (r *DNSRecordReconciler) syncDNSRecord(
 	dnsRecord *networkingv1alpha2.DNSRecord,
 	zoneInfo *zoneResolutionInfo,
 	apiResult *common.APIClientResult,
+	resolvedInfo *resolvedContentInfo,
 ) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	api := apiResult.API
 
+	// Determine content and type
+	var content, recordType string
+	if resolvedInfo != nil {
+		// Dynamic mode - use resolved content
+		content = resolvedInfo.Content
+		recordType = resolvedInfo.Type
+		logger.V(1).Info("Using resolved content from source",
+			"content", content,
+			"type", recordType,
+			"sourceType", dnsRecord.Spec.SourceRef.GetSourceType())
+	} else {
+		// Static mode - use spec values
+		content = dnsRecord.Spec.Content
+		recordType = dnsRecord.Spec.Type
+	}
+
 	// Build DNS record params
 	params := cf.DNSRecordParams{
 		Name:    dnsRecord.Spec.Name,
-		Type:    dnsRecord.Spec.Type,
-		Content: dnsRecord.Spec.Content,
+		Type:    recordType,
+		Content: content,
 		TTL:     dnsRecord.Spec.TTL,
 		Proxied: dnsRecord.Spec.Proxied,
 		Comment: dnsRecord.Spec.Comment,
@@ -263,7 +420,7 @@ func (r *DNSRecordReconciler) syncDNSRecord(
 		}
 	} else {
 		// Check if record already exists (adoption scenario)
-		existingID, lookupErr := api.GetDNSRecordIDInZone(ctx, zoneInfo.ZoneID, dnsRecord.Spec.Name, dnsRecord.Spec.Type)
+		existingID, lookupErr := api.GetDNSRecordIDInZone(ctx, zoneInfo.ZoneID, dnsRecord.Spec.Name, recordType)
 		if lookupErr != nil && !cf.IsNotFoundError(lookupErr) {
 			logger.Error(lookupErr, "Failed to check for existing DNS record")
 			return r.setErrorStatus(ctx, dnsRecord, lookupErr)
@@ -288,10 +445,12 @@ func (r *DNSRecordReconciler) syncDNSRecord(
 	}
 
 	// Update status with result
-	return r.setSuccessStatus(ctx, dnsRecord, zoneInfo.ZoneID, result)
+	return r.setSuccessStatus(ctx, dnsRecord, zoneInfo.ZoneID, result, resolvedInfo)
 }
 
 // handleDeletion handles the deletion of a DNSRecord.
+//
+//nolint:revive // cognitive complexity is acceptable for deletion handling
 func (r *DNSRecordReconciler) handleDeletion(
 	ctx context.Context,
 	dnsRecord *networkingv1alpha2.DNSRecord,
@@ -343,6 +502,7 @@ func (r *DNSRecordReconciler) setSuccessStatus(
 	dnsRecord *networkingv1alpha2.DNSRecord,
 	zoneID string,
 	result *cf.DNSRecordResult,
+	resolvedInfo *resolvedContentInfo,
 ) (ctrl.Result, error) {
 	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, dnsRecord, func() {
 		dnsRecord.Status.ZoneID = zoneID
@@ -358,6 +518,22 @@ func (r *DNSRecordReconciler) setSuccessStatus(
 			LastTransitionTime: metav1.Now(),
 		})
 		dnsRecord.Status.ObservedGeneration = dnsRecord.Generation
+
+		// Update source-specific status fields
+		if resolvedInfo != nil {
+			dnsRecord.Status.ResolvedType = resolvedInfo.Type
+			dnsRecord.Status.ResolvedContent = resolvedInfo.Content
+			dnsRecord.Status.ResolvedAddresses = address.AddressesToStrings(resolvedInfo.Addresses)
+			dnsRecord.Status.SourceResourceVersion = resolvedInfo.SourceResourceVersion
+			dnsRecord.Status.ManagedRecordIDs = []string{result.ID}
+		} else {
+			// Clear source-specific fields for static mode
+			dnsRecord.Status.ResolvedType = ""
+			dnsRecord.Status.ResolvedContent = ""
+			dnsRecord.Status.ResolvedAddresses = nil
+			dnsRecord.Status.SourceResourceVersion = ""
+			dnsRecord.Status.ManagedRecordIDs = nil
+		}
 	})
 
 	if err != nil {
@@ -502,10 +678,153 @@ func (r *DNSRecordReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("dnsrecord-controller")
 	r.APIFactory = common.NewAPIClientFactory(mgr.GetClient(), mgr.GetLogger())
 	r.domainResolver = resolver.NewDomainResolver(mgr.GetClient(), logr.Discard())
+	r.addressResolver = address.NewResolver(mgr.GetClient())
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1alpha2.DNSRecord{}).
 		Watches(&networkingv1alpha2.CloudflareDomain{},
 			handler.EnqueueRequestsFromMapFunc(r.findDNSRecordsForDomain)).
+		// Watch source resources for dynamic mode
+		Watches(&corev1.Service{},
+			handler.EnqueueRequestsFromMapFunc(r.findDNSRecordsForService)).
+		Watches(&networkingv1.Ingress{},
+			handler.EnqueueRequestsFromMapFunc(r.findDNSRecordsForIngress)).
+		Watches(&gatewayv1.Gateway{},
+			handler.EnqueueRequestsFromMapFunc(r.findDNSRecordsForGateway)).
+		Watches(&gatewayv1.HTTPRoute{},
+			handler.EnqueueRequestsFromMapFunc(r.findDNSRecordsForHTTPRoute)).
+		Watches(&corev1.Node{},
+			handler.EnqueueRequestsFromMapFunc(r.findDNSRecordsForNode)).
 		Complete(r)
+}
+
+// sourceRefMatcher is a function that checks if a DNSRecord's sourceRef matches a given resource.
+type sourceRefMatcher func(dnsRec *networkingv1alpha2.DNSRecord, objName, objNamespace string) bool
+
+// findDNSRecordsForSource is a generic function to find DNSRecords that reference a source resource.
+func (r *DNSRecordReconciler) findDNSRecordsForSource(
+	ctx context.Context,
+	objName, objNamespace string,
+	matcher sourceRefMatcher,
+) []reconcile.Request {
+	recordList := &networkingv1alpha2.DNSRecordList{}
+	if err := r.List(ctx, recordList); err != nil {
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for i := range recordList.Items {
+		dnsRec := &recordList.Items[i]
+		if matcher(dnsRec, objName, objNamespace) {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: client.ObjectKeyFromObject(dnsRec),
+			})
+		}
+	}
+	return requests
+}
+
+// findDNSRecordsForService returns DNSRecords that reference the given Service.
+func (r *DNSRecordReconciler) findDNSRecordsForService(ctx context.Context, obj client.Object) []reconcile.Request {
+	svc, ok := obj.(*corev1.Service)
+	if !ok {
+		return nil
+	}
+	return r.findDNSRecordsForSource(ctx, svc.Name, svc.Namespace, matchServiceSource)
+}
+
+// findDNSRecordsForIngress returns DNSRecords that reference the given Ingress.
+func (r *DNSRecordReconciler) findDNSRecordsForIngress(ctx context.Context, obj client.Object) []reconcile.Request {
+	ing, ok := obj.(*networkingv1.Ingress)
+	if !ok {
+		return nil
+	}
+	return r.findDNSRecordsForSource(ctx, ing.Name, ing.Namespace, matchIngressSource)
+}
+
+// findDNSRecordsForGateway returns DNSRecords that reference the given Gateway.
+func (r *DNSRecordReconciler) findDNSRecordsForGateway(ctx context.Context, obj client.Object) []reconcile.Request {
+	gw, ok := obj.(*gatewayv1.Gateway)
+	if !ok {
+		return nil
+	}
+	return r.findDNSRecordsForSource(ctx, gw.Name, gw.Namespace, matchGatewaySource)
+}
+
+// findDNSRecordsForHTTPRoute returns DNSRecords that reference the given HTTPRoute.
+func (r *DNSRecordReconciler) findDNSRecordsForHTTPRoute(ctx context.Context, obj client.Object) []reconcile.Request {
+	route, ok := obj.(*gatewayv1.HTTPRoute)
+	if !ok {
+		return nil
+	}
+	return r.findDNSRecordsForSource(ctx, route.Name, route.Namespace, matchHTTPRouteSource)
+}
+
+// findDNSRecordsForNode returns DNSRecords that reference the given Node.
+func (r *DNSRecordReconciler) findDNSRecordsForNode(ctx context.Context, obj client.Object) []reconcile.Request {
+	node, ok := obj.(*corev1.Node)
+	if !ok {
+		return nil
+	}
+	return r.findDNSRecordsForSource(ctx, node.Name, "", matchNodeSource)
+}
+
+// matchServiceSource checks if a DNSRecord references the given Service.
+func matchServiceSource(dnsRec *networkingv1alpha2.DNSRecord, objName, objNamespace string) bool {
+	if dnsRec.Spec.SourceRef == nil || dnsRec.Spec.SourceRef.Service == nil {
+		return false
+	}
+	ref := dnsRec.Spec.SourceRef.Service
+	ns := ref.Namespace
+	if ns == "" {
+		ns = dnsRec.Namespace
+	}
+	return ref.Name == objName && ns == objNamespace
+}
+
+// matchIngressSource checks if a DNSRecord references the given Ingress.
+func matchIngressSource(dnsRec *networkingv1alpha2.DNSRecord, objName, objNamespace string) bool {
+	if dnsRec.Spec.SourceRef == nil || dnsRec.Spec.SourceRef.Ingress == nil {
+		return false
+	}
+	ref := dnsRec.Spec.SourceRef.Ingress
+	ns := ref.Namespace
+	if ns == "" {
+		ns = dnsRec.Namespace
+	}
+	return ref.Name == objName && ns == objNamespace
+}
+
+// matchGatewaySource checks if a DNSRecord references the given Gateway.
+func matchGatewaySource(dnsRec *networkingv1alpha2.DNSRecord, objName, objNamespace string) bool {
+	if dnsRec.Spec.SourceRef == nil || dnsRec.Spec.SourceRef.Gateway == nil {
+		return false
+	}
+	ref := dnsRec.Spec.SourceRef.Gateway
+	ns := ref.Namespace
+	if ns == "" {
+		ns = dnsRec.Namespace
+	}
+	return ref.Name == objName && ns == objNamespace
+}
+
+// matchHTTPRouteSource checks if a DNSRecord references the given HTTPRoute.
+func matchHTTPRouteSource(dnsRec *networkingv1alpha2.DNSRecord, objName, objNamespace string) bool {
+	if dnsRec.Spec.SourceRef == nil || dnsRec.Spec.SourceRef.HTTPRoute == nil {
+		return false
+	}
+	ref := dnsRec.Spec.SourceRef.HTTPRoute
+	ns := ref.Namespace
+	if ns == "" {
+		ns = dnsRec.Namespace
+	}
+	return ref.Name == objName && ns == objNamespace
+}
+
+// matchNodeSource checks if a DNSRecord references the given Node.
+func matchNodeSource(dnsRec *networkingv1alpha2.DNSRecord, objName, _ string) bool {
+	if dnsRec.Spec.SourceRef == nil || dnsRec.Spec.SourceRef.Node == nil {
+		return false
+	}
+	return dnsRec.Spec.SourceRef.Node.Name == objName
 }
