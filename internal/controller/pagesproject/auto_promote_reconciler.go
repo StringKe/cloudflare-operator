@@ -312,35 +312,25 @@ func (r *AutoPromoteReconciler) promoteToProduction(
 	ctx context.Context,
 	project *networkingv1alpha2.PagesProject,
 	deployment *networkingv1alpha2.PagesDeployment,
-	apiClient *cf.API,
+	_ *cf.API, // apiClient no longer needed for promotion (uses environment change)
 ) error {
 	log := r.Log.WithValues(
 		"project", project.Name,
 		"deployment", deployment.Name,
 	)
 
-	// Get project name for API call
-	projectName := project.Spec.Name
-	if projectName == "" {
-		projectName = project.Name
-	}
-
-	// Promote via Cloudflare Rollback API
+	// Promote by changing environment (works for all deployments, not just previous production)
 	log.Info("Auto-promoting preview deployment to production",
-		"deploymentId", deployment.Status.DeploymentID)
+		"deployment", deployment.Name)
 
-	_, err := apiClient.RollbackPagesDeployment(ctx, projectName, deployment.Status.DeploymentID)
-	if err != nil {
+	if err := PromoteDeploymentToProduction(ctx, r.Client, deployment); err != nil {
 		r.Recorder.Event(project, corev1.EventTypeWarning, "AutoPromoteFailed",
 			fmt.Sprintf("Failed to auto-promote deployment %s: %s",
-				deployment.Name, cf.SanitizeErrorMessage(err)))
+				deployment.Name, err.Error()))
 		return fmt.Errorf("failed to promote deployment: %w", err)
 	}
 
-	versionName := deployment.Spec.VersionName
-	if versionName == "" {
-		versionName = deployment.Status.VersionName
-	}
+	versionName := GetDeploymentVersionName(deployment)
 
 	r.Recorder.Event(project, corev1.EventTypeNormal, "AutoPromoted",
 		fmt.Sprintf("Auto-promoted deployment %s (version: %s) to production",

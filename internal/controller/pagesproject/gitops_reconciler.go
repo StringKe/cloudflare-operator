@@ -103,7 +103,7 @@ func (r *GitOpsReconciler) reconcileProductionVersion(
 	ctx context.Context,
 	project *networkingv1alpha2.PagesProject,
 	gitops *networkingv1alpha2.GitOpsVersionConfig,
-	apiClient *cf.API,
+	_ *cf.API, // apiClient no longer needed for promotion (uses environment change)
 ) error {
 	versionName := gitops.ProductionVersion
 	log := r.Log.WithValues("version", versionName, "type", "production")
@@ -132,30 +132,24 @@ func (r *GitOpsReconciler) reconcileProductionVersion(
 		return fmt.Errorf("deployment %s has not succeeded yet (state: %s)", deployment.Name, deployment.Status.State)
 	}
 
-	// Check if already promoted
-	if deployment.Status.DeploymentID == "" {
-		return fmt.Errorf("deployment %s has no Cloudflare deployment ID", deployment.Name)
+	// Validate deployment is ready for promotion
+	if err := ValidateDeploymentForPromotion(deployment); err != nil {
+		return err
 	}
 
-	// Check current production
-	projectName := project.Spec.Name
-	if projectName == "" {
-		projectName = project.Name
-	}
-
+	// Check if already production
 	if project.Status.CurrentProduction != nil &&
 		project.Status.CurrentProduction.DeploymentID == deployment.Status.DeploymentID {
 		log.V(1).Info("Version is already production")
 		return nil
 	}
 
-	// Promote via Cloudflare Rollback API
-	log.Info("Promoting deployment to production", "deploymentId", deployment.Status.DeploymentID)
+	// Promote by changing environment (works for all deployments, not just previous production)
+	log.Info("Promoting deployment to production", "deployment", deployment.Name)
 
-	_, err = apiClient.RollbackPagesDeployment(ctx, projectName, deployment.Status.DeploymentID)
-	if err != nil {
+	if err := PromoteDeploymentToProduction(ctx, r.Client, deployment); err != nil {
 		r.Recorder.Event(project, corev1.EventTypeWarning, "PromotionFailed",
-			fmt.Sprintf("Failed to promote version %s: %s", versionName, cf.SanitizeErrorMessage(err)))
+			fmt.Sprintf("Failed to promote version %s: %s", versionName, err.Error()))
 		return fmt.Errorf("failed to promote deployment: %w", err)
 	}
 

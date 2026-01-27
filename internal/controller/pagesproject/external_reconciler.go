@@ -128,7 +128,7 @@ func (r *ExternalReconciler) reconcileProductionVersion(
 	ctx context.Context,
 	project *networkingv1alpha2.PagesProject,
 	config *networkingv1alpha2.ExternalVersionConfig,
-	apiClient *cf.API,
+	_ *cf.API, // apiClient no longer needed for promotion (uses environment change)
 ) error {
 	versionName := config.ProductionVersion
 	log := r.Log.WithValues("version", versionName, "type", "production")
@@ -143,16 +143,10 @@ func (r *ExternalReconciler) reconcileProductionVersion(
 		return fmt.Errorf("version %s not found, cannot promote to production", versionName)
 	}
 
-	// Check if deployment has succeeded
-	if deployment.Status.State != networkingv1alpha2.PagesDeploymentStateSucceeded {
-		log.Info("Waiting for deployment to succeed", "state", deployment.Status.State)
-		return fmt.Errorf("deployment %s has not succeeded yet (state: %s)",
-			deployment.Name, deployment.Status.State)
-	}
-
-	// Check if deployment has a Cloudflare deployment ID
-	if deployment.Status.DeploymentID == "" {
-		return fmt.Errorf("deployment %s has no Cloudflare deployment ID", deployment.Name)
+	// Validate deployment is ready for promotion (includes succeeded check)
+	if err := ValidateDeploymentForPromotion(deployment); err != nil {
+		log.Info("Deployment not ready for promotion", "reason", err.Error())
+		return err
 	}
 
 	// Check if already production
@@ -162,19 +156,12 @@ func (r *ExternalReconciler) reconcileProductionVersion(
 		return nil
 	}
 
-	// Get project name for API call
-	projectName := project.Spec.Name
-	if projectName == "" {
-		projectName = project.Name
-	}
+	// Promote by changing environment (works for all deployments, not just previous production)
+	log.Info("Promoting deployment to production", "deployment", deployment.Name)
 
-	// Promote via Cloudflare Rollback API
-	log.Info("Promoting deployment to production", "deploymentId", deployment.Status.DeploymentID)
-
-	_, err = apiClient.RollbackPagesDeployment(ctx, projectName, deployment.Status.DeploymentID)
-	if err != nil {
+	if err := PromoteDeploymentToProduction(ctx, r.Client, deployment); err != nil {
 		r.Recorder.Event(project, corev1.EventTypeWarning, "PromotionFailed",
-			fmt.Sprintf("Failed to promote version %s: %s", versionName, cf.SanitizeErrorMessage(err)))
+			fmt.Sprintf("Failed to promote version %s: %s", versionName, err.Error()))
 		return fmt.Errorf("failed to promote deployment: %w", err)
 	}
 

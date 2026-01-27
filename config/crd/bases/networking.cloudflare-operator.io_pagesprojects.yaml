@@ -1634,6 +1634,159 @@ spec:
                           The version must have all these labels to be considered validated.
                         type: object
                     type: object
+                  gitopsLatest:
+                    description: |-
+                      GitOpsLatest configuration (used when policy=gitopsLatest).
+                      CI triggers deployment, production managed by CF console.
+                    properties:
+                      environment:
+                        default: production
+                        description: |-
+                          Environment specifies the deployment target environment.
+                          - production: Deploy directly to production
+                          - preview: Deploy to preview environment
+                        enum:
+                        - production
+                        - preview
+                        type: string
+                      metadata:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          Metadata contains version-specific key-value pairs.
+                          Reserved keys for deployment trigger metadata:
+                            - "commitHash": Git commit SHA
+                            - "commitMessage": Commit or deployment description
+                            - "commitDirty": "true" or "false"
+                            - "branch": Git branch name (auto-inherited from productionBranch if empty)
+                        type: object
+                      sourceTemplate:
+                        description: SourceTemplate defines how to construct the source
+                          URL from version.
+                        properties:
+                          http:
+                            description: HTTP configuration (used when type=http).
+                            properties:
+                              archiveType:
+                                default: tar.gz
+                                description: 'ArchiveType is the archive type (default:
+                                  "tar.gz").'
+                                enum:
+                                - tar.gz
+                                - tar
+                                - zip
+                                - none
+                                type: string
+                              headersSecretRef:
+                                description: HeadersSecretRef references a Secret
+                                  containing HTTP headers.
+                                type: string
+                              urlTemplate:
+                                description: |-
+                                  URLTemplate is the URL template with {{.Version}} placeholder.
+                                  Example: "https://releases.example.com/{{.Version}}/dist.tar.gz"
+                                pattern: ^https?://
+                                type: string
+                            required:
+                            - urlTemplate
+                            type: object
+                          metadata:
+                            additionalProperties:
+                              type: string
+                            description: |-
+                              Metadata contains default key-value pairs applied to all versions generated from this template.
+                              These can be overridden by mode-specific Metadata fields.
+                              Reserved keys for deployment trigger metadata:
+                                - "commitHash": Git commit SHA
+                                - "commitMessage": Commit or deployment description
+                                - "commitDirty": "true" or "false"
+                                - "branch": Git branch name (critical for production promotion)
+                            type: object
+                          oci:
+                            description: OCI configuration (used when type=oci).
+                            properties:
+                              credentialsSecretRef:
+                                description: CredentialsSecretRef references a Secret
+                                  containing registry credentials.
+                                type: string
+                              repository:
+                                description: |-
+                                  Repository is the OCI repository address.
+                                  Example: "registry.example.com/my-app"
+                                type: string
+                              tagTemplate:
+                                description: |-
+                                  TagTemplate is the tag template with {{.Version}} placeholder.
+                                  Example: "{{.Version}}" or "v{{.Version}}"
+                                type: string
+                            required:
+                            - repository
+                            - tagTemplate
+                            type: object
+                          s3:
+                            description: S3 configuration (used when type=s3).
+                            properties:
+                              archiveType:
+                                default: tar.gz
+                                description: 'ArchiveType is the archive type (default:
+                                  "tar.gz").'
+                                enum:
+                                - tar.gz
+                                - tar
+                                - zip
+                                - none
+                                type: string
+                              bucket:
+                                description: Bucket is the S3 bucket name.
+                                type: string
+                              credentialsSecretRef:
+                                description: CredentialsSecretRef references a Secret
+                                  containing AWS credentials.
+                                type: string
+                              endpoint:
+                                description: Endpoint is the S3 endpoint URL (optional,
+                                  for S3-compatible services).
+                                type: string
+                              keyTemplate:
+                                description: |-
+                                  KeyTemplate is the object key template with {{.Version}} placeholder.
+                                  Example: "pages-artifacts/my-app/{{.Version}}.tar.gz"
+                                type: string
+                              region:
+                                description: Region is the AWS region.
+                                type: string
+                              usePathStyle:
+                                default: false
+                                description: UsePathStyle forces path-style addressing
+                                  instead of virtual hosted-style.
+                                type: boolean
+                            required:
+                            - bucket
+                            - keyTemplate
+                            - region
+                            type: object
+                          type:
+                            description: Type specifies the template type.
+                            enum:
+                            - s3
+                            - http
+                            - oci
+                            type: string
+                        required:
+                        - type
+                        type: object
+                      version:
+                        description: |-
+                          Version is the current version name (e.g., "sha-abc123").
+                          CI updates this field to trigger deployment.
+                        maxLength: 63
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                        type: string
+                    required:
+                    - sourceTemplate
+                    - version
+                    type: object
                   latestPreview:
                     description: LatestPreview configuration (used when policy=latestPreview).
                     properties:
@@ -1816,6 +1969,7 @@ spec:
                       - latestPreview
                       - autoPromote
                       - external
+                      - gitopsLatest
                     - enum:
                       - none
                       - targetVersion
@@ -1825,6 +1979,7 @@ spec:
                       - latestPreview
                       - autoPromote
                       - external
+                      - gitopsLatest
                     default: none
                     description: Policy specifies the version management policy.
                     type: string
@@ -1985,6 +2140,7 @@ spec:
                 - latestPreview
                 - autoPromote
                 - external
+                - gitopsLatest
                 type: string
               adopted:
                 description: Adopted indicates whether this project was adopted from
@@ -2914,15 +3070,15 @@ spec:
                   status.
                 properties:
                   autoInstall:
-                    description: AutoInstall indicates whether automatic script injection
-                      is enabled.
+                    description: AutoInstall is deprecated, use Sites[].AutoInstall
+                      instead.
                     type: boolean
                   enabled:
                     description: Enabled indicates whether Web Analytics is currently
-                      enabled.
+                      enabled for any sites.
                     type: boolean
                   hostname:
-                    description: Hostname is the hostname being tracked (e.g., "myproject.pages.dev").
+                    description: Hostname is deprecated, use Sites[].Hostname instead.
                     type: string
                   lastChecked:
                     description: LastChecked is the last time Web Analytics status
@@ -2934,14 +3090,38 @@ spec:
                       Analytics status.
                     type: string
                   siteTag:
-                    description: SiteTag is the unique identifier for the Web Analytics
-                      site.
+                    description: SiteTag is deprecated, use Sites[].SiteTag instead.
                     type: string
                   siteToken:
-                    description: |-
-                      SiteToken is the token used for tracking.
-                      This is sensitive information and should be protected.
+                    description: SiteToken is deprecated, use Sites[].SiteToken instead.
                     type: string
+                  sites:
+                    description: Sites contains the status of all Web Analytics sites.
+                    items:
+                      description: WebAnalyticsSiteStatus represents the status of
+                        a single Web Analytics site.
+                      properties:
+                        autoInstall:
+                          description: AutoInstall indicates whether automatic script
+                            injection is enabled.
+                          type: boolean
+                        enabled:
+                          description: Enabled indicates whether this site is currently
+                            enabled.
+                          type: boolean
+                        hostname:
+                          description: Hostname is the hostname being tracked.
+                          type: string
+                        siteTag:
+                          description: SiteTag is the unique identifier for this site.
+                          type: string
+                        siteToken:
+                          description: SiteToken is the token used for tracking.
+                          type: string
+                      required:
+                      - hostname
+                      type: object
+                    type: array
                 type: object
             type: object
         type: object

@@ -8,7 +8,7 @@ import (
 )
 
 // VersionPolicy defines the mode for version management.
-// +kubebuilder:validation:Enum=none;targetVersion;declarativeVersions;fullVersions;gitops;latestPreview;autoPromote;external
+// +kubebuilder:validation:Enum=none;targetVersion;declarativeVersions;fullVersions;gitops;latestPreview;autoPromote;external;gitopsLatest
 type VersionPolicy string
 
 const (
@@ -28,6 +28,8 @@ const (
 	VersionPolicyAutoPromote VersionPolicy = "autoPromote"
 	// VersionPolicyExternal - version controlled by external system
 	VersionPolicyExternal VersionPolicy = "external"
+	// VersionPolicyGitOpsLatest - CI triggers deployment, production managed by CF console
+	VersionPolicyGitOpsLatest VersionPolicy = "gitopsLatest"
 )
 
 // SourceTemplateType defines the type of source template.
@@ -158,12 +160,46 @@ type ExternalVersionConfig struct {
 	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
+// GitOpsLatestConfig defines gitops-latest mode configuration.
+// CI updates the version field to trigger deployment.
+// Production version switching is fully managed by CF console.
+type GitOpsLatestConfig struct {
+	// Version is the current version name (e.g., "sha-abc123").
+	// CI updates this field to trigger deployment.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Version string `json:"version"`
+
+	// SourceTemplate defines how to construct the source URL from version.
+	// +kubebuilder:validation:Required
+	SourceTemplate SourceTemplate `json:"sourceTemplate"`
+
+	// Environment specifies the deployment target environment.
+	// - production: Deploy directly to production
+	// - preview: Deploy to preview environment
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=production;preview
+	// +kubebuilder:default=production
+	Environment string `json:"environment,omitempty"`
+
+	// Metadata contains version-specific key-value pairs.
+	// Reserved keys for deployment trigger metadata:
+	//   - "commitHash": Git commit SHA
+	//   - "commitMessage": Commit or deployment description
+	//   - "commitDirty": "true" or "false"
+	//   - "branch": Git branch name (auto-inherited from productionBranch if empty)
+	// +kubebuilder:validation:Optional
+	Metadata map[string]string `json:"metadata,omitempty"`
+}
+
 // VersionManagement defines version management configuration.
 // Only one mode should be used at a time.
 type VersionManagement struct {
 	// Policy specifies the version management policy.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Enum=none;targetVersion;declarativeVersions;fullVersions;gitops;latestPreview;autoPromote;external
+	// +kubebuilder:validation:Enum=none;targetVersion;declarativeVersions;fullVersions;gitops;latestPreview;autoPromote;external;gitopsLatest
 	// +kubebuilder:default="none"
 	Policy VersionPolicy `json:"policy,omitempty"`
 
@@ -194,6 +230,11 @@ type VersionManagement struct {
 	// External configuration (used when policy=external).
 	// +kubebuilder:validation:Optional
 	External *ExternalVersionConfig `json:"external,omitempty"`
+
+	// GitOpsLatest configuration (used when policy=gitopsLatest).
+	// CI triggers deployment, production managed by CF console.
+	// +kubebuilder:validation:Optional
+	GitOpsLatest *GitOpsLatestConfig `json:"gitopsLatest,omitempty"`
 }
 
 // TargetVersionSpec defines the simplest mode configuration - just a single target version.
@@ -876,26 +917,54 @@ type ManagedVersionStatus struct {
 	LastTransitionTime *metav1.Time `json:"lastTransitionTime,omitempty"`
 }
 
-// WebAnalyticsStatus represents the status of Cloudflare Web Analytics for this project.
-type WebAnalyticsStatus struct {
-	// Enabled indicates whether Web Analytics is currently enabled.
-	// +kubebuilder:validation:Optional
-	Enabled bool `json:"enabled"`
+// WebAnalyticsSiteStatus represents the status of a single Web Analytics site.
+type WebAnalyticsSiteStatus struct {
+	// Hostname is the hostname being tracked.
+	// +kubebuilder:validation:Required
+	Hostname string `json:"hostname"`
 
-	// SiteTag is the unique identifier for the Web Analytics site.
+	// SiteTag is the unique identifier for this site.
 	// +kubebuilder:validation:Optional
 	SiteTag string `json:"siteTag,omitempty"`
 
 	// SiteToken is the token used for tracking.
-	// This is sensitive information and should be protected.
 	// +kubebuilder:validation:Optional
 	SiteToken string `json:"siteToken,omitempty"`
 
-	// Hostname is the hostname being tracked (e.g., "myproject.pages.dev").
+	// AutoInstall indicates whether automatic script injection is enabled.
+	// +kubebuilder:validation:Optional
+	AutoInstall bool `json:"autoInstall"`
+
+	// Enabled indicates whether this site is currently enabled.
+	// +kubebuilder:validation:Optional
+	Enabled bool `json:"enabled"`
+}
+
+// WebAnalyticsStatus represents the status of Cloudflare Web Analytics for this project.
+type WebAnalyticsStatus struct {
+	// Enabled indicates whether Web Analytics is currently enabled for any sites.
+	// +kubebuilder:validation:Optional
+	Enabled bool `json:"enabled"`
+
+	// Sites contains the status of all Web Analytics sites.
+	// +kubebuilder:validation:Optional
+	Sites []WebAnalyticsSiteStatus `json:"sites,omitempty"`
+
+	// --- Deprecated fields for backward compatibility ---
+
+	// SiteTag is deprecated, use Sites[].SiteTag instead.
+	// +kubebuilder:validation:Optional
+	SiteTag string `json:"siteTag,omitempty"`
+
+	// SiteToken is deprecated, use Sites[].SiteToken instead.
+	// +kubebuilder:validation:Optional
+	SiteToken string `json:"siteToken,omitempty"`
+
+	// Hostname is deprecated, use Sites[].Hostname instead.
 	// +kubebuilder:validation:Optional
 	Hostname string `json:"hostname,omitempty"`
 
-	// AutoInstall indicates whether automatic script injection is enabled.
+	// AutoInstall is deprecated, use Sites[].AutoInstall instead.
 	// +kubebuilder:validation:Optional
 	AutoInstall bool `json:"autoInstall"`
 

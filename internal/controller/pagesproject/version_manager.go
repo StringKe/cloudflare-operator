@@ -115,6 +115,9 @@ func (vm *VersionManager) ResolveVersions(project *networkingv1alpha2.PagesProje
 	case networkingv1alpha2.VersionPolicyExternal:
 		return vm.resolveExternal(mgmt.External, productionBranch)
 
+	case networkingv1alpha2.VersionPolicyGitOpsLatest:
+		return vm.resolveGitOpsLatest(mgmt.GitOpsLatest, productionBranch)
+
 	default:
 		return nil, fmt.Errorf("unknown version management policy: %s", policy)
 	}
@@ -357,6 +360,48 @@ func (*VersionManager) resolveExternal(
 	return result, nil
 }
 
+// resolveGitOpsLatest resolves versions for gitopsLatest mode.
+// Key difference from targetVersion: ProductionTarget is NOT set,
+// so reconcileProductionTarget() will skip production switching.
+// This allows CF console to fully manage production version switching.
+func (*VersionManager) resolveGitOpsLatest(
+	spec *networkingv1alpha2.GitOpsLatestConfig,
+	productionBranch string,
+) (*ResolvedVersions, error) {
+	if spec == nil {
+		return &ResolvedVersions{
+			Policy: networkingv1alpha2.VersionPolicyGitOpsLatest,
+		}, nil
+	}
+
+	result := &ResolvedVersions{
+		Policy: networkingv1alpha2.VersionPolicyGitOpsLatest,
+		// ProductionTarget intentionally left empty!
+		// This prevents automatic production switching.
+	}
+
+	if spec.Version == "" {
+		return result, nil
+	}
+
+	// Ensure branch is set in metadata
+	metadata := spec.Metadata
+	if metadata == nil {
+		metadata = make(map[string]string)
+	}
+	if metadata["branch"] == "" && productionBranch != "" {
+		metadata["branch"] = productionBranch
+	}
+
+	version, err := resolveFromTemplate(spec.Version, &spec.SourceTemplate, metadata)
+	if err != nil {
+		return nil, fmt.Errorf("resolve version %s: %w", spec.Version, err)
+	}
+
+	result.Versions = []networkingv1alpha2.ProjectVersion{version}
+	return result, nil
+}
+
 // HasVersions checks if the project has any versions configured.
 func (*VersionManager) HasVersions(project *networkingv1alpha2.PagesProject) bool {
 	mgmt := project.Spec.VersionManagement
@@ -396,6 +441,9 @@ func (*VersionManager) HasVersions(project *networkingv1alpha2.PagesProject) boo
 	case networkingv1alpha2.VersionPolicyExternal:
 		return mgmt.External != nil &&
 			(mgmt.External.CurrentVersion != "" || mgmt.External.ProductionVersion != "")
+
+	case networkingv1alpha2.VersionPolicyGitOpsLatest:
+		return mgmt.GitOpsLatest != nil && mgmt.GitOpsLatest.Version != ""
 	}
 
 	return false
@@ -535,6 +583,9 @@ func (vm *VersionManager) createDeployment(
 	// Build direct upload source with deployment metadata
 	directUploadSource := vm.buildDirectUploadSource(version)
 
+	// Determine environment based on policy
+	env := vm.determineDeploymentEnvironment(project)
+
 	deployment := &networkingv1alpha2.PagesDeployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-%s", project.Name, version.Name),
@@ -553,7 +604,7 @@ func (vm *VersionManager) createDeployment(
 			ProjectRef: networkingv1alpha2.PagesProjectRef{
 				Name: project.Name,
 			},
-			Environment: networkingv1alpha2.PagesDeploymentEnvironmentPreview, // Default to preview
+			Environment: env,
 			Source: &networkingv1alpha2.PagesDeploymentSourceSpec{
 				Type:         networkingv1alpha2.PagesDeploymentSourceTypeDirectUpload,
 				DirectUpload: directUploadSource,
@@ -573,6 +624,34 @@ func (vm *VersionManager) createDeployment(
 
 	vm.log.Info("Created managed deployment", "version", version.Name, "deployment", deployment.Name)
 	return nil
+}
+
+// determineDeploymentEnvironment determines the deployment environment based on policy.
+func (*VersionManager) determineDeploymentEnvironment(
+	project *networkingv1alpha2.PagesProject,
+) networkingv1alpha2.PagesDeploymentEnvironment {
+	// Default to preview
+	env := networkingv1alpha2.PagesDeploymentEnvironmentPreview
+
+	if project.Spec.VersionManagement == nil {
+		return env
+	}
+
+	// For gitopsLatest, use the configured environment
+	if project.Spec.VersionManagement.GitOpsLatest != nil {
+		envStr := project.Spec.VersionManagement.GitOpsLatest.Environment
+		switch envStr {
+		case "production":
+			return networkingv1alpha2.PagesDeploymentEnvironmentProduction
+		case "preview":
+			return networkingv1alpha2.PagesDeploymentEnvironmentPreview
+		default:
+			// Default is production per spec
+			return networkingv1alpha2.PagesDeploymentEnvironmentProduction
+		}
+	}
+
+	return env
 }
 
 // buildDirectUploadSource builds a direct upload source from a ProjectVersion,
