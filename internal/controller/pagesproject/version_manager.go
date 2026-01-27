@@ -639,16 +639,11 @@ func (*VersionManager) determineDeploymentEnvironment(
 
 	// For gitopsLatest, use the configured environment
 	if project.Spec.VersionManagement.GitOpsLatest != nil {
-		envStr := project.Spec.VersionManagement.GitOpsLatest.Environment
-		switch envStr {
-		case "production":
-			return networkingv1alpha2.PagesDeploymentEnvironmentProduction
-		case "preview":
+		if project.Spec.VersionManagement.GitOpsLatest.Environment == "preview" {
 			return networkingv1alpha2.PagesDeploymentEnvironmentPreview
-		default:
-			// Default is production per spec
-			return networkingv1alpha2.PagesDeploymentEnvironmentProduction
 		}
+		// Default is production per spec (includes "production" and empty string)
+		return networkingv1alpha2.PagesDeploymentEnvironmentProduction
 	}
 
 	return env
