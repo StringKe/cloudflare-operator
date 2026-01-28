@@ -131,22 +131,28 @@ func (r *WebAnalyticsReconciler) enableSite(
 		return nil, fmt.Errorf("failed to check existing site: %w", err)
 	}
 
+	// auto_install is only valid for custom domains with Cloudflare proxy.
+	// For *.pages.dev domains, auto_install must be false (error 10022 otherwise).
+	isPagesDevDomain := strings.HasSuffix(hostname, ".pages.dev")
+	desiredAutoInstall := !isPagesDevDomain
+
 	var site *cf.RUMSite
 	if existingSite != nil {
 		log.V(1).Info("Web Analytics site already exists", "siteTag", existingSite.SiteTag)
 		site = existingSite
 
-		// Ensure auto_install is enabled
-		if !existingSite.AutoInstall {
-			log.Info("Updating Web Analytics site to enable auto_install")
-			site, err = apiClient.UpdateWebAnalyticsSite(ctx, existingSite.SiteTag, true)
+		// Update auto_install only if needed and valid for this domain type
+		if existingSite.AutoInstall != desiredAutoInstall {
+			log.Info("Updating Web Analytics site auto_install setting",
+				"current", existingSite.AutoInstall, "desired", desiredAutoInstall)
+			site, err = apiClient.UpdateWebAnalyticsSite(ctx, existingSite.SiteTag, desiredAutoInstall)
 			if err != nil {
 				return nil, fmt.Errorf("failed to update site: %w", err)
 			}
 		}
 	} else {
 		// Create new Web Analytics site
-		log.Info("Enabling Web Analytics", "hostname", hostname)
+		log.Info("Enabling Web Analytics", "hostname", hostname, "autoInstall", desiredAutoInstall)
 		site, err = apiClient.EnableWebAnalytics(ctx, hostname)
 		if err != nil {
 			r.Recorder.Event(project, corev1.EventTypeWarning, "WebAnalyticsFailed",

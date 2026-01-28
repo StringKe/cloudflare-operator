@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // RUMSite represents a Web Analytics site configuration.
@@ -46,8 +47,11 @@ type RUMRule struct {
 	CreatedAt   string   `json:"created,omitempty"`
 }
 
-// EnableWebAnalytics enables Web Analytics for a hostname with auto-install.
+// EnableWebAnalytics enables Web Analytics for a hostname.
 // For Pages projects, use the *.pages.dev hostname or custom domain.
+//
+// Note: auto_install is only supported for custom domains proxied through Cloudflare.
+// For *.pages.dev domains, auto_install must be false as Pages has built-in injection.
 func (api *API) EnableWebAnalytics(ctx context.Context, hostname string) (*RUMSite, error) {
 	if api.CloudflareClient == nil {
 		return nil, errClientNotInitialized
@@ -60,10 +64,14 @@ func (api *API) EnableWebAnalytics(ctx context.Context, hostname string) (*RUMSi
 
 	endpoint := fmt.Sprintf("/accounts/%s/rum/site_info", accountID)
 
-	// Create site with auto_install enabled
+	// auto_install is only valid for custom domains with Cloudflare proxy.
+	// For *.pages.dev domains, auto_install must be false (error 10022 otherwise).
+	// Pages projects have built-in Web Analytics injection, so auto_install is not needed.
+	autoInstall := !strings.HasSuffix(hostname, ".pages.dev")
+
 	params := map[string]interface{}{
 		"host":         hostname,
-		"auto_install": true,
+		"auto_install": autoInstall,
 	}
 
 	resp, err := api.CloudflareClient.Raw(ctx, "POST", endpoint, params, nil)
@@ -76,7 +84,7 @@ func (api *API) EnableWebAnalytics(ctx context.Context, hostname string) (*RUMSi
 		return nil, fmt.Errorf("failed to parse site: %w", err)
 	}
 
-	api.Log.Info("Web Analytics enabled", "hostname", hostname, "siteTag", site.SiteTag)
+	api.Log.Info("Web Analytics enabled", "hostname", hostname, "siteTag", site.SiteTag, "autoInstall", autoInstall)
 	return &site, nil
 }
 
