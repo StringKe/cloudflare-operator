@@ -446,6 +446,21 @@ func IsPagesDeploymentNonRetryableError(err error) bool {
 	return IsActiveProductionDeploymentError(err)
 }
 
+// IsAliasedDeploymentError checks if the error indicates that the deployment
+// cannot be deleted because it has aliases (branch URLs, custom domains, etc.).
+// Cloudflare Pages requires force=true to delete aliased deployments.
+// Error code: 8000035
+func IsAliasedDeploymentError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "8000035") ||
+		strings.Contains(errStr, "aliased deployment") ||
+		strings.Contains(errStr, "cannot delete deployment with aliases") ||
+		strings.Contains(errStr, "deployment has aliases")
+}
+
 // SanitizeErrorMessage removes potentially sensitive information from error messages
 // before storing them in Status conditions
 func SanitizeErrorMessage(err error) string {

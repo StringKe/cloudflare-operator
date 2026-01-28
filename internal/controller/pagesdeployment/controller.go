@@ -468,7 +468,17 @@ func (r *PagesDeploymentReconciler) handleDeletion(
 			logger.Error(err, "Failed to get API client for deletion")
 			// Continue with finalizer removal
 		} else {
-			if err := apiResult.API.DeletePagesDeployment(ctx, projectName, deployment.Status.DeploymentID); err != nil {
+			// First try without force
+			err := apiResult.API.DeletePagesDeployment(ctx, projectName, deployment.Status.DeploymentID, false)
+			if err != nil {
+				// If aliased deployment error, retry with force=true
+				if cf.IsAliasedDeploymentError(err) {
+					logger.Info("Deployment has aliases, retrying with force=true",
+						"deploymentID", deployment.Status.DeploymentID)
+					err = apiResult.API.DeletePagesDeployment(ctx, projectName, deployment.Status.DeploymentID, true)
+				}
+			}
+			if err != nil {
 				if !cf.IsNotFoundError(err) && !cf.IsActiveProductionDeploymentError(err) {
 					logger.Error(err, "Failed to delete deployment from Cloudflare")
 					r.Recorder.Event(deployment, corev1.EventTypeWarning, controller.EventReasonDeleteFailed,

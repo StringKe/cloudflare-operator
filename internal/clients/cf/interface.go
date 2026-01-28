@@ -146,7 +146,8 @@ type CloudflareClient interface {
 	// Pages Deployment operations
 	CreatePagesDeployment(ctx context.Context, projectName, branch string) (*PagesDeploymentResult, error)
 	GetPagesDeployment(ctx context.Context, projectName, deploymentID string) (*PagesDeploymentResult, error)
-	DeletePagesDeployment(ctx context.Context, projectName, deploymentID string) error
+	// DeletePagesDeployment deletes a deployment. If force is true, aliased deployments will be deleted.
+	DeletePagesDeployment(ctx context.Context, projectName, deploymentID string, force bool) error
 	ListPagesDeployments(ctx context.Context, projectName string) ([]PagesDeploymentResult, error)
 	RetryPagesDeployment(ctx context.Context, projectName, deploymentID string) (*PagesDeploymentResult, error)
 	RollbackPagesDeployment(ctx context.Context, projectName, deploymentID string) (*PagesDeploymentResult, error)

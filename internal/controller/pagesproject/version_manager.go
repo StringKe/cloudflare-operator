@@ -7,9 +7,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -17,6 +18,10 @@ import (
 
 	networkingv1alpha2 "github.com/StringKe/cloudflare-operator/api/v1alpha2"
 )
+
+// ErrDeploymentPendingDeletion is returned when a deployment is being deleted
+// and we need to wait for it to complete before creating a new one.
+var ErrDeploymentPendingDeletion = errors.New("deployment pending deletion, will retry")
 
 // ResolvedVersions contains the resolved versions and production target.
 type ResolvedVersions struct {
@@ -543,6 +548,12 @@ func (vm *VersionManager) reconcileVersion(
 		return nil
 	}
 
+	// Check if deployment is being deleted - wait for it to complete
+	if existingDep.DeletionTimestamp != nil {
+		vm.log.Info("Deployment is being deleted, waiting", "version", versionName)
+		return ErrDeploymentPendingDeletion
+	}
+
 	// Check if deployment needs update
 	// PagesDeployment is immutable, so we need to recreate if changed
 	if vm.needsUpdate(version, existingDep) {
@@ -721,33 +732,201 @@ func (*VersionManager) buildDirectUploadSource(version networkingv1alpha2.Projec
 }
 
 // needsUpdate checks if a deployment needs to be recreated due to source changes.
-func (*VersionManager) needsUpdate(version networkingv1alpha2.ProjectVersion, existing *networkingv1alpha2.PagesDeployment) bool {
-	// Compare source configuration
-	if !reflect.DeepEqual(version.Source, existing.Spec.Source.DirectUpload) {
-		return true
+// Uses semantic comparison to avoid false positives from DeploymentMetadata differences.
+func (vm *VersionManager) needsUpdate(version networkingv1alpha2.ProjectVersion, existing *networkingv1alpha2.PagesDeployment) bool {
+	// Build the expected source from version
+	expectedSource := vm.buildDirectUploadSource(version)
+
+	// Get actual source from existing deployment
+	if existing.Spec.Source == nil || existing.Spec.Source.DirectUpload == nil {
+		// If no existing source, needs update if we have a source
+		return expectedSource != nil
 	}
+	actualSource := existing.Spec.Source.DirectUpload
 
-	// If we add more fields to ProjectVersion in the future, compare them here
-
-	return false
+	// Use semantic comparison that ignores DeploymentMetadata
+	return !sourceSpecsEqual(expectedSource, actualSource)
 }
 
 // recreateDeployment recreates a deployment by deleting the old one and creating a new one.
+// Returns ErrDeploymentPendingDeletion to trigger requeue when deletion is in progress.
 func (vm *VersionManager) recreateDeployment(
 	ctx context.Context,
 	project *networkingv1alpha2.PagesProject,
 	version networkingv1alpha2.ProjectVersion,
 	existing *networkingv1alpha2.PagesDeployment,
 ) error {
+	// Check if already being deleted
+	if existing.DeletionTimestamp != nil {
+		vm.log.Info("Deployment already being deleted, waiting", "version", version.Name, "deployment", existing.Name)
+		return ErrDeploymentPendingDeletion
+	}
+
 	// Delete the old deployment
 	if err := vm.Delete(ctx, existing); err != nil {
+		if apierrors.IsNotFound(err) {
+			// Already deleted, create new deployment
+			vm.log.Info("Old deployment already deleted, creating new one", "version", version.Name)
+			return vm.createDeployment(ctx, project, version)
+		}
 		return fmt.Errorf("delete old deployment: %w", err)
 	}
 
-	vm.log.Info("Deleted old deployment for recreation", "version", version.Name, "deployment", existing.Name)
+	vm.log.Info("Triggered deletion of old deployment, will recreate on next reconcile",
+		"version", version.Name, "deployment", existing.Name)
 
-	// Create the new deployment
-	// Note: The deletion may not be complete immediately, but Kubernetes will handle it
-	// The new deployment will be created with the same name once the old one is fully deleted
-	return vm.createDeployment(ctx, project, version)
+	// Return sentinel error to trigger requeue
+	// The new deployment will be created on the next reconcile cycle after deletion completes
+	return ErrDeploymentPendingDeletion
+}
+
+// =============================================================================
+// Source Semantic Comparison Functions
+// =============================================================================
+
+// sourceSpecsEqual compares two PagesDirectUploadSourceSpec for semantic equality.
+// It only compares fields that affect the deployment content (Source, Archive, Checksum, Branch),
+// ignoring DeploymentMetadata which is dynamically generated.
+//
+//nolint:revive // cognitive complexity acceptable for semantic comparison
+func sourceSpecsEqual(a, b *networkingv1alpha2.PagesDirectUploadSourceSpec) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+
+	// Compare all content-affecting fields
+	// NOTE: DeploymentMetadata is intentionally NOT compared (generated from version.Metadata)
+	return directUploadSourceEqual(a.Source, b.Source) &&
+		archiveConfigEqual(a.Archive, b.Archive) &&
+		checksumConfigEqual(a.Checksum, b.Checksum) &&
+		a.Branch == b.Branch
+}
+
+// directUploadSourceEqual compares two DirectUploadSource for equality.
+func directUploadSourceEqual(a, b *networkingv1alpha2.DirectUploadSource) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+
+	// Compare HTTP source
+	if !httpSourceEqual(a.HTTP, b.HTTP) {
+		return false
+	}
+
+	// Compare S3 source
+	if !s3SourceEqual(a.S3, b.S3) {
+		return false
+	}
+
+	// Compare OCI source
+	if !ociSourceEqual(a.OCI, b.OCI) {
+		return false
+	}
+
+	return true
+}
+
+// httpSourceEqual compares two HTTPSource for equality.
+//
+//nolint:revive // cyclomatic complexity acceptable for comprehensive comparison
+func httpSourceEqual(a, b *networkingv1alpha2.HTTPSource) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+
+	return a.URL == b.URL &&
+		headersMapEqual(a.Headers, b.Headers) &&
+		localObjectRefEqual(a.HeadersSecretRef, b.HeadersSecretRef) &&
+		a.InsecureSkipVerify == b.InsecureSkipVerify
+}
+
+// headersMapEqual compares two headers maps for equality.
+func headersMapEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// s3SourceEqual compares two S3Source for equality.
+func s3SourceEqual(a, b *networkingv1alpha2.S3Source) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+
+	return a.Bucket == b.Bucket &&
+		a.Key == b.Key &&
+		a.Region == b.Region &&
+		a.Endpoint == b.Endpoint &&
+		a.UsePathStyle == b.UsePathStyle &&
+		localObjectRefEqual(a.CredentialsSecretRef, b.CredentialsSecretRef)
+}
+
+// ociSourceEqual compares two OCISource for equality.
+func ociSourceEqual(a, b *networkingv1alpha2.OCISource) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+
+	return a.Image == b.Image &&
+		a.InsecureRegistry == b.InsecureRegistry &&
+		localObjectRefEqual(a.CredentialsSecretRef, b.CredentialsSecretRef)
+}
+
+// archiveConfigEqual compares two ArchiveConfig for equality.
+func archiveConfigEqual(a, b *networkingv1alpha2.ArchiveConfig) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+
+	return a.Type == b.Type &&
+		a.StripComponents == b.StripComponents &&
+		a.SubPath == b.SubPath
+}
+
+// checksumConfigEqual compares two ChecksumConfig for equality.
+func checksumConfigEqual(a, b *networkingv1alpha2.ChecksumConfig) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+
+	return a.Algorithm == b.Algorithm && a.Value == b.Value
+}
+
+// localObjectRefEqual compares two LocalObjectReference for equality.
+func localObjectRefEqual(a, b *corev1.LocalObjectReference) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+
+	return a.Name == b.Name
 }

@@ -7,6 +7,7 @@ package pagesproject
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -155,6 +156,11 @@ func (r *PagesProjectReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		default:
 			// Other modes: use VersionManager
 			if err := r.versionManager.Reconcile(ctx, project); err != nil {
+				// Handle deployment pending deletion - requeue to wait
+				if errors.Is(err, ErrDeploymentPendingDeletion) {
+					logger.Info("Deployment pending deletion, will retry")
+					return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+				}
 				logger.Error(err, "Failed to reconcile versions")
 				controller.RecordErrorEventAndCondition(r.Recorder, project,
 					&project.Status.Conditions, "VersionReconcileFailed", err)

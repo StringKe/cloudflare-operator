@@ -423,17 +423,17 @@ func (mr *MockCloudflareClientMockRecorder) DeleteGatewayRule(ctx, ruleID any) *
 }
 
 // DeletePagesDeployment mocks base method.
-func (m *MockCloudflareClient) DeletePagesDeployment(ctx context.Context, projectName, deploymentID string) error {
+func (m *MockCloudflareClient) DeletePagesDeployment(ctx context.Context, projectName, deploymentID string, force bool) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeletePagesDeployment", ctx, projectName, deploymentID)
+	ret := m.ctrl.Call(m, "DeletePagesDeployment", ctx, projectName, deploymentID, force)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeletePagesDeployment indicates an expected call of DeletePagesDeployment.
-func (mr *MockCloudflareClientMockRecorder) DeletePagesDeployment(ctx, projectName, deploymentID any) *gomock.Call {
+func (mr *MockCloudflareClientMockRecorder) DeletePagesDeployment(ctx, projectName, deploymentID, force any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeletePagesDeployment", reflect.TypeOf((*MockCloudflareClient)(nil).DeletePagesDeployment), ctx, projectName, deploymentID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeletePagesDeployment", reflect.TypeOf((*MockCloudflareClient)(nil).DeletePagesDeployment), ctx, projectName, deploymentID, force)
 }
 
 // DeletePagesDomain mocks base method.

@@ -547,8 +547,11 @@ func (api *API) GetPagesDeployment(ctx context.Context, projectName, deploymentI
 	return convertFromPagesDeployment(deployment), nil
 }
 
-// DeletePagesDeployment deletes a deployment from a Pages project
-func (api *API) DeletePagesDeployment(ctx context.Context, projectName, deploymentID string) error {
+// DeletePagesDeployment deletes a deployment from a Pages project.
+// If force is true, the deployment will be deleted even if it has aliases
+// (branch URLs, custom domains, etc.). This is required for aliased deployments
+// which would otherwise fail with error code 8000035.
+func (api *API) DeletePagesDeployment(ctx context.Context, projectName, deploymentID string, force bool) error {
 	if api.CloudflareClient == nil {
 		return errClientNotInitialized
 	}
@@ -562,6 +565,7 @@ func (api *API) DeletePagesDeployment(ctx context.Context, projectName, deployme
 	params := cloudflare.DeletePagesDeploymentParams{
 		ProjectName:  projectName,
 		DeploymentID: deploymentID,
+		Force:        force,
 	}
 
 	if err := api.CloudflareClient.DeletePagesDeployment(ctx, rc, params); err != nil {
@@ -572,7 +576,7 @@ func (api *API) DeletePagesDeployment(ctx context.Context, projectName, deployme
 		return fmt.Errorf("failed to delete Pages deployment: %w", err)
 	}
 
-	api.Log.Info("Pages deployment deleted", "project", projectName, "deployment", deploymentID)
+	api.Log.Info("Pages deployment deleted", "project", projectName, "deployment", deploymentID, "force", force)
 	return nil
 }
 
