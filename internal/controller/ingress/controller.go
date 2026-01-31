@@ -91,7 +91,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	logger.Info("Reconciling Ingress", "ingress", req.NamespacedName)
 
-	// 3. Get IngressClass configuration
+	// 3. Handle deletion FIRST - before getting external dependencies
+	// This ensures finalizer can be removed even if config resources are deleted
+	if !ingress.DeletionTimestamp.IsZero() {
+		config, err := r.getIngressClassConfig(ctx, ingress)
+		if err != nil {
+			// Config not found during deletion - force remove finalizer
+			logger.Info("Config not found during deletion, forcing finalizer removal", "error", err.Error())
+			return r.forceRemoveFinalizer(ctx, ingress)
+		}
+		return r.handleDeletion(ctx, ingress, config)
+	}
+
+	// 4. Get IngressClass configuration (only for non-deletion reconciliation)
 	config, err := r.getIngressClassConfig(ctx, ingress)
 	if err != nil {
 		logger.Error(err, "Failed to get IngressClass configuration")
@@ -100,11 +112,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			logger.Error(statusErr, "Failed to update Ingress status after config error")
 		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-	}
-
-	// 4. Handle deletion
-	if !ingress.DeletionTimestamp.IsZero() {
-		return r.handleDeletion(ctx, ingress, config)
 	}
 
 	// 5. Add finalizer
@@ -282,6 +289,29 @@ func (r *Reconciler) getDefaultIngressClassName(ctx context.Context) (string, er
 	return "", fmt.Errorf("no default IngressClass found for controller %s", ControllerName)
 }
 
+// forceRemoveFinalizer removes the finalizer when external resources are unavailable.
+// This is called during deletion when the config cannot be retrieved.
+func (r *Reconciler) forceRemoveFinalizer(ctx context.Context, ingress *networkingv1.Ingress) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	if !controllerutil.ContainsFinalizer(ingress, FinalizerName) {
+		return ctrl.Result{}, nil
+	}
+
+	logger.Info("Force removing finalizer due to missing config")
+	r.Recorder.Event(ingress, corev1.EventTypeWarning, "ForcedCleanup",
+		"Config resources not found, forcing finalizer removal")
+
+	if err := controller.UpdateWithConflictRetry(ctx, r.Client, ingress, func() {
+		controllerutil.RemoveFinalizer(ingress, FinalizerName)
+	}); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	logger.Info("Finalizer force removed successfully")
+	return ctrl.Result{}, nil
+}
+
 // handleDeletion handles Ingress deletion
 func (r *Reconciler) handleDeletion(
 	ctx context.Context,
@@ -305,9 +335,16 @@ func (r *Reconciler) handleDeletion(
 	}
 
 	// Trigger config rebuild (without this Ingress)
+	// Don't block deletion if Tunnel is not found - it may have been deleted already
 	if err := r.rebuildTunnelConfig(ctx, config, ingress); err != nil {
-		logger.Error(err, "Failed to rebuild tunnel config")
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+		if apierrors.IsNotFound(err) {
+			logger.Info("Tunnel not found during deletion cleanup, continuing with finalizer removal")
+		} else {
+			logger.Error(err, "Failed to rebuild tunnel config, continuing with finalizer removal")
+			r.Recorder.Event(ingress, corev1.EventTypeWarning, "CleanupWarning",
+				"Failed to rebuild tunnel config: "+cf.SanitizeErrorMessage(err))
+		}
+		// Don't block deletion on tunnel config rebuild failure
 	}
 
 	// Check if this was the last Ingress for this config - if so, remove from ConfigMap

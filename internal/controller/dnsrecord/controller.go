@@ -75,16 +75,23 @@ func (r *DNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, err
 	}
 
-	// Resolve Zone ID and credentials
+	// Handle deletion FIRST - before resolving external dependencies
+	// This ensures finalizer can be removed even if zone/credentials are unavailable
+	if !dnsRecord.DeletionTimestamp.IsZero() {
+		zoneInfo, err := r.resolveZoneAndCredentials(ctx, dnsRecord)
+		if err != nil {
+			// Zone resolution failed during deletion - force remove finalizer
+			logger.Info("Zone resolution failed during deletion, forcing finalizer removal", "error", err.Error())
+			return r.forceRemoveFinalizer(ctx, dnsRecord)
+		}
+		return r.handleDeletion(ctx, dnsRecord, zoneInfo)
+	}
+
+	// Resolve Zone ID and credentials (only for non-deletion reconciliation)
 	zoneInfo, err := r.resolveZoneAndCredentials(ctx, dnsRecord)
 	if err != nil {
 		logger.Error(err, "Failed to resolve zone and credentials")
 		return r.setErrorStatus(ctx, dnsRecord, err)
-	}
-
-	// Handle deletion
-	if !dnsRecord.DeletionTimestamp.IsZero() {
-		return r.handleDeletion(ctx, dnsRecord, zoneInfo)
 	}
 
 	// Get API client
@@ -446,6 +453,33 @@ func (r *DNSRecordReconciler) syncDNSRecord(
 
 	// Update status with result
 	return r.setSuccessStatus(ctx, dnsRecord, zoneInfo.ZoneID, result, resolvedInfo)
+}
+
+// forceRemoveFinalizer removes the finalizer when external resources are unavailable.
+// This is called during deletion when zone/credentials cannot be resolved.
+func (r *DNSRecordReconciler) forceRemoveFinalizer(
+	ctx context.Context,
+	dnsRecord *networkingv1alpha2.DNSRecord,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	if !controllerutil.ContainsFinalizer(dnsRecord, FinalizerName) {
+		return ctrl.Result{}, nil
+	}
+
+	logger.Info("Force removing finalizer due to missing zone/credentials")
+	r.Recorder.Event(dnsRecord, corev1.EventTypeWarning, "ForcedCleanup",
+		"Zone/credentials not found, forcing finalizer removal. DNS record may remain in Cloudflare.")
+
+	if err := controller.UpdateWithConflictRetry(ctx, r.Client, dnsRecord, func() {
+		controllerutil.RemoveFinalizer(dnsRecord, FinalizerName)
+	}); err != nil {
+		logger.Error(err, "Failed to remove finalizer")
+		return ctrl.Result{}, err
+	}
+
+	r.Recorder.Event(dnsRecord, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer force removed")
+	return ctrl.Result{}, nil
 }
 
 // handleDeletion handles the deletion of a DNSRecord.

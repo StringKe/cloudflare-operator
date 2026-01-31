@@ -94,16 +94,23 @@ func (r *PagesDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	// Apply backward compatibility adapter
 	r.applyBackwardCompatibilityAdapter(ctx, deployment)
 
-	// Resolve project name
+	// Handle deletion FIRST - before resolving external dependencies
+	// This ensures finalizer can be removed even if PagesProject is unavailable
+	if !deployment.DeletionTimestamp.IsZero() {
+		projectName, err := r.resolveProjectName(ctx, deployment)
+		if err != nil {
+			// Project resolution failed during deletion - force remove finalizer
+			logger.Info("Project resolution failed during deletion, forcing finalizer removal", "error", err.Error())
+			return r.forceRemoveFinalizer(ctx, deployment)
+		}
+		return r.handleDeletion(ctx, deployment, projectName)
+	}
+
+	// Resolve project name (only for non-deletion reconciliation)
 	projectName, err := r.resolveProjectName(ctx, deployment)
 	if err != nil {
 		logger.Error(err, "Failed to resolve project name")
 		return r.setErrorStatus(ctx, deployment, err)
-	}
-
-	// Handle deletion
-	if !deployment.DeletionTimestamp.IsZero() {
-		return r.handleDeletion(ctx, deployment, projectName)
 	}
 
 	// Validate production uniqueness
@@ -434,6 +441,33 @@ func (r *PagesDeploymentReconciler) updateDeploymentStatus(
 			fmt.Sprintf("Deployment in progress: %s", result.Stage))
 		return ctrl.Result{RequeueAfter: PollingInterval}, nil
 	}
+}
+
+// forceRemoveFinalizer removes the finalizer when external resources are unavailable.
+// This is called during deletion when the project reference cannot be resolved.
+func (r *PagesDeploymentReconciler) forceRemoveFinalizer(
+	ctx context.Context,
+	deployment *networkingv1alpha2.PagesDeployment,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	if !controllerutil.ContainsFinalizer(deployment, FinalizerName) {
+		return ctrl.Result{}, nil
+	}
+
+	logger.Info("Force removing finalizer due to missing project reference")
+	r.Recorder.Event(deployment, corev1.EventTypeWarning, "ForcedCleanup",
+		"Project reference not found, forcing finalizer removal. Deployment may remain in Cloudflare.")
+
+	if err := controller.UpdateWithConflictRetry(ctx, r.Client, deployment, func() {
+		controllerutil.RemoveFinalizer(deployment, FinalizerName)
+	}); err != nil {
+		logger.Error(err, "Failed to remove finalizer")
+		return ctrl.Result{}, err
+	}
+
+	r.Recorder.Event(deployment, corev1.EventTypeNormal, controller.EventReasonFinalizerRemoved, "Finalizer force removed")
+	return ctrl.Result{}, nil
 }
 
 // handleDeletion handles the deletion of a PagesDeployment.
