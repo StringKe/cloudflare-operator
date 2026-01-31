@@ -266,6 +266,10 @@ func loadExistingTunnelCredentials(r GenericTunnelReconciler) error {
 
 // applyLifecycleResult applies the result from a completed lifecycle operation
 //
+// CRITICAL: Tunnel credentials and token are only returned ONCE during tunnel creation.
+// They MUST be persisted immediately to Secrets before any operation that might fail.
+// If we lose these credentials, the only recovery is to delete and recreate the tunnel.
+//
 //nolint:revive // cognitive complexity is acceptable for state transition logic
 func applyLifecycleResult(r GenericTunnelReconciler, result *tunnelsvc.LifecycleResult) error {
 	tunnel := r.GetTunnel()
@@ -278,14 +282,39 @@ func applyLifecycleResult(r GenericTunnelReconciler, result *tunnelsvc.Lifecycle
 		"hasToken", result.TunnelToken != "",
 		"hasCreds", result.Credentials != "")
 
-	// Decode and store credentials
+	// PRIORITY 1: Immediately persist credentials to Secret
+	// This MUST happen first - credentials are only returned once during tunnel creation
 	if result.Credentials != "" {
 		creds, err := base64.StdEncoding.DecodeString(result.Credentials)
 		if err != nil {
 			log.Error(err, "Failed to decode tunnel credentials")
-		} else {
-			r.SetTunnelCreds(string(creds))
+			return fmt.Errorf("failed to decode tunnel credentials: %w", err)
 		}
+		r.SetTunnelCreds(string(creds))
+
+		// Create credentials Secret immediately
+		credSecret := secretForTunnelWithCreds(r, string(creds))
+		if err := k8s.Apply(r, credSecret); err != nil {
+			log.Error(err, "Failed to persist tunnel credentials Secret")
+			return fmt.Errorf("failed to persist tunnel credentials: %w", err)
+		}
+		log.Info("Tunnel credentials persisted to Secret", "secret", credSecret.Name)
+	}
+
+	// PRIORITY 2: Immediately persist token to Secret
+	// Token is also only returned once - persist it before any other operations
+	if result.TunnelToken != "" {
+		tokenSecret := tokenSecretForTunnelWithToken(r, result.TunnelToken)
+		if err := k8s.Apply(r, tokenSecret); err != nil {
+			log.Error(err, "Failed to persist tunnel token Secret")
+			return fmt.Errorf("failed to persist tunnel token: %w", err)
+		}
+		log.Info("Tunnel token persisted to Secret", "secret", tokenSecret.Name)
+
+		// Also store in annotation for quick access
+		tunnel.SetAnnotations(mergeAnnotations(tunnel.GetAnnotations(), map[string]string{
+			"cloudflare-operator.io/tunnel-token": result.TunnelToken,
+		}))
 	}
 
 	// Update cfAPI with tunnel details for status update
@@ -297,17 +326,10 @@ func applyLifecycleResult(r GenericTunnelReconciler, result *tunnelsvc.Lifecycle
 	}
 	r.SetCfAPI(cfAPI)
 
-	// Store token for later use
-	if result.TunnelToken != "" {
-		// Token will be used when creating managed resources
-		tunnel.SetAnnotations(mergeAnnotations(tunnel.GetAnnotations(), map[string]string{
-			"cloudflare-operator.io/tunnel-token": result.TunnelToken,
-		}))
-	}
-
 	// Update status with tunnel ID
 	if err := updateTunnelStatusMinimalWithRetry(r); err != nil {
 		log.Error(err, "Failed to update tunnel status after lifecycle completion")
+		return err
 	}
 
 	// Add finalizer
@@ -323,6 +345,46 @@ func applyLifecycleResult(r GenericTunnelReconciler, result *tunnelsvc.Lifecycle
 	}
 
 	return nil
+}
+
+// secretForTunnelWithCreds creates a credentials Secret with the provided credentials.
+// This is used during lifecycle result application to immediately persist credentials.
+func secretForTunnelWithCreds(r GenericTunnelReconciler, creds string) *corev1.Secret {
+	ls := labelsForTunnel(r.GetTunnel())
+	sec := &corev1.Secret{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: corev1.SchemeGroupVersion.String(),
+			Kind:       "Secret",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      r.GetTunnel().GetName(),
+			Namespace: r.GetTunnel().GetNamespace(),
+			Labels:    ls,
+		},
+		StringData: map[string]string{CredentialsJsonFilename: creds},
+	}
+	_ = ctrl.SetControllerReference(r.GetTunnel().GetObject(), sec, r.GetScheme())
+	return sec
+}
+
+// tokenSecretForTunnelWithToken creates a token Secret with the provided token.
+// This is used during lifecycle result application to immediately persist token.
+func tokenSecretForTunnelWithToken(r GenericTunnelReconciler, token string) *corev1.Secret {
+	ls := labelsForTunnel(r.GetTunnel())
+	sec := &corev1.Secret{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: corev1.SchemeGroupVersion.String(),
+			Kind:       "Secret",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      r.GetTunnel().GetName() + "-token",
+			Namespace: r.GetTunnel().GetNamespace(),
+			Labels:    ls,
+		},
+		StringData: map[string]string{"token": token},
+	}
+	_ = ctrl.SetControllerReference(r.GetTunnel().GetObject(), sec, r.GetScheme())
+	return sec
 }
 
 // lifecyclePendingError indicates a lifecycle operation is pending
