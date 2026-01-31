@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,6 +46,23 @@ const (
 	// AnnotationLastForceRedeploy stores the last processed force-redeploy value
 	AnnotationLastForceRedeploy = "cloudflare-operator.io/last-force-redeploy"
 
+	// AnnotationAutoRetry enables automatic retry for transient failures.
+	// Set to "true" to enable, "false" or absent to disable.
+	// When enabled, transient failures (e.g., Cloudflare platform issues) will be automatically retried.
+	AnnotationAutoRetry = "cloudflare-operator.io/auto-retry"
+
+	// AnnotationRetryCount tracks the current retry count for automatic retries.
+	// This is managed internally by the controller.
+	AnnotationRetryCount = "cloudflare-operator.io/retry-count"
+
+	// AnnotationLastFailedAt stores the timestamp of the last failure.
+	// Used for exponential backoff calculations.
+	AnnotationLastFailedAt = "cloudflare-operator.io/last-failed-at"
+
+	// AnnotationFailureReason stores the categorized failure reason.
+	// Values: "transient", "permanent", "unknown"
+	AnnotationFailureReason = "cloudflare-operator.io/failure-reason"
+
 	// EventReasonProductionConflict indicates another production deployment exists
 	EventReasonProductionConflict = "ProductionConflict"
 	// EventReasonProductionProtected indicates production deletion is blocked
@@ -59,9 +77,20 @@ const (
 	EventReasonDeploymentSucceeded = "DeploymentSucceeded"
 	// EventReasonDeploymentFailed indicates deployment failed
 	EventReasonDeploymentFailed = "DeploymentFailed"
+	// EventReasonDeploymentRetrying indicates deployment is being retried
+	EventReasonDeploymentRetrying = "DeploymentRetrying"
 
 	// PollingInterval is the interval for polling in-progress deployments
 	PollingInterval = 30 * time.Second
+
+	// MaxAutoRetries is the maximum number of automatic retries for transient failures
+	MaxAutoRetries = 3
+
+	// BaseRetryDelay is the base delay for exponential backoff (doubles each retry)
+	BaseRetryDelay = 30 * time.Second
+
+	// MaxRetryDelay is the maximum delay between retries
+	MaxRetryDelay = 5 * time.Minute
 )
 
 // PagesDeploymentReconciler reconciles a PagesDeployment object.
@@ -190,7 +219,7 @@ func (r *PagesDeploymentReconciler) needsNewDeployment(deployment *networkingv1a
 		return true
 	}
 
-	// Check if spec changed (generation changed and deployment succeeded)
+	// Check if spec changed (generation changed and deployment in terminal state)
 	if deployment.Generation != deployment.Status.ObservedGeneration &&
 		(deployment.Status.State == networkingv1alpha2.PagesDeploymentStateSucceeded ||
 			deployment.Status.State == networkingv1alpha2.PagesDeploymentStateFailed ||
@@ -198,7 +227,142 @@ func (r *PagesDeploymentReconciler) needsNewDeployment(deployment *networkingv1a
 		return true
 	}
 
+	// Check for automatic retry of transient failures
+	if r.shouldAutoRetry(deployment) {
+		return true
+	}
+
 	return false
+}
+
+// shouldAutoRetry determines if the deployment should be automatically retried.
+// Auto-retry is enabled by default for transient failures (opt-out with annotation).
+//
+//nolint:revive // cognitive complexity acceptable for retry decision logic
+func (r *PagesDeploymentReconciler) shouldAutoRetry(deployment *networkingv1alpha2.PagesDeployment) bool {
+	// Only retry failed deployments
+	if deployment.Status.State != networkingv1alpha2.PagesDeploymentStateFailed {
+		return false
+	}
+
+	// Check if auto-retry is explicitly disabled
+	if deployment.Annotations != nil {
+		if autoRetry := deployment.Annotations[AnnotationAutoRetry]; autoRetry == "false" {
+			return false
+		}
+	}
+
+	// Check failure reason - only retry transient failures
+	failureReason := ""
+	if deployment.Annotations != nil {
+		failureReason = deployment.Annotations[AnnotationFailureReason]
+	}
+	if failureReason == "permanent" {
+		return false
+	}
+
+	// Check retry count
+	retryCount := r.getRetryCount(deployment)
+	if retryCount >= MaxAutoRetries {
+		return false
+	}
+
+	// Check if enough time has passed since last failure (exponential backoff)
+	if !r.hasBackoffElapsed(deployment, retryCount) {
+		return false
+	}
+
+	return true
+}
+
+// getRetryCount returns the current retry count from annotations.
+func (r *PagesDeploymentReconciler) getRetryCount(deployment *networkingv1alpha2.PagesDeployment) int {
+	if deployment.Annotations == nil {
+		return 0
+	}
+	countStr := deployment.Annotations[AnnotationRetryCount]
+	if countStr == "" {
+		return 0
+	}
+	count, err := strconv.Atoi(countStr)
+	if err != nil {
+		return 0
+	}
+	return count
+}
+
+// hasBackoffElapsed checks if the exponential backoff period has elapsed.
+func (r *PagesDeploymentReconciler) hasBackoffElapsed(deployment *networkingv1alpha2.PagesDeployment, retryCount int) bool {
+	if deployment.Annotations == nil {
+		return true
+	}
+	lastFailedAtStr := deployment.Annotations[AnnotationLastFailedAt]
+	if lastFailedAtStr == "" {
+		return true
+	}
+	lastFailedAt, err := time.Parse(time.RFC3339, lastFailedAtStr)
+	if err != nil {
+		return true
+	}
+
+	// Calculate backoff delay: BaseRetryDelay * 2^retryCount, capped at MaxRetryDelay
+	delay := BaseRetryDelay * time.Duration(1<<retryCount)
+	if delay > MaxRetryDelay {
+		delay = MaxRetryDelay
+	}
+
+	return time.Since(lastFailedAt) >= delay
+}
+
+// updateRetryAnnotations updates retry-related annotations after a failure.
+func (r *PagesDeploymentReconciler) updateRetryAnnotations(
+	ctx context.Context,
+	deployment *networkingv1alpha2.PagesDeployment,
+	isTransient bool,
+) error {
+	if deployment.Annotations == nil {
+		deployment.Annotations = make(map[string]string)
+	}
+
+	// Update retry count
+	retryCount := r.getRetryCount(deployment)
+	deployment.Annotations[AnnotationRetryCount] = strconv.Itoa(retryCount + 1)
+
+	// Update last failed timestamp
+	deployment.Annotations[AnnotationLastFailedAt] = time.Now().UTC().Format(time.RFC3339)
+
+	// Update failure reason
+	if isTransient {
+		deployment.Annotations[AnnotationFailureReason] = "transient"
+	} else {
+		deployment.Annotations[AnnotationFailureReason] = "permanent"
+	}
+
+	return r.Update(ctx, deployment)
+}
+
+// clearRetryAnnotations clears retry-related annotations after success.
+func (r *PagesDeploymentReconciler) clearRetryAnnotations(
+	ctx context.Context,
+	deployment *networkingv1alpha2.PagesDeployment,
+) error {
+	if deployment.Annotations == nil {
+		return nil
+	}
+
+	changed := false
+	for _, key := range []string{AnnotationRetryCount, AnnotationLastFailedAt, AnnotationFailureReason} {
+		if _, ok := deployment.Annotations[key]; ok {
+			delete(deployment.Annotations, key)
+			changed = true
+		}
+	}
+
+	if !changed {
+		return nil
+	}
+
+	return r.Update(ctx, deployment)
 }
 
 // createDeployment creates a new Cloudflare Pages deployment.
@@ -419,12 +583,38 @@ func (r *PagesDeploymentReconciler) updateDeploymentStatus(
 		logger.Info("Deployment succeeded", "url", result.URL)
 		r.Recorder.Event(deployment, corev1.EventTypeNormal, EventReasonDeploymentSucceeded,
 			fmt.Sprintf("Deployment succeeded: %s", result.URL))
+		// Clear retry annotations on success
+		if clearErr := r.clearRetryAnnotations(ctx, deployment); clearErr != nil {
+			logger.Error(clearErr, "Failed to clear retry annotations")
+			// Don't fail reconciliation for this
+		}
 		return ctrl.Result{}, nil
 
 	case networkingv1alpha2.PagesDeploymentStateFailed:
 		logger.Info("Deployment failed")
+		// Note: setErrorStatus handles retry annotations, but this is for
+		// failures detected during polling (from Cloudflare side)
+		isTransient := true // Assume Cloudflare-side failures are transient
+		if annotationErr := r.updateRetryAnnotations(ctx, deployment, isTransient); annotationErr != nil {
+			logger.Error(annotationErr, "Failed to update retry annotations")
+		}
 		r.Recorder.Event(deployment, corev1.EventTypeWarning, EventReasonDeploymentFailed,
 			"Deployment failed")
+		// Check if auto-retry is applicable
+		retryCount := r.getRetryCount(deployment)
+		if retryCount < MaxAutoRetries && r.shouldAutoRetry(deployment) {
+			delay := BaseRetryDelay * time.Duration(1<<retryCount)
+			if delay > MaxRetryDelay {
+				delay = MaxRetryDelay
+			}
+			logger.Info("Cloudflare deployment failed, will auto-retry",
+				"retryCount", retryCount,
+				"maxRetries", MaxAutoRetries,
+				"nextRetryIn", delay)
+			r.Recorder.Event(deployment, corev1.EventTypeNormal, EventReasonDeploymentRetrying,
+				fmt.Sprintf("Will retry deployment (attempt %d/%d) in %s", retryCount+1, MaxAutoRetries, delay))
+			return ctrl.Result{RequeueAfter: delay}, nil
+		}
 		return ctrl.Result{}, nil
 
 	case networkingv1alpha2.PagesDeploymentStateCancelled:
@@ -540,11 +730,18 @@ func (r *PagesDeploymentReconciler) handleDeletion(
 }
 
 // setErrorStatus updates the deployment status with an error.
+//
+//nolint:revive // cognitive complexity acceptable for error handling logic
 func (r *PagesDeploymentReconciler) setErrorStatus(
 	ctx context.Context,
 	deployment *networkingv1alpha2.PagesDeployment,
 	err error,
 ) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	// Determine if error is transient (retryable)
+	isTransient := !cf.IsPermanentError(err)
+
 	updateErr := controller.UpdateStatusWithConflictRetry(ctx, r.Client, deployment, func() {
 		deployment.Status.State = networkingv1alpha2.PagesDeploymentStateFailed
 		meta.SetStatusCondition(&deployment.Status.Conditions, metav1.Condition{
@@ -562,14 +759,45 @@ func (r *PagesDeploymentReconciler) setErrorStatus(
 		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", updateErr)
 	}
 
+	// Update retry annotations for auto-retry mechanism
+	if annotationErr := r.updateRetryAnnotations(ctx, deployment, isTransient); annotationErr != nil {
+		logger.Error(annotationErr, "Failed to update retry annotations")
+		// Don't fail reconciliation for this
+	}
+
 	r.Recorder.Event(deployment, corev1.EventTypeWarning, controller.EventReasonReconcileFailed,
 		cf.SanitizeErrorMessage(err))
 
-	// Determine requeue based on error type
+	// Determine requeue based on error type and retry status
 	if cf.IsPermanentError(err) {
-		return ctrl.Result{}, nil // Don't retry permanent errors
+		logger.Info("Permanent error, will not auto-retry",
+			"error", cf.SanitizeErrorMessage(err))
+		return ctrl.Result{}, nil
 	}
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+
+	// Check if auto-retry is applicable
+	retryCount := r.getRetryCount(deployment)
+	if retryCount < MaxAutoRetries {
+		// Calculate backoff delay for next retry
+		delay := BaseRetryDelay * time.Duration(1<<retryCount)
+		if delay > MaxRetryDelay {
+			delay = MaxRetryDelay
+		}
+		logger.Info("Transient error, will auto-retry",
+			"retryCount", retryCount,
+			"maxRetries", MaxAutoRetries,
+			"nextRetryIn", delay)
+		r.Recorder.Event(deployment, corev1.EventTypeNormal, EventReasonDeploymentRetrying,
+			fmt.Sprintf("Will retry deployment (attempt %d/%d) in %s", retryCount+1, MaxAutoRetries, delay))
+		return ctrl.Result{RequeueAfter: delay}, nil
+	}
+
+	logger.Info("Max retries exceeded, will not auto-retry",
+		"retryCount", retryCount,
+		"maxRetries", MaxAutoRetries)
+	r.Recorder.Event(deployment, corev1.EventTypeWarning, EventReasonDeploymentFailed,
+		fmt.Sprintf("Deployment failed after %d retries", retryCount))
+	return ctrl.Result{}, nil
 }
 
 // getSourceType returns a string describing the deployment source type.
