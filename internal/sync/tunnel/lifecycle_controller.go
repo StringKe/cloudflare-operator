@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -345,13 +347,21 @@ func (r *LifecycleController) handleError(
 
 // updateSuccessStatus updates the SyncState status with success and result data
 //
+// CRITICAL FIX (v0.46.0 Bug): ResultData must be set INSIDE the conflict retry loop,
+// not before calling UpdateSyncStatus. When UpdateStatusWithConflictRetry retries,
+// it re-fetches the object from API server, which overwrites any previously set fields.
+// If ResultData is set outside the retry loop, it will be lost on retry, causing:
+// - ClusterTunnel.status.tunnelId to remain empty
+// - Tunnel credentials to not be persisted
+// - cloudflared Deployment to not be created
+//
 //nolint:revive // cognitive complexity is acceptable for building result data
 func (r *LifecycleController) updateSuccessStatus(
 	ctx context.Context,
 	syncState *v1alpha2.CloudflareSyncState,
 	result *tunnelsvc.LifecycleResult,
 ) error {
-	// Build result data map
+	// Build result data map (will be applied inside the retry loop)
 	resultData := make(map[string]string)
 	if result != nil {
 		resultData[tunnelsvc.ResultKeyTunnelID] = result.TunnelID
@@ -374,13 +384,41 @@ func (r *LifecycleController) updateSuccessStatus(
 		}
 	}
 
-	syncResult := &common.SyncResult{
-		ConfigHash: "", // Lifecycle operations don't use config hash
-	}
+	// CRITICAL FIX: Use UpdateStatusWithConflictRetry directly and set ALL status fields
+	// (including ResultData) INSIDE the updateFn. This ensures ResultData survives retries.
+	logger := log.FromContext(ctx)
+	err := common.UpdateStatusWithConflictRetry(ctx, r.Client, syncState, func() {
+		// Set sync status
+		syncState.Status.SyncStatus = v1alpha2.SyncStatusSynced
+		syncState.Status.ConfigHash = "" // Lifecycle operations don't use config hash
 
-	// Update status with result data (with conflict retry built into UpdateSyncStatus)
-	syncState.Status.ResultData = resultData
-	if err := r.UpdateSyncStatus(ctx, syncState, v1alpha2.SyncStatusSynced, syncResult, nil); err != nil {
+		// CRITICAL: Set ResultData inside the retry loop
+		syncState.Status.ResultData = resultData
+
+		// Update last sync time
+		now := metav1.Now()
+		syncState.Status.LastSyncTime = &now
+
+		// Clear error fields on success
+		syncState.Status.Error = ""
+		syncState.Status.RetryCount = 0
+		syncState.Status.FailureReason = ""
+		syncState.Status.ErrorCategory = ""
+		syncState.Status.FailedAt = nil
+
+		// Set Ready condition
+		meta.SetStatusCondition(&syncState.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionTrue,
+			Reason:             "Synced",
+			Message:            "Tunnel lifecycle operation completed successfully",
+			LastTransitionTime: metav1.Now(),
+		})
+	})
+
+	if err != nil {
+		logger.Error(err, "Failed to update SyncState status with ResultData",
+			"name", syncState.Name)
 		return fmt.Errorf("update syncstate status: %w", err)
 	}
 
