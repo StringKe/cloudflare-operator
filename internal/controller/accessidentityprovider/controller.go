@@ -113,16 +113,17 @@ func (r *Reconciler) handleDeletion(
 
 		if err := apiResult.API.DeleteAccessIdentityProvider(ctx, idp.Status.ProviderID); err != nil {
 			if !cf.IsNotFoundError(err) {
-				logger.Error(err, "Failed to delete Access Identity Provider from Cloudflare")
+				logger.Error(err, "Failed to delete Access Identity Provider from Cloudflare, continuing with finalizer removal")
 				r.Recorder.Event(idp, corev1.EventTypeWarning, "DeleteFailed",
-					fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
-				return common.RequeueShort(), err
+					fmt.Sprintf("Failed to delete from Cloudflare (will remove finalizer anyway): %s", cf.SanitizeErrorMessage(err)))
+				// Don't block finalizer removal - resource may need manual cleanup in Cloudflare
+			} else {
+				logger.Info("Access Identity Provider not found in Cloudflare, may have been already deleted")
 			}
-			logger.Info("Access Identity Provider not found in Cloudflare, may have been already deleted")
+		} else {
+			r.Recorder.Event(idp, corev1.EventTypeNormal, "Deleted",
+				"Access Identity Provider deleted from Cloudflare")
 		}
-
-		r.Recorder.Event(idp, corev1.EventTypeNormal, "Deleted",
-			"Access Identity Provider deleted from Cloudflare")
 	}
 
 	// Remove finalizer

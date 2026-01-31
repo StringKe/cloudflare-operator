@@ -132,16 +132,17 @@ func (r *Reconciler) handleDeletion(
 
 		if err := apiResult.API.DeleteRuleset(ctx, rule.Status.ZoneID, rule.Status.RulesetID); err != nil {
 			if !cf.IsNotFoundError(err) {
-				logger.Error(err, "Failed to delete RedirectRule from Cloudflare")
+				logger.Error(err, "Failed to delete RedirectRule from Cloudflare, continuing with finalizer removal")
 				r.Recorder.Event(rule, corev1.EventTypeWarning, "DeleteFailed",
-					fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
-				return common.RequeueShort(), err
+					fmt.Sprintf("Failed to delete from Cloudflare (will remove finalizer anyway): %s", cf.SanitizeErrorMessage(err)))
+				// Don't block finalizer removal - resource may need manual cleanup in Cloudflare
+			} else {
+				logger.Info("RedirectRule not found in Cloudflare, may have been already deleted")
 			}
-			logger.Info("RedirectRule not found in Cloudflare, may have been already deleted")
+		} else {
+			r.Recorder.Event(rule, corev1.EventTypeNormal, "Deleted",
+				"RedirectRule deleted from Cloudflare")
 		}
-
-		r.Recorder.Event(rule, corev1.EventTypeNormal, "Deleted",
-			"RedirectRule deleted from Cloudflare")
 	}
 
 	// Remove finalizer

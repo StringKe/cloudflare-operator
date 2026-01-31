@@ -505,12 +505,12 @@ func (r *DNSRecordReconciler) handleDeletion(
 		} else {
 			if err := apiResult.API.DeleteDNSRecordInZone(ctx, zoneInfo.ZoneID, dnsRecord.Status.RecordID); err != nil {
 				if !cf.IsNotFoundError(err) {
-					logger.Error(err, "Failed to delete DNS record from Cloudflare")
+					logger.Error(err, "Failed to delete DNS record from Cloudflare, continuing with finalizer removal")
 					r.Recorder.Event(dnsRecord, corev1.EventTypeWarning, controller.EventReasonDeleteFailed,
-						cf.SanitizeErrorMessage(err))
-					return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+						fmt.Sprintf("Failed to delete from Cloudflare (will remove finalizer anyway): %s", cf.SanitizeErrorMessage(err)))
+					// Don't block finalizer removal - resource may need manual cleanup in Cloudflare
 				}
-				// Record already deleted, continue with finalizer removal
+				// Record already deleted or deletion failed, continue with finalizer removal
 			} else {
 				r.Recorder.Event(dnsRecord, corev1.EventTypeNormal, controller.EventReasonDeleted,
 					fmt.Sprintf("Deleted DNS record %s from Cloudflare", dnsRecord.Status.RecordID))

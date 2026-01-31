@@ -513,16 +513,15 @@ func (r *PagesDeploymentReconciler) handleDeletion(
 				}
 			}
 			if err != nil {
-				if !cf.IsNotFoundError(err) && !cf.IsActiveProductionDeploymentError(err) {
-					logger.Error(err, "Failed to delete deployment from Cloudflare")
-					r.Recorder.Event(deployment, corev1.EventTypeWarning, controller.EventReasonDeleteFailed,
-						cf.SanitizeErrorMessage(err))
-					return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-				}
 				if cf.IsActiveProductionDeploymentError(err) {
 					logger.Info("Cannot delete active production deployment, this is expected")
 					r.Recorder.Event(deployment, corev1.EventTypeNormal, "ProductionPreserved",
 						"Active production deployment preserved in Cloudflare")
+				} else if !cf.IsNotFoundError(err) {
+					logger.Error(err, "Failed to delete deployment from Cloudflare, continuing with finalizer removal")
+					r.Recorder.Event(deployment, corev1.EventTypeWarning, controller.EventReasonDeleteFailed,
+						fmt.Sprintf("Failed to delete from Cloudflare (will remove finalizer anyway): %s", cf.SanitizeErrorMessage(err)))
+					// Don't block finalizer removal - resource may need manual cleanup in Cloudflare
 				}
 			}
 		}

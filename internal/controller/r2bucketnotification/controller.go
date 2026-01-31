@@ -113,16 +113,17 @@ func (r *Reconciler) handleDeletion(
 
 		if err := apiResult.API.DeleteR2Notification(ctx, notification.Spec.BucketName, notification.Status.QueueID); err != nil {
 			if !cf.IsNotFoundError(err) {
-				logger.Error(err, "Failed to delete R2 notification from Cloudflare")
+				logger.Error(err, "Failed to delete R2 notification from Cloudflare, continuing with finalizer removal")
 				r.Recorder.Event(notification, corev1.EventTypeWarning, "DeleteFailed",
-					fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
-				return common.RequeueShort(), err
+					fmt.Sprintf("Failed to delete from Cloudflare (will remove finalizer anyway): %s", cf.SanitizeErrorMessage(err)))
+				// Don't block finalizer removal - resource may need manual cleanup in Cloudflare
+			} else {
+				logger.Info("R2 notification not found in Cloudflare, may have been already deleted")
 			}
-			logger.Info("R2 notification not found in Cloudflare, may have been already deleted")
+		} else {
+			r.Recorder.Event(notification, corev1.EventTypeNormal, "Deleted",
+				"R2 notification deleted from Cloudflare")
 		}
-
-		r.Recorder.Event(notification, corev1.EventTypeNormal, "Deleted",
-			"R2 notification deleted from Cloudflare")
 	}
 
 	// Remove finalizer

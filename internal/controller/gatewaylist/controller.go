@@ -119,16 +119,17 @@ func (r *Reconciler) handleDeletion(
 
 		if err := apiResult.API.DeleteGatewayList(ctx, list.Status.ListID); err != nil {
 			if !cf.IsNotFoundError(err) {
-				logger.Error(err, "Failed to delete Gateway List from Cloudflare")
+				logger.Error(err, "Failed to delete Gateway List from Cloudflare, continuing with finalizer removal")
 				r.Recorder.Event(list, corev1.EventTypeWarning, "DeleteFailed",
-					fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
-				return common.RequeueShort(), err
+					fmt.Sprintf("Failed to delete from Cloudflare (will remove finalizer anyway): %s", cf.SanitizeErrorMessage(err)))
+				// Don't block finalizer removal - resource may need manual cleanup in Cloudflare
+			} else {
+				logger.Info("Gateway List not found in Cloudflare, may have been already deleted")
 			}
-			logger.Info("Gateway List not found in Cloudflare, may have been already deleted")
+		} else {
+			r.Recorder.Event(list, corev1.EventTypeNormal, "Deleted",
+				"Gateway List deleted from Cloudflare")
 		}
-
-		r.Recorder.Event(list, corev1.EventTypeNormal, "Deleted",
-			"Gateway List deleted from Cloudflare")
 	}
 
 	// Remove finalizer

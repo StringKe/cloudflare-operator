@@ -125,10 +125,10 @@ func (r *Reconciler) handleDeletion(
 			logger.Info("Deleting WARP Connector from Cloudflare", "connectorId", connector.Status.ConnectorID)
 			if err := apiResult.API.DeleteWARPConnector(ctx, connector.Status.ConnectorID); err != nil {
 				if !cf.IsNotFoundError(err) {
-					logger.Error(err, "Failed to delete WARP Connector from Cloudflare")
+					logger.Error(err, "Failed to delete WARP Connector from Cloudflare, continuing with finalizer removal")
 					r.Recorder.Event(connector, corev1.EventTypeWarning, "DeleteFailed",
-						fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
-					return common.RequeueShort(), err
+						fmt.Sprintf("Failed to delete from Cloudflare (will remove finalizer anyway): %s", cf.SanitizeErrorMessage(err)))
+					// Don't block finalizer removal - resource may need manual cleanup in Cloudflare
 				}
 			} else {
 				r.Recorder.Event(connector, corev1.EventTypeNormal, "Deleted",

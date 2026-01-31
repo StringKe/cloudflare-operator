@@ -218,16 +218,17 @@ func (r *Reconciler) handleDeletion(
 
 			if err := apiResult.API.DeleteTunnelRoute(ctx, ps.Status.Network, virtualNetworkID); err != nil {
 				if !cf.IsNotFoundError(err) {
-					logger.Error(err, "Failed to delete tunnel route from Cloudflare")
+					logger.Error(err, "Failed to delete tunnel route from Cloudflare, continuing with finalizer removal")
 					r.Recorder.Event(ps, corev1.EventTypeWarning, "DeleteFailed",
-						fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
-					return common.RequeueShort(), err
+						fmt.Sprintf("Failed to delete from Cloudflare (will remove finalizer anyway): %s", cf.SanitizeErrorMessage(err)))
+					// Don't block finalizer removal - resource may need manual cleanup in Cloudflare
+				} else {
+					logger.Info("Tunnel route not found in Cloudflare, may have been already deleted")
 				}
-				logger.Info("Tunnel route not found in Cloudflare, may have been already deleted")
+			} else {
+				r.Recorder.Event(ps, corev1.EventTypeNormal, "Deleted",
+					"Tunnel route deleted from Cloudflare")
 			}
-
-			r.Recorder.Event(ps, corev1.EventTypeNormal, "Deleted",
-				"Tunnel route deleted from Cloudflare")
 		}
 	}
 

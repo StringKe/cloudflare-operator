@@ -604,39 +604,40 @@ func cleanupTunnel(r GenericTunnelReconciler) (ctrl.Result, bool, error) {
 				}
 
 				if _, err := lifecycleSvc.RequestDelete(ctx, opts); err != nil {
-					log.Error(err, "Failed to request tunnel deletion")
+					log.Error(err, "Failed to request tunnel deletion, continuing with finalizer removal")
 					r.GetRecorder().Event(tunnel.GetObject(), corev1.EventTypeWarning,
-						"DeleteFailed", fmt.Sprintf("Failed to request tunnel deletion: %v", err))
-					return ctrl.Result{RequeueAfter: 30 * time.Second}, false, err
+						"DeleteFailed", fmt.Sprintf("Failed to request tunnel deletion (will remove finalizer anyway): %v", err))
+					// Don't block finalizer removal - tunnel may need manual cleanup in Cloudflare
+					// Skip waiting for SyncState and proceed directly to finalizer removal
+				} else {
+					r.GetRecorder().Event(tunnel.GetObject(), corev1.EventTypeNormal,
+						"DeletionRequested", "Tunnel deletion requested via SyncState")
+					return ctrl.Result{RequeueAfter: tunnelLifecycleCheckInterval}, false, nil
 				}
-
-				r.GetRecorder().Event(tunnel.GetObject(), corev1.EventTypeNormal,
-					"DeletionRequested", "Tunnel deletion requested via SyncState")
-				return ctrl.Result{RequeueAfter: tunnelLifecycleCheckInterval}, false, nil
+			} else {
+				// Deletion in progress, check status
+				if syncState.Status.SyncStatus == v1alpha2.SyncStatusError {
+					errMsg := syncState.Status.Error
+					log.Error(errors.New(errMsg), "Tunnel deletion failed, continuing with finalizer removal")
+					r.GetRecorder().Event(tunnel.GetObject(), corev1.EventTypeWarning,
+						"DeleteFailed", fmt.Sprintf("Tunnel deletion failed (will remove finalizer anyway): %s", errMsg))
+					// Continue to finalizer removal
+				} else if syncState.Status.SyncStatus != v1alpha2.SyncStatusSynced {
+					// Still in progress
+					log.Info("Tunnel deletion in progress, waiting",
+						"status", syncState.Status.SyncStatus)
+					return ctrl.Result{RequeueAfter: tunnelLifecycleCheckInterval}, false, nil
+				}
 			}
 
-			// Deletion in progress, check status
-			if syncState.Status.SyncStatus == v1alpha2.SyncStatusError {
-				errMsg := syncState.Status.Error
-				log.Error(errors.New(errMsg), "Tunnel deletion failed")
-				r.GetRecorder().Event(tunnel.GetObject(), corev1.EventTypeWarning,
-					"DeleteFailed", fmt.Sprintf("Tunnel deletion failed: %s", errMsg))
-				// Continue anyway to allow cleanup
-			} else if syncState.Status.SyncStatus != v1alpha2.SyncStatusSynced {
-				// Still in progress
-				log.Info("Tunnel deletion in progress, waiting",
-					"status", syncState.Status.SyncStatus)
-				return ctrl.Result{RequeueAfter: tunnelLifecycleCheckInterval}, false, nil
+			// Cleanup lifecycle SyncState (best effort)
+			if err := lifecycleSvc.CleanupSyncState(ctx, tunnelName); err != nil {
+				log.Error(err, "Failed to cleanup lifecycle SyncState")
 			}
-		}
 
-		// Cleanup lifecycle SyncState
-		if err := lifecycleSvc.CleanupSyncState(ctx, tunnelName); err != nil {
-			log.Error(err, "Failed to cleanup lifecycle SyncState")
+			log.Info("Tunnel cleanup completed", "tunnelId", tunnelID)
+			r.GetRecorder().Event(tunnel.GetObject(), corev1.EventTypeNormal, "Deleted", "Tunnel cleanup completed")
 		}
-
-		log.Info("Tunnel deleted via SyncState", "tunnelId", tunnelID)
-		r.GetRecorder().Event(tunnel.GetObject(), corev1.EventTypeNormal, "Deleted", "Tunnel deletion successful")
 	}
 
 	// Step 4: Remove Secret finalizer

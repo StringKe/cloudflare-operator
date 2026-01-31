@@ -176,17 +176,18 @@ func (r *PagesDomainReconciler) handleDeletion(
 
 				if err := apiResult.API.DeletePagesDomain(ctx, projectName, domain.Spec.Domain); err != nil {
 					if !cf.IsNotFoundError(err) {
-						logger.Error(err, "Failed to delete Pages domain from Cloudflare")
+						logger.Error(err, "Failed to delete Pages domain from Cloudflare, continuing with finalizer removal")
 						r.Recorder.Event(domain, corev1.EventTypeWarning, "DeleteFailed",
-							fmt.Sprintf("Failed to delete from Cloudflare: %s", cf.SanitizeErrorMessage(err)))
-						return common.RequeueShort(), err
+							fmt.Sprintf("Failed to delete from Cloudflare (will remove finalizer anyway): %s", cf.SanitizeErrorMessage(err)))
+						// Don't block finalizer removal - resource may need manual cleanup in Cloudflare
+					} else {
+						// NotFound is fine, domain already deleted
+						logger.Info("Pages domain not found in Cloudflare, may have been already deleted")
 					}
-					// NotFound is fine, domain already deleted
-					logger.Info("Pages domain not found in Cloudflare, may have been already deleted")
+				} else {
+					r.Recorder.Event(domain, corev1.EventTypeNormal, "Deleted",
+						"Pages domain deleted from Cloudflare")
 				}
-
-				r.Recorder.Event(domain, corev1.EventTypeNormal, "Deleted",
-					"Pages domain deleted from Cloudflare")
 			}
 		}
 	}
