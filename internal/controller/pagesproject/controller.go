@@ -153,6 +153,25 @@ func (r *PagesProjectReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			}
 			requeueAfter = requeue
 
+		case networkingv1alpha2.VersionPolicyGitOpsLatest:
+			// GitOpsLatest mode: CI triggers deployment, CF manages production
+			// No automatic production switching, but need periodic requeue
+			// to ensure status aggregation catches deployment state changes
+			// (informer cache may have delay when Watch triggers reconcile)
+			if err := r.versionManager.Reconcile(ctx, project); err != nil {
+				if errors.Is(err, ErrDeploymentPendingDeletion) {
+					logger.Info("Deployment pending deletion, will retry")
+					return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+				}
+				logger.Error(err, "Failed to reconcile gitopsLatest versions")
+				controller.RecordErrorEventAndCondition(r.Recorder, project,
+					&project.Status.Conditions, "GitOpsLatestReconcileFailed", err)
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+			}
+			// Periodic requeue to ensure currentProduction status is updated
+			// after PagesDeployment state changes (handles informer cache delay)
+			requeueAfter = 30 * time.Second
+
 		default:
 			// Other modes: use VersionManager
 			if err := r.versionManager.Reconcile(ctx, project); err != nil {
