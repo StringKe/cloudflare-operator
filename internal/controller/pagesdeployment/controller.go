@@ -170,6 +170,19 @@ func (r *PagesDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 	}
 
+	// Handle spec changes for terminal state deployments
+	// Terminal states are immutable - spec changes are acknowledged but ignored (unless force-redeploy)
+	if IsTerminalState(deployment.Status.State) &&
+		deployment.Generation != deployment.Status.ObservedGeneration &&
+		!r.hasForceRedeployChanged(deployment) {
+		logger.Info("Spec changed for terminal deployment, acknowledging without action",
+			"state", deployment.Status.State,
+			"generation", deployment.Generation,
+			"observedGeneration", deployment.Status.ObservedGeneration,
+			"hint", "Use force-redeploy annotation to create a new deployment")
+		return r.acknowledgeGenerationWithoutAction(ctx, deployment)
+	}
+
 	// Determine if we need to create a new deployment
 	needsDeployment := r.needsNewDeployment(deployment)
 
@@ -183,9 +196,16 @@ func (r *PagesDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return r.pollDeploymentStatus(ctx, deployment, projectName, apiResult)
 	}
 
-	// No deployment ID and no need for new deployment - should not happen
-	logger.Info("No deployment ID and no need for new deployment")
-	return r.setErrorStatus(ctx, deployment, errors.New("no deployment ID found"))
+	// No deployment ID and no need for new deployment
+	// This can happen for terminal state deployments where CF resource was cleaned
+	// Check if we should mark as orphaned
+	if IsTerminalState(deployment.Status.State) {
+		logger.Info("Terminal deployment with no deployment ID, checking Cloudflare status")
+		return r.setCloudflareResourceNotExistsCondition(ctx, deployment)
+	}
+
+	logger.Info("No deployment ID and no need for new deployment - unexpected state")
+	return r.setErrorStatus(ctx, deployment, errors.New("no deployment ID found and not in expected state"))
 }
 
 // getAPIClient returns a Cloudflare API client for the deployment.
@@ -198,41 +218,53 @@ func (r *PagesDeploymentReconciler) getAPIClient(ctx context.Context, deployment
 }
 
 // needsNewDeployment determines if a new deployment should be created.
+// This implements the immutable terminal state semantics:
+// - Terminal states (Succeeded/Failed/Cancelled) are immutable historical records
+// - Only force-redeploy annotation can trigger a new deployment for terminal states
+// - Non-terminal states can be recreated if the Cloudflare deployment is lost
 //
 //nolint:revive // cognitive complexity acceptable for deployment decision logic
 func (r *PagesDeploymentReconciler) needsNewDeployment(deployment *networkingv1alpha2.PagesDeployment) bool {
-	// No deployment ID yet
+	// Rule 1: Terminal states are immutable - only force-redeploy can trigger new deployment
+	// This prevents accidental re-creation of completed deployments
+	if IsTerminalState(deployment.Status.State) {
+		// Only force-redeploy annotation can trigger new deployment for terminal states
+		return r.hasForceRedeployChanged(deployment)
+	}
+
+	// === Below rules only apply to non-terminal states ===
+
+	// Rule 2: No deployment ID yet (first creation or recovery pending)
 	if deployment.Status.DeploymentID == "" {
 		return true
 	}
 
-	// Check force-redeploy annotation
-	currentForceRedeploy := ""
-	if deployment.Annotations != nil {
-		currentForceRedeploy = deployment.Annotations[AnnotationForceRedeploy]
-	}
-	lastForceRedeploy := ""
-	if deployment.Annotations != nil {
-		lastForceRedeploy = deployment.Annotations[AnnotationLastForceRedeploy]
-	}
-	if currentForceRedeploy != "" && currentForceRedeploy != lastForceRedeploy {
+	// Rule 3: Force-redeploy annotation changed
+	if r.hasForceRedeployChanged(deployment) {
 		return true
 	}
 
-	// Check if spec changed (generation changed and deployment in terminal state)
-	if deployment.Generation != deployment.Status.ObservedGeneration &&
-		(deployment.Status.State == networkingv1alpha2.PagesDeploymentStateSucceeded ||
-			deployment.Status.State == networkingv1alpha2.PagesDeploymentStateFailed ||
-			deployment.Status.State == networkingv1alpha2.PagesDeploymentStateCancelled) {
+	// Rule 4: Spec changed (generation changed) for non-terminal states
+	if deployment.Generation != deployment.Status.ObservedGeneration {
 		return true
 	}
 
-	// Check for automatic retry of transient failures
+	// Rule 5: Automatic retry for transient failures (only applies to Failed state)
 	if r.shouldAutoRetry(deployment) {
 		return true
 	}
 
 	return false
+}
+
+// hasForceRedeployChanged checks if the force-redeploy annotation has changed.
+func (*PagesDeploymentReconciler) hasForceRedeployChanged(deployment *networkingv1alpha2.PagesDeployment) bool {
+	if deployment.Annotations == nil {
+		return false
+	}
+	currentForceRedeploy := deployment.Annotations[AnnotationForceRedeploy]
+	lastForceRedeploy := deployment.Annotations[AnnotationLastForceRedeploy]
+	return currentForceRedeploy != "" && currentForceRedeploy != lastForceRedeploy
 }
 
 // shouldAutoRetry determines if the deployment should be automatically retried.
@@ -366,6 +398,10 @@ func (r *PagesDeploymentReconciler) clearRetryAnnotations(
 }
 
 // createDeployment creates a new Cloudflare Pages deployment.
+// It implements idempotent deployment creation using commit hash:
+// - If a deployment with the same commit hash already exists, it will be adopted
+// - This prevents duplicate deployments and unnecessary production switches
+// - EXCEPTION: force-redeploy bypasses idempotency check (user explicitly wants new deployment)
 //
 //nolint:revive // cognitive complexity acceptable for deployment creation
 func (r *PagesDeploymentReconciler) createDeployment(
@@ -377,9 +413,45 @@ func (r *PagesDeploymentReconciler) createDeployment(
 	logger := log.FromContext(ctx)
 	api := apiResult.API
 
+	// Check if this is a force-redeploy - skip idempotency check if so
+	isForceRedeploy := r.hasForceRedeployChanged(deployment)
+	commitHash := ExtractCommitHash(deployment)
+
+	// === Idempotency Check: Find existing deployment by commit hash ===
+	// Skip this check if force-redeploy is requested - user explicitly wants a new deployment
+	if commitHash != "" && !isForceRedeploy {
+		existing, err := api.FindPagesDeploymentByCommitHash(ctx, projectName, commitHash)
+		if err != nil {
+			// Log warning but proceed with creation - idempotency check is best-effort
+			logger.Info("Failed to check existing deployment by commit hash, proceeding with creation",
+				"commitHash", commitHash,
+				"error", err.Error())
+		} else if existing != nil {
+			// Found existing deployment with same commit hash - adopt it
+			logger.Info("Found existing deployment with same commit hash, adopting instead of creating new one",
+				"commitHash", commitHash,
+				"existingDeploymentId", existing.ID,
+				"existingEnvironment", existing.Environment,
+				"existingStage", existing.Stage)
+
+			r.Recorder.Event(deployment, corev1.EventTypeNormal, "DeploymentAdopted",
+				fmt.Sprintf("Adopted existing deployment %s with commit hash %s (no new deployment created)",
+					existing.ID, commitHash))
+
+			// Update status with existing deployment info
+			return r.updateDeploymentStatus(ctx, deployment, projectName, apiResult.AccountID, existing)
+		}
+	} else if isForceRedeploy && commitHash != "" {
+		logger.Info("Force-redeploy requested, skipping commit hash idempotency check",
+			"commitHash", commitHash)
+	}
+
+	// === No existing deployment found (or force-redeploy) - create new one ===
 	logger.Info("Creating new Pages deployment",
 		"project", projectName,
 		"environment", deployment.Spec.Environment,
+		"commitHash", commitHash,
+		"forceRedeploy", isForceRedeploy,
 		"sourceType", r.getSourceType(deployment))
 
 	var result *cf.PagesDeploymentResult
@@ -479,13 +551,8 @@ func (r *PagesDeploymentReconciler) pollDeploymentStatus(
 	result, err := api.GetPagesDeployment(ctx, projectName, deployment.Status.DeploymentID)
 	if err != nil {
 		if cf.IsNotFoundError(err) {
-			logger.Info("Deployment not found, will create new one")
-			// Clear deployment ID and retry
-			deployment.Status.DeploymentID = ""
-			if updateErr := r.Status().Update(ctx, deployment); updateErr != nil {
-				return ctrl.Result{}, updateErr
-			}
-			return ctrl.Result{Requeue: true}, nil
+			// Deployment not found in Cloudflare - handle based on state
+			return r.handleDeploymentNotFound(ctx, deployment, projectName, api)
 		}
 		logger.Error(err, "Failed to get deployment status")
 		return r.setErrorStatus(ctx, deployment, err)
@@ -493,6 +560,200 @@ func (r *PagesDeploymentReconciler) pollDeploymentStatus(
 
 	// Update status
 	return r.updateDeploymentStatus(ctx, deployment, projectName, apiResult.AccountID, result)
+}
+
+// handleDeploymentNotFound handles the case when a Cloudflare deployment is not found.
+// This implements the dual protection mechanism:
+// 1. For terminal states: Try to recover by commit hash, otherwise mark as orphaned
+// 2. For non-terminal states: Try to recover by commit hash, otherwise trigger recreation
+//
+//nolint:revive // cognitive complexity acceptable for recovery logic
+func (r *PagesDeploymentReconciler) handleDeploymentNotFound(
+	ctx context.Context,
+	deployment *networkingv1alpha2.PagesDeployment,
+	projectName string,
+	api cf.CloudflareClient,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+	originalDeploymentID := deployment.Status.DeploymentID
+
+	// Try to recover by commit hash first
+	commitHash := ExtractCommitHash(deployment)
+	if commitHash != "" {
+		existing, err := api.FindPagesDeploymentByCommitHash(ctx, projectName, commitHash)
+		if err != nil {
+			// Log but don't fail - we can still proceed with other recovery paths
+			logger.Info("Failed to search deployment by commit hash",
+				"commitHash", commitHash,
+				"error", err.Error())
+		} else if existing != nil {
+			// Found existing deployment with same commit hash - recover
+			logger.Info("Recovered deployment by commit hash",
+				"originalDeploymentId", originalDeploymentID,
+				"recoveredDeploymentId", existing.ID,
+				"commitHash", commitHash,
+				"state", deployment.Status.State)
+
+			r.Recorder.Event(deployment, corev1.EventTypeNormal, "DeploymentRecovered",
+				fmt.Sprintf("Recovered deployment %s by commit hash %s (original: %s)",
+					existing.ID, commitHash, originalDeploymentID))
+
+			return r.recoverDeploymentID(ctx, deployment, existing)
+		}
+	}
+
+	// No recovery possible - handle based on state
+	if IsTerminalState(deployment.Status.State) {
+		// Terminal state: preserve history, mark as orphaned
+		logger.Info("Cloudflare deployment not found for completed deployment, marking as orphaned",
+			"deploymentId", originalDeploymentID,
+			"state", deployment.Status.State,
+			"commitHash", commitHash,
+			"reason", "Cloudflare may have cleaned old deployment due to retention policy")
+
+		return r.setCloudflareResourceNotExistsCondition(ctx, deployment)
+	}
+
+	// Non-terminal state: clear deployment ID and trigger recreation
+	logger.Info("Cloudflare deployment not found for in-progress deployment, will retry creation",
+		"deploymentId", originalDeploymentID,
+		"state", deployment.Status.State,
+		"commitHash", commitHash)
+
+	r.Recorder.Event(deployment, corev1.EventTypeWarning, "DeploymentNotFound",
+		fmt.Sprintf("Cloudflare deployment %s not found, will create new one", originalDeploymentID))
+
+	deployment.Status.DeploymentID = ""
+	deployment.Status.State = networkingv1alpha2.PagesDeploymentStatePending
+	if updateErr := r.Status().Update(ctx, deployment); updateErr != nil {
+		return ctrl.Result{}, updateErr
+	}
+	return ctrl.Result{Requeue: true}, nil
+}
+
+// recoverDeploymentID recovers the deployment ID from an existing Cloudflare deployment.
+// This is used when the local state is lost but we can find the deployment by commit hash.
+func (r *PagesDeploymentReconciler) recoverDeploymentID(
+	ctx context.Context,
+	deployment *networkingv1alpha2.PagesDeployment,
+	existing *cf.PagesDeploymentResult,
+) (ctrl.Result, error) {
+	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, deployment, func() {
+		deployment.Status.DeploymentID = existing.ID
+		deployment.Status.URL = existing.URL
+		deployment.Status.Environment = existing.Environment
+
+		meta.SetStatusCondition(&deployment.Status.Conditions, metav1.Condition{
+			Type:               ConditionTypeDeploymentRecovered,
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: deployment.Generation,
+			Reason:             "RecoveredByCommitHash",
+			Message:            fmt.Sprintf("Deployment ID recovered to %s from commit hash lookup", existing.ID),
+			LastTransitionTime: metav1.Now(),
+		})
+
+		// Ensure CloudflareResourceExists is True
+		meta.SetStatusCondition(&deployment.Status.Conditions, metav1.Condition{
+			Type:               ConditionTypeCloudflareResourceExists,
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: deployment.Generation,
+			Reason:             "DeploymentExists",
+			Message:            fmt.Sprintf("Cloudflare deployment %s exists", existing.ID),
+			LastTransitionTime: metav1.Now(),
+		})
+	})
+
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to update recovered deployment status: %w", err)
+	}
+
+	// Requeue to continue normal status polling
+	return ctrl.Result{Requeue: true}, nil
+}
+
+// setCloudflareResourceNotExistsCondition marks a completed deployment as orphaned.
+// This preserves the deployment history while indicating the Cloudflare resource no longer exists.
+// The deployment will NOT be recreated automatically - use force-redeploy annotation if needed.
+func (r *PagesDeploymentReconciler) setCloudflareResourceNotExistsCondition(
+	ctx context.Context,
+	deployment *networkingv1alpha2.PagesDeployment,
+) (ctrl.Result, error) {
+	// Check if already marked to avoid duplicate events
+	existingCondition := meta.FindStatusCondition(deployment.Status.Conditions, ConditionTypeCloudflareResourceExists)
+	if existingCondition != nil && existingCondition.Status == metav1.ConditionFalse {
+		// Already marked, no need to update
+		return ctrl.Result{}, nil
+	}
+
+	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, deployment, func() {
+		// Preserve original State and DeploymentID (as historical record)
+		// Only add the condition to indicate CF resource is gone
+		meta.SetStatusCondition(&deployment.Status.Conditions, metav1.Condition{
+			Type:               ConditionTypeCloudflareResourceExists,
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: deployment.Generation,
+			Reason:             "DeploymentNotFound",
+			Message: fmt.Sprintf(
+				"Cloudflare deployment %s no longer exists (likely cleaned by retention policy). "+
+					"Original state: %s. Use annotation '%s' to force recreate if needed.",
+				deployment.Status.DeploymentID,
+				deployment.Status.State,
+				AnnotationForceRedeploy),
+			LastTransitionTime: metav1.Now(),
+		})
+
+		// Update ObservedGeneration to indicate we've processed this generation
+		deployment.Status.ObservedGeneration = deployment.Generation
+	})
+
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to update orphaned status: %w", err)
+	}
+
+	r.Recorder.Event(deployment, corev1.EventTypeWarning, "CloudflareDeploymentNotFound",
+		fmt.Sprintf("Cloudflare deployment %s no longer exists. Deployment history preserved. "+
+			"Use annotation '%s' to force recreate.", deployment.Status.DeploymentID, AnnotationForceRedeploy))
+
+	// No requeue needed - this is a final state
+	return ctrl.Result{}, nil
+}
+
+// acknowledgeGenerationWithoutAction acknowledges spec changes for terminal deployments without taking action.
+// This prevents the controller from repeatedly trying to reconcile terminal deployments when their spec changes.
+// Users must use force-redeploy annotation to create a new deployment.
+func (r *PagesDeploymentReconciler) acknowledgeGenerationWithoutAction(
+	ctx context.Context,
+	deployment *networkingv1alpha2.PagesDeployment,
+) (ctrl.Result, error) {
+	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, deployment, func() {
+		// Update ObservedGeneration to indicate we've processed this generation
+		deployment.Status.ObservedGeneration = deployment.Generation
+
+		// Add/update condition to explain why spec changes were ignored
+		meta.SetStatusCondition(&deployment.Status.Conditions, metav1.Condition{
+			Type:               ConditionTypeSpecChangeIgnored,
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: deployment.Generation,
+			Reason:             "TerminalState",
+			Message: fmt.Sprintf(
+				"Spec changes ignored for deployment in terminal state (%s). "+
+					"Terminal deployments are immutable historical records. "+
+					"Use annotation '%s' to force create a new deployment.",
+				deployment.Status.State,
+				AnnotationForceRedeploy),
+			LastTransitionTime: metav1.Now(),
+		})
+	})
+
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to acknowledge generation: %w", err)
+	}
+
+	r.Recorder.Event(deployment, corev1.EventTypeNormal, "SpecChangeIgnored",
+		fmt.Sprintf("Spec changes ignored for completed deployment (state: %s). Use '%s' annotation to create new deployment.",
+			deployment.Status.State, AnnotationForceRedeploy))
+
+	return ctrl.Result{}, nil
 }
 
 // updateDeploymentStatus updates the CRD status based on deployment result.
@@ -569,6 +830,19 @@ func (r *PagesDeploymentReconciler) updateDeploymentStatus(
 			Message:            message,
 			LastTransitionTime: metav1.Now(),
 		})
+
+		// Ensure CloudflareResourceExists condition is True when we successfully get deployment info
+		meta.SetStatusCondition(&deployment.Status.Conditions, metav1.Condition{
+			Type:               ConditionTypeCloudflareResourceExists,
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: deployment.Generation,
+			Reason:             "DeploymentExists",
+			Message:            fmt.Sprintf("Cloudflare deployment %s exists and is accessible", result.ID),
+			LastTransitionTime: metav1.Now(),
+		})
+
+		// Clear SpecChangeIgnored condition if it exists (spec is now being applied)
+		meta.RemoveStatusCondition(&deployment.Status.Conditions, ConditionTypeSpecChangeIgnored)
 
 		deployment.Status.ObservedGeneration = deployment.Generation
 	})

@@ -1135,6 +1135,21 @@ func (mr *MockCloudflareClientMockRecorder) ListPagesDeployments(ctx, projectNam
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListPagesDeployments", reflect.TypeOf((*MockCloudflareClient)(nil).ListPagesDeployments), ctx, projectName)
 }
 
+// FindPagesDeploymentByCommitHash mocks base method.
+func (m *MockCloudflareClient) FindPagesDeploymentByCommitHash(ctx context.Context, projectName, commitHash string) (*cf.PagesDeploymentResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindPagesDeploymentByCommitHash", ctx, projectName, commitHash)
+	ret0, _ := ret[0].(*cf.PagesDeploymentResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindPagesDeploymentByCommitHash indicates an expected call of FindPagesDeploymentByCommitHash.
+func (mr *MockCloudflareClientMockRecorder) FindPagesDeploymentByCommitHash(ctx, projectName, commitHash any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindPagesDeploymentByCommitHash", reflect.TypeOf((*MockCloudflareClient)(nil).FindPagesDeploymentByCommitHash), ctx, projectName, commitHash)
+}
+
 // ListPagesDomains mocks base method.
 func (m *MockCloudflareClient) ListPagesDomains(ctx context.Context, projectName string) ([]cf.PagesDomainResult, error) {
 	m.ctrl.T.Helper()

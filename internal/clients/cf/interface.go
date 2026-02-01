@@ -149,6 +149,10 @@ type CloudflareClient interface {
 	// DeletePagesDeployment deletes a deployment. If force is true, aliased deployments will be deleted.
 	DeletePagesDeployment(ctx context.Context, projectName, deploymentID string, force bool) error
 	ListPagesDeployments(ctx context.Context, projectName string) ([]PagesDeploymentResult, error)
+	// FindPagesDeploymentByCommitHash finds an existing deployment by commit hash.
+	// Returns nil (not error) if no matching deployment is found.
+	// This enables idempotent deployment creation based on commit hash.
+	FindPagesDeploymentByCommitHash(ctx context.Context, projectName, commitHash string) (*PagesDeploymentResult, error)
 	RetryPagesDeployment(ctx context.Context, projectName, deploymentID string) (*PagesDeploymentResult, error)
 	RollbackPagesDeployment(ctx context.Context, projectName, deploymentID string) (*PagesDeploymentResult, error)
 	GetPagesDeploymentLogs(ctx context.Context, projectName, deploymentID string) (*PagesDeploymentLogsResult, error)

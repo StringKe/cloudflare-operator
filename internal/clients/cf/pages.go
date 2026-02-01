@@ -16,6 +16,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/cloudflare/cloudflare-go"
@@ -607,6 +608,55 @@ func (api *API) ListPagesDeployments(ctx context.Context, projectName string) ([
 	}
 
 	return results, nil
+}
+
+// FindPagesDeploymentByCommitHash finds an existing deployment by commit hash.
+// It searches through recent deployments to find one with matching commit hash.
+// Returns nil (not error) if no matching deployment is found.
+// This enables idempotent deployment creation - same commit hash won't create duplicate deployments.
+func (api *API) FindPagesDeploymentByCommitHash(
+	ctx context.Context,
+	projectName, commitHash string,
+) (*PagesDeploymentResult, error) {
+	if commitHash == "" {
+		return nil, nil // No hash to search for
+	}
+
+	deployments, err := api.ListPagesDeployments(ctx, projectName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list deployments for hash lookup: %w", err)
+	}
+
+	// Normalize the search hash
+	normalizedHash := strings.ToLower(strings.TrimSpace(commitHash))
+	minPrefixLen := 7 // Minimum characters for short hash matching
+
+	for i := range deployments {
+		d := &deployments[i]
+		if d.DeploymentTrigger == nil || d.DeploymentTrigger.Metadata == nil {
+			continue
+		}
+
+		existingHash := strings.ToLower(strings.TrimSpace(d.DeploymentTrigger.Metadata.CommitHash))
+		if existingHash == "" {
+			continue
+		}
+
+		// Exact match
+		if existingHash == normalizedHash {
+			return d, nil
+		}
+
+		// Short hash matching (prefix match with minimum length)
+		if len(existingHash) >= minPrefixLen && len(normalizedHash) >= minPrefixLen {
+			if strings.HasPrefix(existingHash, normalizedHash) ||
+				strings.HasPrefix(normalizedHash, existingHash) {
+				return d, nil
+			}
+		}
+	}
+
+	return nil, nil // Not found, but not an error
 }
 
 // RetryPagesDeployment retries a failed deployment
