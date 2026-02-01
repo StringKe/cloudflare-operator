@@ -121,7 +121,7 @@ func (vm *VersionManager) ResolveVersions(project *networkingv1alpha2.PagesProje
 		return vm.resolveExternal(mgmt.External, productionBranch)
 
 	case networkingv1alpha2.VersionPolicyGitOpsLatest:
-		return vm.resolveGitOpsLatest(mgmt.GitOpsLatest, productionBranch)
+		return vm.resolveGitOpsLatest(mgmt.GitOpsLatest, productionBranch, project.Status.LastSyncedVersion)
 
 	default:
 		return nil, fmt.Errorf("unknown version management policy: %s", policy)
@@ -366,12 +366,18 @@ func (*VersionManager) resolveExternal(
 }
 
 // resolveGitOpsLatest resolves versions for gitopsLatest mode.
-// Key difference from targetVersion: ProductionTarget is NOT set,
-// so reconcileProductionTarget() will skip production switching.
-// This allows CF console to fully manage production version switching.
+//
+// Smart production switching logic:
+//   - spec.version ≠ lastSyncedVersion → New version push, set ProductionTarget to trigger auto-switch
+//   - spec.version == lastSyncedVersion → Skip (possibly manual rollback in CF console)
+//
+// This allows:
+//   - CI to push new versions that automatically become production
+//   - Users to manually rollback in CF console without being overridden
 func (*VersionManager) resolveGitOpsLatest(
 	spec *networkingv1alpha2.GitOpsLatestConfig,
 	productionBranch string,
+	lastSyncedVersion string,
 ) (*ResolvedVersions, error) {
 	if spec == nil {
 		return &ResolvedVersions{
@@ -381,13 +387,21 @@ func (*VersionManager) resolveGitOpsLatest(
 
 	result := &ResolvedVersions{
 		Policy: networkingv1alpha2.VersionPolicyGitOpsLatest,
-		// ProductionTarget intentionally left empty!
-		// This prevents automatic production switching.
 	}
 
 	if spec.Version == "" {
 		return result, nil
 	}
+
+	// ============ Core Logic ============
+	// Only set ProductionTarget when spec.version has changed.
+	// This distinguishes between:
+	//   - New version push: spec.version ≠ lastSyncedVersion → auto-switch production
+	//   - Manual rollback: spec.version == lastSyncedVersion → skip (respect manual operation)
+	if spec.Version != lastSyncedVersion {
+		result.ProductionTarget = spec.Version
+	}
+	// ====================================
 
 	// Ensure branch is set in metadata
 	metadata := spec.Metadata

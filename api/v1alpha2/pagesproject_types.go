@@ -1095,6 +1095,22 @@ type PagesProjectStatus struct {
 	// +kubebuilder:validation:Optional
 	ProjectID string `json:"projectId,omitempty"`
 
+	// LastSyncedVersion records the spec.version that was last successfully
+	// synced to production. Used by gitopsLatest mode to distinguish between
+	// "new version push" (should auto-switch) and "manual rollback" (should skip).
+	//
+	// Decision logic:
+	//   - spec.version ≠ lastSyncedVersion → New version, auto-switch production
+	//   - spec.version == lastSyncedVersion → Skip (possibly manual rollback in CF console)
+	//
+	// Updated when:
+	//   - gitopsLatest mode is active
+	//   - A new spec.version is successfully promoted to production
+	//   - currentProduction.version matches spec.version
+	//
+	// +kubebuilder:validation:Optional
+	LastSyncedVersion string `json:"lastSyncedVersion,omitempty"`
+
 	// AccountID is the Cloudflare account ID.
 	// +kubebuilder:validation:Optional
 	AccountID string `json:"accountId,omitempty"`

@@ -11,6 +11,8 @@ import (
 )
 
 // aggregateVersionStatus aggregates status from all managed deployments.
+//
+//nolint:revive // cognitive complexity acceptable for status aggregation with gitopsLatest support
 func (r *PagesProjectReconciler) aggregateVersionStatus(ctx context.Context, project *networkingv1alpha2.PagesProject) error {
 	deployments, err := r.versionManager.listManagedDeployments(ctx, project)
 	if err != nil {
@@ -53,10 +55,32 @@ func (r *PagesProjectReconciler) aggregateVersionStatus(ctx context.Context, pro
 		}
 	}
 
+	// Get spec.version for gitopsLatest mode
+	var specVersion string
+	if project.Spec.VersionManagement != nil &&
+		project.Spec.VersionManagement.GitOpsLatest != nil {
+		specVersion = project.Spec.VersionManagement.GitOpsLatest.Version
+	}
+
 	// Update status
 	return controller.UpdateStatusWithConflictRetry(ctx, r.Client, project, func() {
 		project.Status.ManagedDeployments = int32(len(deployments))
 		project.Status.ManagedVersions = managedVersions
 		project.Status.CurrentProduction = currentProduction
+
+		// ============ gitopsLatest: Update LastSyncedVersion ============
+		// When currentProduction.version == spec.version, it means the new version
+		// has been successfully synced to production. Update LastSyncedVersion to
+		// record this state.
+		//
+		// This enables the smart production switching logic:
+		//   - Next reconcile with same spec.version will skip (spec.version == lastSyncedVersion)
+		//   - Manual rollback in CF console won't be overridden
+		//   - New version push will trigger auto-switch (spec.version ≠ lastSyncedVersion)
+		if specVersion != "" && currentProduction != nil &&
+			currentProduction.Version == specVersion {
+			project.Status.LastSyncedVersion = specVersion
+		}
+		// ================================================================
 	})
 }

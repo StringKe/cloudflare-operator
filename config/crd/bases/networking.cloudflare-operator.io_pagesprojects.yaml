@@ -2309,6 +2309,21 @@ spec:
                   LastSuccessfulDeploymentID is the ID of the last successful deployment.
                   Used for LastSuccessful rollback strategy.
                 type: string
+              lastSyncedVersion:
+                description: |-
+                  LastSyncedVersion records the spec.version that was last successfully
+                  synced to production. Used by gitopsLatest mode to distinguish between
+                  "new version push" (should auto-switch) and "manual rollback" (should skip).
+
+                  Decision logic:
+                    - spec.version ≠ lastSyncedVersion → New version, auto-switch production
+                    - spec.version == lastSyncedVersion → Skip (possibly manual rollback in CF console)
+
+                  Updated when:
+                    - gitopsLatest mode is active
+                    - A new spec.version is successfully promoted to production
+                    - currentProduction.version matches spec.version
+                type: string
               latestDeployment:
                 description: LatestDeployment is the latest deployment info.
                 properties:

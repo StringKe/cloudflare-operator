@@ -154,10 +154,15 @@ func (r *PagesProjectReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			requeueAfter = requeue
 
 		case networkingv1alpha2.VersionPolicyGitOpsLatest:
-			// GitOpsLatest mode: CI triggers deployment, CF manages production
-			// No automatic production switching, but need periodic requeue
-			// to ensure status aggregation catches deployment state changes
-			// (informer cache may have delay when Watch triggers reconcile)
+			// GitOpsLatest mode: CI triggers deployment with smart production switching
+			//
+			// Behavior:
+			//   - New version push (spec.version ≠ lastSyncedVersion): auto-switch production
+			//   - Manual rollback (spec.version == lastSyncedVersion): skip, respect CF console
+			//
+			// This allows:
+			//   - CI to push new versions that automatically become production
+			//   - Users to manually rollback in CF console without being overridden
 			if err := r.versionManager.Reconcile(ctx, project); err != nil {
 				if errors.Is(err, ErrDeploymentPendingDeletion) {
 					logger.Info("Deployment pending deletion, will retry")
@@ -168,6 +173,14 @@ func (r *PagesProjectReconciler) Reconcile(ctx context.Context, req ctrl.Request
 					&project.Status.Conditions, "GitOpsLatestReconcileFailed", err)
 				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 			}
+
+			// Smart production switching:
+			// Only switches production when ProductionTarget is set (i.e., spec.version changed)
+			if err := r.reconcileProductionTarget(ctx, project); err != nil {
+				logger.Error(err, "Failed to reconcile production target")
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, err
+			}
+
 			// Periodic requeue to ensure currentProduction status is updated
 			// after PagesDeployment state changes (handles informer cache delay)
 			requeueAfter = 30 * time.Second
