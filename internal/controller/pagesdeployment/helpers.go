@@ -70,6 +70,9 @@ func ExtractCommitHash(deployment *networkingv1alpha2.PagesDeployment) string {
 			deployment.Spec.Source.DirectUpload.DeploymentMetadata != nil {
 			return normalizeCommitHash(deployment.Spec.Source.DirectUpload.DeploymentMetadata.CommitHash)
 		}
+	default:
+		// Unknown source type, no commit hash
+		return ""
 	}
 
 	return ""
