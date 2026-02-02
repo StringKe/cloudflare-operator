@@ -10,8 +10,8 @@ require (
 	github.com/cloudflare/cloudflare-go v0.116.0
 	github.com/go-logr/logr v1.4.3
 	github.com/google/go-containerregistry v0.20.2
-	github.com/onsi/ginkgo/v2 v2.27.4
-	github.com/onsi/gomega v1.39.0
+	github.com/onsi/ginkgo/v2 v2.28.0
+	github.com/onsi/gomega v1.39.1
 	github.com/stretchr/testify v1.11.1
 	go.uber.org/mock v0.6.0
 	go.uber.org/zap v1.27.1
