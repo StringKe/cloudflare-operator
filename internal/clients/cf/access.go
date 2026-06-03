@@ -1917,6 +1917,30 @@ func (c *API) ListAccessApplicationsByName(ctx context.Context, name string) (*A
 	return nil, fmt.Errorf("access application not found: %s", name)
 }
 
+// ListAccessApplicationsByDomain finds an Access Application by domain.
+func (c *API) ListAccessApplicationsByDomain(ctx context.Context, domain string) (*AccessApplicationResult, error) {
+	if _, err := c.GetAccountId(ctx); err != nil {
+		c.Log.Error(err, "error getting account ID")
+		return nil, err
+	}
+
+	rc := cloudflare.AccountIdentifier(c.ValidAccountId)
+
+	apps, _, err := c.CloudflareClient.ListAccessApplications(ctx, rc, cloudflare.ListAccessApplicationsParams{})
+	if err != nil {
+		c.Log.Error(err, "error listing access applications")
+		return nil, err
+	}
+
+	for _, app := range apps {
+		if app.Domain == domain {
+			return convertAccessApplicationToResult(app, c.ValidAccountId), nil
+		}
+	}
+
+	return nil, fmt.Errorf("access application not found: %s", domain)
+}
+
 // ============================================================================
 // Conversion helper functions for AccessApplication
 // ============================================================================
