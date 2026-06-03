@@ -60,6 +60,7 @@ type CloudflareClient interface {
 	UpdateAccessApplication(ctx context.Context, applicationID string, params AccessApplicationParams) (*AccessApplicationResult, error)
 	DeleteAccessApplication(ctx context.Context, applicationID string) error
 	ListAccessApplicationsByName(ctx context.Context, name string) (*AccessApplicationResult, error)
+	ListAccessApplicationsByDomain(ctx context.Context, domain string) (*AccessApplicationResult, error)
 
 	// Access Policy operations
 	CreateAccessPolicy(ctx context.Context, params AccessPolicyParams) (*AccessPolicyResult, error)

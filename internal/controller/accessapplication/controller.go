@@ -200,8 +200,8 @@ func (r *Reconciler) reconcileApplication(
 				"applicationID", existing.ID)
 		}
 	} else {
-		// Try to find existing by name first
-		existing, err := apiResult.API.ListAccessApplicationsByName(ctx, appName)
+		// Try to find existing by domain first
+		existing, err := apiResult.API.ListAccessApplicationsByDomain(ctx, params.Domain)
 		if err == nil && existing != nil {
 			// Found existing, adopt it
 			logger.Info("Found existing AccessApplication in Cloudflare, adopting",

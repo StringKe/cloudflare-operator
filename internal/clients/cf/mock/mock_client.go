@@ -549,6 +549,21 @@ func (mr *MockCloudflareClientMockRecorder) EnableWebAnalytics(ctx, hostname any
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EnableWebAnalytics", reflect.TypeOf((*MockCloudflareClient)(nil).EnableWebAnalytics), ctx, hostname)
 }
 
+// FindPagesDeploymentByCommitHash mocks base method.
+func (m *MockCloudflareClient) FindPagesDeploymentByCommitHash(ctx context.Context, projectName, commitHash string) (*cf.PagesDeploymentResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindPagesDeploymentByCommitHash", ctx, projectName, commitHash)
+	ret0, _ := ret[0].(*cf.PagesDeploymentResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindPagesDeploymentByCommitHash indicates an expected call of FindPagesDeploymentByCommitHash.
+func (mr *MockCloudflareClientMockRecorder) FindPagesDeploymentByCommitHash(ctx, projectName, commitHash any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindPagesDeploymentByCommitHash", reflect.TypeOf((*MockCloudflareClient)(nil).FindPagesDeploymentByCommitHash), ctx, projectName, commitHash)
+}
+
 // GetAccessApplication mocks base method.
 func (m *MockCloudflareClient) GetAccessApplication(ctx context.Context, applicationID string) (*cf.AccessApplicationResult, error) {
 	m.ctrl.T.Helper()
@@ -1015,6 +1030,21 @@ func (mr *MockCloudflareClientMockRecorder) InsertOrUpdateTXT(ctx, fqdn, txtID, 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertOrUpdateTXT", reflect.TypeOf((*MockCloudflareClient)(nil).InsertOrUpdateTXT), ctx, fqdn, txtID, dnsID)
 }
 
+// ListAccessApplicationsByDomain mocks base method.
+func (m *MockCloudflareClient) ListAccessApplicationsByDomain(ctx context.Context, domain string) (*cf.AccessApplicationResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListAccessApplicationsByDomain", ctx, domain)
+	ret0, _ := ret[0].(*cf.AccessApplicationResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListAccessApplicationsByDomain indicates an expected call of ListAccessApplicationsByDomain.
+func (mr *MockCloudflareClientMockRecorder) ListAccessApplicationsByDomain(ctx, domain any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAccessApplicationsByDomain", reflect.TypeOf((*MockCloudflareClient)(nil).ListAccessApplicationsByDomain), ctx, domain)
+}
+
 // ListAccessApplicationsByName mocks base method.
 func (m *MockCloudflareClient) ListAccessApplicationsByName(ctx context.Context, name string) (*cf.AccessApplicationResult, error) {
 	m.ctrl.T.Helper()
@@ -1133,21 +1163,6 @@ func (m *MockCloudflareClient) ListPagesDeployments(ctx context.Context, project
 func (mr *MockCloudflareClientMockRecorder) ListPagesDeployments(ctx, projectName any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListPagesDeployments", reflect.TypeOf((*MockCloudflareClient)(nil).ListPagesDeployments), ctx, projectName)
-}
-
-// FindPagesDeploymentByCommitHash mocks base method.
-func (m *MockCloudflareClient) FindPagesDeploymentByCommitHash(ctx context.Context, projectName, commitHash string) (*cf.PagesDeploymentResult, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "FindPagesDeploymentByCommitHash", ctx, projectName, commitHash)
-	ret0, _ := ret[0].(*cf.PagesDeploymentResult)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// FindPagesDeploymentByCommitHash indicates an expected call of FindPagesDeploymentByCommitHash.
-func (mr *MockCloudflareClientMockRecorder) FindPagesDeploymentByCommitHash(ctx, projectName, commitHash any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindPagesDeploymentByCommitHash", reflect.TypeOf((*MockCloudflareClient)(nil).FindPagesDeploymentByCommitHash), ctx, projectName, commitHash)
 }
 
 // ListPagesDomains mocks base method.
