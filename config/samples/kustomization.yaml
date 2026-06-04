@@ -21,6 +21,7 @@ resources:
 # v1alpha2 Access Control CRDs
 - networking_v1alpha2_accessapplication.yaml
 - networking_v1alpha2_accessgroup.yaml
+- networking_v1alpha2_accesstag.yaml
 - networking_v1alpha2_accessidentityprovider.yaml
 - networking_v1alpha2_accessservicetoken.yaml
 # v1alpha2 Gateway CRDs

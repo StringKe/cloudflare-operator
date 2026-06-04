@@ -99,6 +99,7 @@ rules:
   - accessidentityproviders
   - accesspolicies
   - accessservicetokens
+  - accesstags
   - accesstunnels
   - cloudflarecredentials
   - cloudflaredomains
@@ -144,6 +145,7 @@ rules:
   - accessidentityproviders/finalizers
   - accesspolicies/finalizers
   - accessservicetokens/finalizers
+  - accesstags/finalizers
   - cloudflarecredentials/finalizers
   - cloudflaredomains/finalizers
   - cloudflaresyncstates/finalizers
@@ -182,6 +184,7 @@ rules:
   - accessidentityproviders/status
   - accesspolicies/status
   - accessservicetokens/status
+  - accesstags/status
   - accesstunnels/status
   - cloudflarecredentials/status
   - cloudflaredomains/status
