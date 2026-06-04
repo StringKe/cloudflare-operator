@@ -19,6 +19,7 @@ resources:
 # Access Control CRDs
 - bases/networking.cloudflare-operator.io_accessapplications.yaml
 - bases/networking.cloudflare-operator.io_accessgroups.yaml
+- bases/networking.cloudflare-operator.io_accesstags.yaml
 - bases/networking.cloudflare-operator.io_accessidentityproviders.yaml
 - bases/networking.cloudflare-operator.io_accesspolicies.yaml
 - bases/networking.cloudflare-operator.io_accessservicetokens.yaml

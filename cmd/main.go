@@ -15,6 +15,7 @@ import (
 	"github.com/StringKe/cloudflare-operator/internal/controller/accessidentityprovider"
 	"github.com/StringKe/cloudflare-operator/internal/controller/accesspolicy"
 	"github.com/StringKe/cloudflare-operator/internal/controller/accessservicetoken"
+	"github.com/StringKe/cloudflare-operator/internal/controller/accesstag"
 	"github.com/StringKe/cloudflare-operator/internal/controller/accesstunnel"
 	"github.com/StringKe/cloudflare-operator/internal/controller/cloudflarecredentials"
 	"github.com/StringKe/cloudflare-operator/internal/controller/cloudflaredomain"
@@ -318,6 +319,13 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AccessApplication")
+		os.Exit(1)
+	}
+	if err = (&accesstag.Reconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "AccessTag")
 		os.Exit(1)
 	}
 	if err = (&accessgroup.Reconciler{

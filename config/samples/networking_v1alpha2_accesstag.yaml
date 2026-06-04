@@ -1,0 +1,14 @@
+apiVersion: networking.cloudflare-operator.io/v1alpha2
+kind: AccessTag
+metadata:
+  name: monitoring
+  namespace: default
+spec:
+  # The Cloudflare Access tag string. Must match the value referenced by
+  # AccessApplication.spec.tags entries.
+  name: monitoring
+  cloudflare:
+    accountId: "your-cloudflare-account-id"
+    # Secret (or credentialsRef) holding the Cloudflare API token, resolved in
+    # this resource's namespace - same convention as AccessApplication.
+    secret: cloudflare-credentials
