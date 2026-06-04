@@ -4,6 +4,7 @@
 package cf
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/cloudflare/cloudflare-go"
@@ -15,32 +16,24 @@ func TestFindAccessTag(t *testing.T) {
 		{Name: "backups", AppCount: 0},
 	}
 
-	t.Run("found returns converted result", func(t *testing.T) {
-		got := findAccessTag(tags, "monitoring")
-		if got == nil {
-			t.Fatal("expected a result, got nil")
-		}
-		if got.Name != "monitoring" || got.AppCount != 3 {
-			t.Fatalf("unexpected result: %+v", got)
-		}
-	})
+	tests := []struct {
+		name  string
+		tags  []cloudflare.AccessTag
+		query string
+		want  *AccessTagResult
+	}{
+		{name: "found returns converted result", tags: tags, query: "monitoring", want: &AccessTagResult{Name: "monitoring", AppCount: 3}},
+		{name: "found with zero app count", tags: tags, query: "backups", want: &AccessTagResult{Name: "backups", AppCount: 0}},
+		{name: "not found returns nil", tags: tags, query: "nope", want: nil},
+		{name: "empty list returns nil", tags: nil, query: "monitoring", want: nil},
+	}
 
-	t.Run("found with zero app count", func(t *testing.T) {
-		got := findAccessTag(tags, "backups")
-		if got == nil || got.AppCount != 0 {
-			t.Fatalf("expected backups with AppCount 0, got %+v", got)
-		}
-	})
-
-	t.Run("not found returns nil", func(t *testing.T) {
-		if got := findAccessTag(tags, "nope"); got != nil {
-			t.Fatalf("expected nil, got %+v", got)
-		}
-	})
-
-	t.Run("empty list returns nil", func(t *testing.T) {
-		if got := findAccessTag(nil, "monitoring"); got != nil {
-			t.Fatalf("expected nil, got %+v", got)
-		}
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := findAccessTag(tt.tags, tt.query)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("findAccessTag(%q) = %+v, want %+v", tt.query, got, tt.want)
+			}
+		})
+	}
 }
