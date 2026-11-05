@@ -51,12 +51,27 @@ func (r *Reconciler) buildIngressRules(
 		rules = append(rules, bindingRules...)
 	}
 
-	// 3. Sort rules for deterministic config (by hostname, then path)
-	sort.Slice(rules, func(i, j int) bool {
-		if rules[i].Hostname != rules[j].Hostname {
-			return rules[i].Hostname < rules[j].Hostname
+	// 3. Sort rules for deterministic config. Cloudflare evaluates rules in
+	// order (first match wins), so path-specific rules must come before
+	// hostname-only catch-all rules, and longer paths before shorter paths.
+	sort.SliceStable(rules, func(i, j int) bool {
+		a, b := rules[i], rules[j]
+
+		// Rules with a path are more specific than hostname catch-all rules.
+		if (a.Path == "") != (b.Path == "") {
+			return a.Path != ""
 		}
-		return rules[i].Path < rules[j].Path
+
+		// Longer paths are more specific and must be evaluated first.
+		if len(a.Path) != len(b.Path) {
+			return len(a.Path) > len(b.Path)
+		}
+
+		if a.Hostname != b.Hostname {
+			return a.Hostname < b.Hostname
+		}
+
+		return a.Path < b.Path
 	})
 
 	// 4. Add fallback rule

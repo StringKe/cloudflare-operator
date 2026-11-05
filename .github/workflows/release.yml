@@ -18,7 +18,10 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: stringke/cloudflare-operator
+  # Repository variable (Settings > Secrets and variables > Actions > Variables).
+  # Must be the lowercase GHCR image path, e.g. stringke/cloudflare-operator.
+  # Falls back to the upstream image name when the variable is not set.
+  IMAGE_NAME: ${{ vars.IMAGE_NAME || 'stringke/cloudflare-operator' }}
 
 jobs:
   # Build Docker images using matrix for native builds (faster than QEMU)
