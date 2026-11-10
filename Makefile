@@ -24,12 +24,10 @@ BUNDLE_DEFAULT_CHANNEL := --default-channel=$(DEFAULT_CHANNEL)
 endif
 BUNDLE_METADATA_OPTS ?= $(BUNDLE_CHANNELS) $(BUNDLE_DEFAULT_CHANNEL)
 
-# IMAGE_TAG_BASE defines the docker.io namespace and part of the image name for remote images.
-# This variable is used to construct full image tags for bundle and catalog images.
-#
-# For example, running 'make bundle-build bundle-push catalog-build catalog-push' will build and push both
-# cfargotunnel.com/cloudflare-operator-bundle:$VERSION and cfargotunnel.com/cloudflare-operator-catalog:$VERSION.
-IMAGE_TAG_BASE ?= ghcr.io/stringke/cloudflare-operator
+# IMAGE_TAG_BASE defines the container registry namespace and image name for
+# remote images. Use IMAGE_NAME when set (e.g. from CI), otherwise fall back to
+# the upstream project. Override with IMAGE_TAG_BASE to customize.
+IMAGE_TAG_BASE ?= ghcr.io/$(if $(IMAGE_NAME),$(IMAGE_NAME),stringke/cloudflare-operator)
 
 # BUNDLE_IMG defines the image:tag used for the bundle.
 # You can use it as an arg. (E.g make bundle-build BUNDLE_IMG=<some-registry>/<project-name-bundle>:<tag>)

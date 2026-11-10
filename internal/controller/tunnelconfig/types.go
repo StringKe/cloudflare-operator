@@ -249,7 +249,12 @@ func (c *TunnelConfig) ComputeHash() string {
 }
 
 // AggregateRules aggregates all rules from all sources into a single list.
-// Rules are sorted by priority and then by hostname.
+//
+// Cloudflare evaluates ingress rules in order (first match wins), so rules are
+// ordered by source priority first, then by path specificity:
+//   - path-specific rules before hostname-only catch-all rules
+//   - longer paths before shorter paths (more specific first)
+//   - hostname/path as deterministic tie-breakers
 func (c *TunnelConfig) AggregateRules() []IngressRule {
 	var allRules []IngressRule
 
@@ -257,12 +262,28 @@ func (c *TunnelConfig) AggregateRules() []IngressRule {
 		allRules = append(allRules, source.Rules...)
 	}
 
-	// Sort by priority (lower first), then by hostname
-	sort.Slice(allRules, func(i, j int) bool {
-		if allRules[i].Priority != allRules[j].Priority {
-			return allRules[i].Priority < allRules[j].Priority
+	sort.SliceStable(allRules, func(i, j int) bool {
+		a, b := allRules[i], allRules[j]
+
+		if a.Priority != b.Priority {
+			return a.Priority < b.Priority
 		}
-		return allRules[i].Hostname < allRules[j].Hostname
+
+		// Rules with a path are more specific than hostname catch-all rules.
+		if (a.Path == "") != (b.Path == "") {
+			return a.Path != ""
+		}
+
+		// Longer paths are more specific and must be evaluated first.
+		if len(a.Path) != len(b.Path) {
+			return len(a.Path) > len(b.Path)
+		}
+
+		if a.Hostname != b.Hostname {
+			return a.Hostname < b.Hostname
+		}
+
+		return a.Path < b.Path
 	})
 
 	return allRules
