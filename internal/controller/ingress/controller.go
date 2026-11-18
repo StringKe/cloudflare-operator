@@ -5,6 +5,7 @@ package ingress
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -130,6 +131,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		if statusErr := r.updateIngressStatus(ctx, ingress, config, err); statusErr != nil {
 			logger.Error(statusErr, "Failed to update Ingress status after reconcile error")
 		}
+		// Surface the failure on the class configuration as well. Otherwise the stale
+		// aggregate keeps reporting Ready=True, which hides the fact that the tunnel
+		// configuration no longer matches the Ingresses in the cluster.
+		r.updateConfigErrorStatus(ctx, config, err)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 
@@ -343,6 +348,7 @@ func (r *Reconciler) handleDeletion(
 			logger.Error(err, "Failed to rebuild tunnel config, continuing with finalizer removal")
 			r.Recorder.Event(ingress, corev1.EventTypeWarning, "CleanupWarning",
 				"Failed to rebuild tunnel config: "+cf.SanitizeErrorMessage(err))
+			r.updateConfigErrorStatus(ctx, config, err)
 		}
 		// Don't block deletion on tunnel config rebuild failure
 	}
@@ -379,10 +385,40 @@ func (r *Reconciler) handleDeletion(
 	return ctrl.Result{}, nil
 }
 
-// handleIngressDeletion handles the case where an Ingress was deleted before we could process it
-func (*Reconciler) handleIngressDeletion(_ context.Context, _ ctrl.Request) (ctrl.Result, error) {
-	// We can't determine which config this Ingress belonged to, so we need to rebuild all configs
-	// In practice, this is rare and the next reconcile will fix any inconsistencies
+// handleIngressDeletion handles the case where an Ingress is gone by the time we reconcile it.
+//
+// This is the normal path for a deletion (the finalizer has already been removed) as well as
+// the path for deletions we never observed. The Ingress may have carried rules that are no
+// longer declared, and there is no other event left to trigger a rebuild, so every
+// TunnelIngressClassConfig is rebuilt from the live Ingresses. Skipping this (as the
+// controller used to) leaves the removed rules in the tunnel configuration indefinitely.
+func (r *Reconciler) handleIngressDeletion(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	configList := &networkingv1alpha2.TunnelIngressClassConfigList{}
+	if err := r.List(ctx, configList); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to list TunnelIngressClassConfigs: %w", err)
+	}
+
+	var errs []error
+	for i := range configList.Items {
+		config := &configList.Items[i]
+		if err := r.rebuildTunnelConfig(ctx, config, nil); err != nil {
+			logger.Error(err, "Failed to rebuild tunnel config after Ingress deletion",
+				"config", client.ObjectKeyFromObject(config))
+			r.updateConfigErrorStatus(ctx, config, err)
+			errs = append(errs, fmt.Errorf("config %s: %w", client.ObjectKeyFromObject(config), err))
+			continue
+		}
+		logger.Info("Rebuilt tunnel config after Ingress deletion",
+			"ingress", req.NamespacedName,
+			"config", client.ObjectKeyFromObject(config))
+	}
+
+	if len(errs) > 0 {
+		return ctrl.Result{}, errors.Join(errs...)
+	}
+
 	return ctrl.Result{}, nil
 }
 
@@ -671,6 +707,29 @@ func (r *Reconciler) updateConfigStatus(ctx context.Context, config *networkingv
 		// Set Ready condition
 		controller.SetSuccessCondition(&config.Status.Conditions, "Configuration is active")
 	})
+}
+
+// updateConfigErrorStatus marks the TunnelIngressClassConfig as failed.
+//
+// A failed rebuild leaves the previously written aggregate in place, so the class
+// configuration must not keep advertising Ready=True while its tunnel rules no longer
+// reflect the Ingresses in the cluster.
+func (r *Reconciler) updateConfigErrorStatus(
+	ctx context.Context,
+	config *networkingv1alpha2.TunnelIngressClassConfig,
+	reconcileErr error,
+) {
+	logger := log.FromContext(ctx)
+
+	err := controller.UpdateStatusWithConflictRetry(ctx, r.Client, config, func() {
+		config.Status.State = "error"
+		config.Status.ObservedGeneration = config.Generation
+		controller.SetErrorCondition(&config.Status.Conditions, reconcileErr)
+	})
+	if err != nil {
+		logger.Error(err, "Failed to update TunnelIngressClassConfig error status",
+			"config", client.ObjectKeyFromObject(config))
+	}
 }
 
 // SetupWithManager sets up the controller with the Manager
