@@ -195,12 +195,12 @@ func (*Reconciler) buildCloudflareConfig(config *TunnelConfig) cloudflare.Tunnel
 		cfConfig.Ingress = append(cfConfig.Ingress, cfRule)
 	}
 
-	// Add catch-all rule if we have any rules
-	if len(cfConfig.Ingress) > 0 {
-		cfConfig.Ingress = append(cfConfig.Ingress, cloudflare.UnvalidatedIngressRule{
-			Service: "http_status:404",
-		})
-	}
+	// Always terminate the configuration with a catch-all rule. Cloudflare rejects an
+	// ingress list that does not end with one, so omitting it when every source has been
+	// removed would make the push fail and leave the previously pushed rules in place.
+	cfConfig.Ingress = append(cfConfig.Ingress, cloudflare.UnvalidatedIngressRule{
+		Service: "http_status:404",
+	})
 
 	return cfConfig
 }
@@ -301,7 +301,15 @@ func (r *Reconciler) updateConfigStatus(ctx context.Context, cm *corev1.ConfigMa
 	}
 }
 
-// updateConfigMap updates the ConfigMap with new configuration.
+// updateConfigMap persists the sync bookkeeping fields on the ConfigMap.
+//
+// The configuration payload (Sources) is owned by the resource controllers (Ingress,
+// Gateway, TunnelBinding) and may be rewritten while this reconcile is in flight.
+// Writing back the whole snapshot parsed at the start of the reconcile would revert
+// those concurrent writes - which is how rules removed from an Ingress used to be
+// resurrected and then kept in place forever, because the reverted ConfigMap matched
+// the recorded LastHash and every later reconcile short-circuited. Only the status
+// fields are updated here, on a freshly read ConfigMap.
 func (r *Reconciler) updateConfigMap(ctx context.Context, cm *corev1.ConfigMap, config *TunnelConfig) error {
 	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		// Get fresh copy
@@ -310,8 +318,18 @@ func (r *Reconciler) updateConfigMap(ctx context.Context, cm *corev1.ConfigMap, 
 			return err
 		}
 
+		freshConfig, err := ParseConfig(fresh)
+		if err != nil {
+			return err
+		}
+
+		// Only carry over the status fields of the configuration we just synced.
+		freshConfig.LastHash = config.LastHash
+		freshConfig.SyncStatus = config.SyncStatus
+		freshConfig.LastSyncTime = config.LastSyncTime
+
 		// Update data
-		data, err := config.ToConfigMapData()
+		data, err := freshConfig.ToConfigMapData()
 		if err != nil {
 			return err
 		}

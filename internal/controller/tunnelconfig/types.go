@@ -231,19 +231,63 @@ func (s *SourceConfig) GetSourceKey() string {
 	return SourceKey(s.Kind, s.Namespace, s.Name)
 }
 
-// ComputeHash computes a hash of the configuration for change detection.
+// ComputeHash computes a hash of the effective tunnel configuration for change detection.
+//
+// Only fields that influence the configuration pushed to Cloudflare are hashed.
+// Bookkeeping fields (sync status, LastSyncTime, and per-source UpdatedAt/Generation)
+// are deliberately excluded: they change on every write, which would otherwise defeat
+// the "configuration unchanged" short-circuit in the controller. Conversely, any change
+// to the actual rules - including a path that disappeared from an Ingress - changes the
+// hash and therefore triggers a push.
 func (c *TunnelConfig) ComputeHash() string {
-	// Create a copy without status fields
-	copy := &TunnelConfig{
+	type canonicalSource struct {
+		Kind      string          `json:"kind"`
+		Namespace string          `json:"namespace,omitempty"`
+		Name      string          `json:"name"`
+		Settings  *TunnelSettings `json:"settings,omitempty"`
+		Rules     []IngressRule   `json:"rules,omitempty"`
+	}
+
+	type canonicalConfig struct {
+		TunnelID       string             `json:"tunnelId"`
+		AccountID      string             `json:"accountId"`
+		TunnelName     string             `json:"tunnelName,omitempty"`
+		WARPRouting    *WARPRoutingConfig `json:"warpRouting,omitempty"`
+		CredentialsRef *CredentialsRef    `json:"credentialsRef,omitempty"`
+		Sources        []canonicalSource  `json:"sources"`
+	}
+
+	// Sources is a map, so iterate in a stable order to keep the hash deterministic.
+	sourceKeys := make([]string, 0, len(c.Sources))
+	for key := range c.Sources {
+		sourceKeys = append(sourceKeys, key)
+	}
+	sort.Strings(sourceKeys)
+
+	canonical := canonicalConfig{
 		TunnelID:       c.TunnelID,
 		AccountID:      c.AccountID,
 		TunnelName:     c.TunnelName,
 		WARPRouting:    c.WARPRouting,
-		Sources:        c.Sources,
 		CredentialsRef: c.CredentialsRef,
+		Sources:        make([]canonicalSource, 0, len(c.Sources)),
 	}
 
-	data, _ := json.Marshal(copy)
+	for _, key := range sourceKeys {
+		source := c.Sources[key]
+		if source == nil {
+			continue
+		}
+		canonical.Sources = append(canonical.Sources, canonicalSource{
+			Kind:      source.Kind,
+			Namespace: source.Namespace,
+			Name:      source.Name,
+			Settings:  source.Settings,
+			Rules:     source.Rules,
+		})
+	}
+
+	data, _ := json.Marshal(canonical)
 	hash := sha256.Sum256(data)
 	return fmt.Sprintf("%x", hash[:8])
 }
